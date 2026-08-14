@@ -163,6 +163,48 @@ def _resolve(m, ref: str):
     return m.model.items[int(ref)]
 
 
+def check_ref(ref: str) -> str:
+    """Validate an item reference, top level ("3") or inside a group ("g0:5")."""
+    m = engine().minsky
+    if ":" in ref:
+        head, _, tail = ref.partition(":")
+        if not head.startswith("g") or not head[1:].isdigit() or not tail.isdigit():
+            raise HTTPException(422, f"{ref!r} is not an item reference")
+        gi, ii = int(head[1:]), int(tail)
+        ng = len(m.model.groups)
+        if not 0 <= gi < ng:
+            raise HTTPException(422, f"there is no group {gi} in this model"
+                                     + (f" (0..{ng - 1})" if ng else ""))
+        ni = len(m.model.groups[gi].items)
+        if not 0 <= ii < ni:
+            raise HTTPException(422, f"group {gi} has items 0..{ni - 1}, not {ii}")
+        return ref
+    if not ref.lstrip("-").isdigit():
+        raise HTTPException(422, f"{ref!r} is not an item reference")
+    n = len(m.model.items)
+    if not 0 <= int(ref) < n:
+        raise HTTPException(422, f"index {ref} out of range (0..{n - 1})")
+    return ref
+
+
+def refuse_in_group(ref: str, what: str):
+    """Both of these find their target through the canvas hit test, which searches only
+    the model the canvas is pointed at and never descends into a group. Acting anyway
+    would focus the GROUP and {what} the whole thing."""
+    if ":" in ref:
+        gi = int(ref.partition(":")[0][1:])
+        title = ""
+        try:
+            title = (engine().minsky.model.groups[gi].title() or "").strip()
+        except Exception:
+            pass
+        raise HTTPException(
+            409, f"this item is inside {('the group ' + repr(title)) if title else 'a group'}"
+                 f", and the engine can only {what} something the canvas can focus -- "
+                 f"which never reaches inside a group. Ungroup it first; undo puts the "
+                 f"group back.")
+
+
 def _engine_wire_count(m) -> int:
     return len(m.model.wires) + sum(len(m.model.groups[g].wires)
                                     for g in range(len(m.model.groups)))
@@ -726,8 +768,10 @@ class ItemSpec(BaseModel):
 
 
 class WireSpec(BaseModel):
-    src: int
-    dst: int
+    # accepted as strings too, so a group member can be NAMED here and refused with an
+    # explanation rather than failing schema validation with nothing useful to say
+    src: int | str
+    dst: int | str
     port: int = 1
 
 
@@ -816,7 +860,16 @@ def snapshot() -> dict[str, Any]:
         nested = ":" in ref
         entry = dict(index=int(ref) if not nested else None, ref=ref,
                      classType=it.classType(), x=it.x(), y=it.y(), ports=ports,
-                     readOnly=nested)
+                     readOnly=nested,
+                     # More precisely than "readOnly": a group member CAN be moved and
+                     # renamed -- moveTo works on the raw item, and a rename now finds
+                     # every icon of the variable by valueId rather than by asking the
+                     # canvas what is at a point. Delete and wiring cannot: both find
+                     # their target through the canvas hit test, which searches only the
+                     # model the canvas is pointed at and never descends into a group.
+                     inGroup=(int(ref.partition(":")[0][1:]) if nested else None),
+                     can=dict(move=True, rename=True,
+                              delete=not nested, wire=not nested))
         try:
             entry["name"] = it.name()
         except Exception:
@@ -1016,10 +1069,9 @@ def create_app() -> FastAPI:
 
         def _wire():
             m = engine()
-            n = len(m.minsky.model.items)
-            for label, i in (("src", spec.src), ("dst", spec.dst)):
-                if not 0 <= i < n:
-                    raise HTTPException(422, f"{label} index {i} out of range (0..{n-1})")
+            for _label, r in (("src", str(spec.src)), ("dst", str(spec.dst))):
+                check_ref(r)
+                refuse_in_group(r, "wire")
             from .headless import Item
             from .headless import WiringError
             # Do NOT pre-refuse a busy input. Minsky's n-ary operations (add, subtract,
@@ -1030,7 +1082,8 @@ def create_app() -> FastAPI:
             # instead of leaking the wiring diagnostic, which prints object reprs and
             # pixel coordinates and is written for a log.
             try:
-                m.wire(Item(m, spec.src, "?"), Item(m, spec.dst, "?"), spec.port)
+                m.wire(Item(m, int(spec.src), "?"), Item(m, int(spec.dst), "?"),
+                       spec.port)
             except WiringError:
                 if any(w[2] == str(spec.dst) and w[3] == spec.port for w in _WIRES):
                     raise HTTPException(
@@ -1043,34 +1096,31 @@ def create_app() -> FastAPI:
         mark_dirty()
         return await call(snapshot)
 
-    @app.post("/api/item/{index}/move")
-    async def move_item(index: int, spec: MoveSpec):
+    @app.post("/api/item/{ref}/move")
+    async def move_item(ref: str, spec: MoveSpec):
         require_idle()
         check_at((spec.x, spec.y))
+        await call(check_ref, ref)
         await call(checkpoint)
 
         def _move():
             from .headless import Item
             m = engine()
-            n = len(m.minsky.model.items)
-            if not 0 <= index < n:
-                raise HTTPException(422, f"index {index} out of range (0..{n-1})")
-            m.move(Item(m, index, "?"), spec.x, spec.y)
+            # moveTo works directly on the raw item, so this reaches a group member too
+            m.move(Item(m, 0, "?", ref=ref), spec.x, spec.y)
         await call(_move)
         mark_dirty()
         return await call(snapshot)
 
-    @app.post("/api/item/{index}/rename")
-    async def rename_item(index: int, spec: RenameSpec):
+    @app.post("/api/item/{ref}/rename")
+    async def rename_item(ref: str, spec: RenameSpec):
         require_idle()
+        await call(check_ref, ref)
         await call(checkpoint)
 
         def _rename():
             from .headless import Item
             m = engine()
-            n = len(m.minsky.model.items)
-            if not 0 <= index < n:
-                raise HTTPException(422, f"index {index} out of range (0..{n-1})")
 
             # Renaming a variable onto a name another variable already uses MERGES them.
             # That is legitimate -- it is how one variable comes to appear in two places
@@ -1078,8 +1128,8 @@ def create_app() -> FastAPI:
             # goes. It reported plain success, so the number simply vanished.
             want = spec.name.strip()
             twin = None
-            for ref, it in _iter_items(m.minsky):
-                if ref == str(index) or not it.classType().startswith("Variable:"):
+            for other, it in _iter_items(m.minsky):
+                if other == ref or not it.classType().startswith("Variable:"):
                     continue
                 try:
                     if (it.name() or "").strip() == want:
@@ -1088,12 +1138,13 @@ def create_app() -> FastAPI:
                 except Exception:
                     continue
             try:
-                before = m.minsky.model.items[index].name()
+                before = _resolve(m.minsky, ref).name()
             except Exception:
                 before = None
 
             try:
-                got = restructuring(lambda: m.rename(Item(m, index, "?"), spec.name))
+                got = restructuring(
+                    lambda: m.rename(Item(m, 0, "?", ref=ref), spec.name))
             except ValueError as ex:
                 raise HTTPException(422, str(ex))
             except RuntimeError as ex:
@@ -1116,18 +1167,17 @@ def create_app() -> FastAPI:
                 f"been discarded. Undo to separate them.")
         return out
 
-    @app.delete("/api/item/{index}")
-    async def delete_item(index: int):
+    @app.delete("/api/item/{ref}")
+    async def delete_item(ref: str):
         require_idle()
+        await call(check_ref, ref)
+        await call(refuse_in_group, ref, "delete")
         await call(checkpoint)
 
         def _del():
             from .headless import Item
             m = engine()
-            n = len(m.minsky.model.items)
-            if not 0 <= index < n:
-                raise HTTPException(422, f"index {index} out of range (0..{n-1})")
-            restructuring(lambda: m.delete(Item(m, index, "?")))
+            restructuring(lambda: m.delete(Item(m, int(ref), "?", ref=ref)))
         try:
             await call(_del)
         except RuntimeError as ex:
@@ -1385,6 +1435,52 @@ def create_app() -> FastAPI:
         # skipping the checkpoint made it the one edit undo could not reach.
         mark_dirty()
         return await call(snapshot)
+
+    @app.post("/api/group/{index}/rename")
+    async def rename_group(index: int, spec: RenameSpec):
+        require_idle()
+
+        def _go():
+            m = engine().minsky
+            n = len(m.model.groups)
+            if not 0 <= index < n:
+                raise HTTPException(422, f"there is no group {index} in this model"
+                                         + (f" (0..{n - 1})" if n else ""))
+            want = spec.name.strip()
+            if not want:
+                raise HTTPException(422, "a name is required")
+            m.model.groups[index].title(want)
+            return m.model.groups[index].title()
+        await call(checkpoint)
+        title = await call(_go)
+        mark_dirty()
+        return dict(name=title, state=await call(snapshot))
+
+    @app.post("/api/group/{index}/ungroup")
+    async def ungroup(index: int):
+        """Dissolve a group so its contents become ordinary, editable items.
+
+        The canvas hit test -- how delete and wiring find their target -- searches only
+        the model the canvas is pointed at, and never descends into a group. Minsky's own
+        client re-points the canvas at the group; that entry point takes an ItemPtr which
+        pyminsky cannot marshal, so from here the way to edit a group's contents is to
+        take the group apart. Undo puts it back.
+        """
+        require_idle()
+        await call(checkpoint)
+
+        def _go():
+            m = engine()
+            try:
+                return restructuring(lambda: m.ungroup(index))
+            except IndexError as ex:
+                raise HTTPException(422, str(ex))
+            except RuntimeError as ex:
+                rollback()
+                raise HTTPException(400, f"{ex} The model was left unchanged.")
+        freed = await call(_go)
+        mark_dirty()
+        return dict(freed=freed, state=await call(snapshot))
 
     @app.post("/api/reset")
     async def reset():

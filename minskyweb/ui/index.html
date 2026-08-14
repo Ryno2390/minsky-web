@@ -72,6 +72,9 @@ svg#board.panning{cursor:grabbing}
 /* a group member: drawn so the diagram reads correctly, but there is no index to
    address it by, so it is not offered as something to drag, rename or delete */
 .ro{cursor:not-allowed;opacity:.55;stroke-dasharray:3 2}
+.gbox{cursor:pointer;stroke-dasharray:4 3}
+.ingroup{stroke-dasharray:3 2}
+.gbox.gsel{stroke-dasharray:none}
 .ilabel.dim{opacity:.6;font-size:9px}
 .item-body:active{cursor:grabbing}
 .sel .shape{stroke:var(--accent);stroke-width:2}
@@ -353,6 +356,16 @@ svg#board.panning{cursor:grabbing}
     </div>
     <div style="font-size:11.5px;color:var(--ink-3);padding:0 2px" id="renamenote"></div>
   </div>
+  <div id="groupwrap" style="display:none;margin-top:8px">
+    <div class="field" style="gap:6px">
+      <input id="gname" style="width:100%;text-align:left" autocomplete="off"
+             spellcheck="false" placeholder="group name">
+      <button id="gnameok" style="font-size:12px;padding:4px 10px">Rename</button>
+    </div>
+    <button id="ungroup" style="width:100%;margin-top:8px;font-size:12px;padding:6px 10px">
+      Ungroup — edit its contents</button>
+    <div style="font-size:11.5px;color:var(--ink-3);padding:6px 2px" id="gnote"></div>
+  </div>
   <div id="initwrap" style="display:none;margin-top:8px">
     <div class="field" style="gap:6px">
       <label id="initlab" style="white-space:nowrap">value</label>
@@ -414,7 +427,10 @@ let state = {items:[],wires:[],values:{}}, sel = null, selWire = null, ws = null
 // was left set across Clear, undo, redo and opening another file, which armed the Delete
 // button on a wire that no longer existed -- or, worse, on whichever wire had inherited
 // that index in the new model.
-function clearSelection(){ sel = null; selWire = null; }
+function clearSelection(){ sel = null; selWire = null; selGroup = null; }
+// `sel` holds a REF, not an index: "3" for a top-level item, "g0:5" for member 5 of
+// group 0. Group members are not in model.items at all, so an index cannot name one.
+let selGroup = null;   // a group's own index, when the group box itself is selected
 let series = {}, tSeries = [], colors = {};
 const PALETTE = ["#4C9AFF","#3FB950","#D29922","#BC8CFF","#FF7B72","#39C5CF","#F778BA","#E3B341"];
 
@@ -480,6 +496,7 @@ function render() {
   $("#empty").style.display = state.items.length ? "none" : "grid";
   gItems.innerHTML = ""; gWires.innerHTML = "";
   const byIdx = new Map(state.items.map(i => [i.index, i]));
+  const byRef = new Map(state.items.map(i => [i.ref, i]));
 
   // A COLLAPSED group (displayContents false) is drawn by Minsky as a single icon: its
   // members' coordinates are positions INSIDE the group, so drawing them on the canvas
@@ -512,10 +529,12 @@ function render() {
     r.setAttribute("x",grp.x); r.setAttribute("y",grp.y);
     r.setAttribute("width",grp.w); r.setAttribute("height",grp.h);
     r.setAttribute("rx",8);
-    r.setAttribute("class","shape ro");
-    r.style.fill = "color-mix(in srgb, var(--grp, #9b7cf5) 14%, var(--panel-2))";
-    r.style.stroke = "var(--grp, #9b7cf5)";
-    r.dataset.ro = "1";
+    const gsel = selGroup === grp.grp.index;
+    r.setAttribute("class", "shape gbox" + (gsel ? " gsel" : ""));
+    r.style.fill = "color-mix(in srgb, var(--grp) 14%, var(--panel-2))";
+    r.style.stroke = gsel ? "var(--accent)" : "var(--grp)";
+    if (gsel) r.style.strokeWidth = "2.5";
+    r.dataset.group = grp.grp.index;
     g.appendChild(r);
     const t = document.createElementNS("http://www.w3.org/2000/svg","text");
     t.setAttribute("x",grp.cx); t.setAttribute("y",grp.cy + 4);
@@ -563,7 +582,7 @@ function render() {
     const g = document.createElementNS("http://www.w3.org/2000/svg","g");
     // `it.index` is null for group members, and `sel` is null when nothing is selected,
     // so a bare === lit up every group member as selected
-    const isSel = it.index !== null && sel !== null && sel === it.index;
+    const isSel = sel !== null && sel === it.ref;
     g.setAttribute("class","item" + (isSel ? " sel" : ""));
     const name = pretty(it.name || label);
     // Engine items are SMALL -- half-widths of 12 to 24px -- while a label like
@@ -604,16 +623,16 @@ function render() {
     shape.setAttribute("rx",
       cls === "var" || cls === "par" || cls === "godley" || cls === "plot"
         ? 4 : Math.min(hh, 14));
-    // The server marks group members readOnly with a null index: there is no index to
-    // address them by, so nothing can move, rename or delete one. They were still drawn
-    // as ordinary interactive items, and `dataset.idx = null` stringifies to "null",
-    // which +"null" turns into NaN -- so clicking one selected NaN and the drag setup
-    // threw on an item that could not be found. Draw them, do not offer them.
-    shape.setAttribute("class", "shape" + (it.index === null ? " ro" : " item-body"));
+    // A group member can be moved and renamed but not deleted or wired -- see `can` in
+    // the snapshot. It is addressed by REF ("g0:5"), never by index: it is not in
+    // model.items at all, and `dataset.idx = null` stringifies to "null", which +"null"
+    // turns into NaN, so clicking one used to select NaN and throw.
+    shape.setAttribute("class", "shape item-body" + (it.index === null ? " ingroup" : ""));
     shape.style.fill = `color-mix(in srgb, var(--${cls}) 18%, var(--panel-2))`;
     shape.style.stroke = isSel ? "var(--accent)" : `var(--${cls})`;
     if (isSel) shape.style.strokeWidth = "2.5";
-    if (it.index !== null) shape.dataset.idx = it.index; else shape.dataset.ro = "1";
+    shape.dataset.ref = it.ref;
+    if (it.index !== null) shape.dataset.idx = it.index;
     g.appendChild(shape);
 
     const glyph = {multiply:"×", add:"+", subtract:"−", divide:"÷", integrate:"∫",
@@ -641,6 +660,7 @@ function render() {
       c.setAttribute("cx", p.x); c.setAttribute("cy", p.y);
       c.setAttribute("class", "port " + p.role);
       c.dataset.idx = it.index; c.dataset.port = p.index; c.dataset.role = p.role;
+      c.dataset.ref = it.ref;
       g.appendChild(c);
     }
     gItems.appendChild(g);
@@ -698,10 +718,21 @@ function render() {
   $("#save").disabled = !state.dirty && !!nm;
   $("#undo").disabled = !state.canUndo;
   $("#redo").disabled = !state.canRedo;
+  const selGrp = selGroup === null ? null
+    : (state.groups || []).find(g => g.index === selGroup);
   $("#selinfo").textContent =
     selWire !== null ? `wire #${selWire} — press Delete to remove it`
+    : selGrp ? `group · ${selGrp.size} items`
     : sel === null ? "Nothing selected."
-    : `#${sel} · ${byIdx.get(sel)?.classType ?? "?"}`;
+    : `${sel} · ${byRef.get(sel)?.classType ?? "?"}`;
+  $("#groupwrap").style.display = selGrp ? "" : "none";
+  if (selGrp) {
+    if (document.activeElement !== $("#gname")) $("#gname").value = pretty(selGrp.title || "");
+    $("#gnote").textContent =
+      "Delete and wiring find their target through the canvas, which never reaches "
+      + "inside a group. Ungrouping leaves the contents as ordinary items; undo puts "
+      + "the group back.";
+  }
 
   // Rename is offered only where there is a name to change. An operation accepts a
   // rename call and does nothing with it, so showing the control would be a lie.
@@ -882,6 +913,12 @@ board.addEventListener("pointerdown", e => {
   if (w) { selWire = +w.dataset.wire; sel = null; render(); return; }
   const port = e.target.closest(".port");
   if (port) {
+    if ((port.dataset.ref || "").includes(":")) {
+      // wiring finds its target through the canvas hit test, which never reaches inside
+      // a group -- a drag from here would connect the group, not this item
+      toast("Wiring cannot reach inside a group. Select the group and Ungroup first.");
+      return;
+    }
     if (port.dataset.role !== "output") {
       toast("Wires start at an output port (blue) and end at an input (grey).");
       return;
@@ -892,39 +929,41 @@ board.addEventListener("pointerdown", e => {
     board.setPointerCapture(e.pointerId);
     return;
   }
-  const ro = e.target.closest("[data-ro]");
-  if (ro) {
-    // Say why rather than let the click fall through to a pan, which reads as the item
-    // simply refusing to move.
-    toast("This item is inside a group. Groups cannot be edited here yet.");
+  const gbox = e.target.closest("[data-group]");
+  if (gbox) {
+    selWire = null; sel = null; selGroup = +gbox.dataset.group;
+    render();
     return;
   }
   const body = e.target.closest(".item-body");
   if (body) {
-    const idx = +body.dataset.idx;
-    if (!Number.isInteger(idx) || !state.items.some(i => i.index === idx)) {
-      toast("That item belongs to a group and cannot be edited here.");
-      return;
-    }
-    selWire = null;
+    const ref = body.dataset.ref;
+    const it0 = state.items.find(i => i.ref === ref);
+    if (!it0) { toast("That item is no longer in the model."); return; }
+    const idx = it0.index;
+    selWire = null; selGroup = null;
     if (e.detail >= 2) {
-      const it = state.items.find(i => i.index === idx);
-      if (it && it.classType.includes("Godley")) { openGodley(idx); return; }
-      if (it && it.classType.startsWith("Variable:")) {
-        sel = idx; render();
+      if (it0.classType.includes("Godley")) {
+        // the table endpoints address model.items, so a table inside a group has no
+        // index to open it by
+        if (idx === null) { toast("Ungroup first to open a table inside a group."); return; }
+        openGodley(idx); return;
+      }
+      if (it0.classType.startsWith("Variable:")) {
+        sel = ref; render();
         $("#rename").focus(); $("#rename").select(); return;
       }
     }
-    sel = idx; render();
-    const it = state.items.find(i => i.index === idx);
+    sel = ref; render();
+    const it = it0;
     const p = svgPt(e);
-    drag = {mode:"move", idx, dx: it.x - p.x, dy: it.y - p.y, x0: it.x, y0: it.y};
+    drag = {mode:"move", ref, dx: it.x - p.x, dy: it.y - p.y, x0: it.x, y0: it.y};
     board.setPointerCapture(e.pointerId);
     return;
   }
   // empty canvas: start a pan. Deselect happens on pointerup only if the pointer did
   // not move, so a pan does not clear the selection.
-  selWire = null;
+  selWire = null; selGroup = null;
   drag = {mode:"pan", cx:e.clientX, cy:e.clientY, moved:false,
           x0:view ? view.x : 0, y0:view ? view.y : 0};
   board.classList.add("panning");
@@ -976,7 +1015,7 @@ board.addEventListener("pointerup", guard(async e => {
     // which marks the document dirty, adds an undo checkpoint, and makes "discard
     // unsaved changes?" appear after the user has only looked at something.
     if (Math.abs(nx - d.x0) < 0.5 && Math.abs(ny - d.y0) < 0.5) { render(); return; }
-    state = await api(`/item/${d.idx}/move`, {method:"POST",
+    state = await api(`/item/${d.ref}/move`, {method:"POST",
       body: JSON.stringify({x: nx, y: ny})});
     render();
   }
@@ -1240,7 +1279,7 @@ $("#gaddstock").onclick = guard(async () => {
 async function doRename(){
   if (sel === null) return;
   const name = $("#rename").value.trim();
-  const current = pretty(state.items.find(i => i.index === sel)?.name || "");
+  const current = pretty(state.items.find(i => i.ref === sel)?.name || "");
   if (!name || name === current) return;
   const r = await api(`/item/${sel}/rename`, {method:"POST",
                                               body: JSON.stringify({name})});
@@ -1249,9 +1288,29 @@ async function doRename(){
 }
 $("#renameok").onclick = guard(doRename);
 
+$("#gnameok").onclick = guard(async () => {
+  if (selGroup === null) return;
+  const name = $("#gname").value.trim();
+  if (!name) return;
+  const r = await api(`/group/${selGroup}/rename`, {method:"POST",
+                                                    body: JSON.stringify({name})});
+  state = r.state; render();
+  toast(`Renamed to ${r.name}`, true);
+});
+$("#gname").addEventListener("keydown", e => {
+  if (e.key === "Enter")  { e.preventDefault(); $("#gnameok").click(); }
+  if (e.key === "Escape") { e.preventDefault(); $("#gname").blur(); render(); }
+});
+$("#ungroup").onclick = guard(async () => {
+  if (selGroup === null) return;
+  const r = await api(`/group/${selGroup}/ungroup`, {method:"POST"});
+  state = r.state; clearSelection(); render();
+  toast(`Ungrouped — ${r.freed} items are now editable. Undo puts the group back.`, true);
+});
+
 async function doSetValue(){
   if (sel === null) return;
-  const it = state.items.find(i => i.index === sel);
+  const it = state.items.find(i => i.ref === sel);
   if (!it || !it.name) return;
   const raw = $("#initval").value.trim();
   if (raw === "") return;

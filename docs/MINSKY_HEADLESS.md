@@ -757,3 +757,40 @@ so any recorded index above it now names a different item.
 `rungeKutta.cc:91` dispatches orders 1, 2 and 4 only; anything else throws "order N solver
 not supported" — at RESET time, long after the value was accepted and written to the file.
 Order 1 explicit is plain Euler and is legal. `epsAbs` and `epsRel` must be positive.
+
+
+## Editing what is inside a group
+
+`Canvas::getItemAt` searches only the model the canvas is pointed at, and never descends
+into a group: hit-testing at a member's own coordinates returns the GROUP. That matters
+because delete and wiring both find their target that way. Minsky's own client re-points
+the canvas with `Canvas::openGroupInCanvas`, but it takes an `ItemPtr` and pyminsky cannot
+marshal one — the call reports success and does nothing, with `TypeError: dict is not a
+sequence` on stderr. `displayContents()` is no help either: it is read-only, computed as
+`zoomFactor()*relZoom > 1`, and making it true does not change what the hit test finds.
+
+Measured, on `groups[g].items[i]`:
+
+| operation | works in place | why |
+| --- | --- | --- |
+| move | **yes** | `moveTo` acts on the raw item, no canvas involved |
+| rename | **yes**, see below | by valueId, no canvas involved |
+| set value | **yes** | keyed by name |
+| delete | no | `g.deleteItem()` silently does nothing; `g.removeItem()` throws; the canvas route focuses the group |
+| wire | no | geometric, so it hits the group |
+
+**Renaming without the canvas.** `canvas.renameAllInstances` renames whatever the canvas is
+focused on, which is why it could not reach into a group and had to refuse two items
+sharing a point. Setting `name()` on one icon renames only that icon and SPLITS a shared
+variable in two — `:Y` with two icons became `:Y` and `:split<sub>p</sub>robe`. But every
+icon of a variable can be found by its valueId anywhere in the model, so renaming all of
+them does the same job with no dependence on position. Verified: one valueId afterwards,
+the initial value carries across, the model still resets, and it works on a group-scoped
+variable (`46454790144:w`), which keeps its scope. It raises the same
+"already exists with type" error on a clash — and, like the old route, leaves the change
+applied, so it still needs rolling back.
+
+**The way in is `canvas.ungroupItem()`.** Focus the group by its own coordinates and call
+it: on GoodwinLinear02, 18 top-level items and 19 top-level wires become 26 and 27, the
+group is gone, every freed item answers the hit test, and the model still resets. Undo
+puts it back. `canvas.select(x0,y0,x1,y1)` + `groupSelection()` can build one again.

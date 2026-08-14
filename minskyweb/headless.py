@@ -46,15 +46,29 @@ class WiringError(RuntimeError):
 
 @dataclass
 class Item:
-    """A handle on one canvas item, identified by its index in model.items."""
+    """A handle on one canvas item.
+
+    `index` addresses `model.items`. `ref` addresses anything, including a group member
+    -- "3" for a top-level item, "g0:5" for member 5 of group 0 -- because group members
+    live at `groups[g].items[i]` and are not in `model.items` at all.
+    """
     model: "Model"
     index: int
     kind: str
     name: str | None = None
+    ref: str | None = None
 
     @property
     def _raw(self):
-        return self.model.minsky.model.items[self.index]
+        r = self.ref if self.ref is not None else str(self.index)
+        if ":" in r:
+            g, i = r[1:].split(":")
+            return self.model.minsky.model.groups[int(g)].items[int(i)]
+        return self.model.minsky.model.items[int(r)]
+
+    @property
+    def in_group(self) -> bool:
+        return self.ref is not None and ":" in self.ref
 
     def refresh(self):
         """Port coordinates are meaningless until this has run. Called automatically."""
@@ -538,9 +552,64 @@ class Model:
     def move(self, item: Item, x: float, y: float) -> None:
         item.move_to(x, y)
 
+    def ungroup(self, gi: int) -> int:
+        """Dissolve group `gi`, leaving its contents as ordinary top-level items.
+
+        This is how a group's contents become editable. The canvas hit test -- which is
+        how delete and wiring find their target -- searches only the model the canvas is
+        pointed at, and never descends into a group. Minsky's own client re-points the
+        canvas at the group (`Canvas::openGroupInCanvas`), but that takes an ItemPtr and
+        pyminsky cannot marshal one, so from here the way in is to take the group apart.
+
+        Verified on GoodwinLinear02: 18 top-level items and 19 top-level wires become 26
+        and 27, the group is gone, every freed item answers the canvas hit test, and the
+        model still resets. Undo puts the group back.
+        """
+        n = len(self.minsky.model.groups)
+        if not 0 <= gi < n:
+            raise IndexError(f"group {gi} out of range (0..{n - 1})" if n
+                             else "this model has no groups")
+        g = self.minsky.model.groups[gi]
+        inner = len(g.items)
+        if not self.minsky.canvas.getItemAt(g.x(), g.y()):
+            raise RuntimeError(
+                f"no item found at the group's own coordinates "
+                f"({g.x():.1f},{g.y():.1f}) -- cannot focus it to ungroup it")
+        before = len(self.minsky.model.items)
+        self.minsky.canvas.ungroupItem()
+        gained = len(self.minsky.model.items) - before
+        if len(self.minsky.model.groups) >= n:
+            raise RuntimeError(
+                "ungrouping left the group in place. The canvas hit test may have "
+                "focused a different item that overlaps it.")
+        return gained if gained > 0 else inner
+
     #: Item classes that carry a user-visible name worth renaming. An operation accepts
     #: a rename call and does nothing with it, so offering one would be a lie.
     RENAMEABLE = ("Variable:", "GodleyIcon")
+
+    def all_raw(self):
+        """Every item in the model, top level and inside groups, as (ref, raw).
+
+        Group members live at `groups[g].items[i]`, not in `model.items`.
+        """
+        for i in range(len(self.minsky.model.items)):
+            yield str(i), self.minsky.model.items[i]
+        for g in range(len(self.minsky.model.groups)):
+            grp = self.minsky.model.groups[g]
+            for i in range(len(grp.items)):
+                yield f"g{g}:{i}", grp.items[i]
+
+    def icons_of(self, vid: str):
+        """Every icon that refers to the variable `vid`, wherever it lives."""
+        out = []
+        for ref, raw in self.all_raw():
+            try:
+                if raw.classType().startswith("Variable") and raw.valueId() == vid:
+                    out.append((ref, raw))
+            except Exception:
+                continue
+        return out
 
     def rename(self, item: Item, new: str) -> str:
         """Rename a variable everywhere, or retitle a Godley table. Verified.
@@ -568,13 +637,24 @@ class Model:
                 f"{ct} has no name to change. Only variables, parameters and Godley "
                 f"tables can be renamed.")
 
-        self._unique_at(item, "rename this item")
-        if not self.minsky.canvas.getItemAt(raw.x(), raw.y()):
-            raise RuntimeError(
-                f"no item found at {item}'s own coordinates to rename")
+        # `renameAllInstances` renames the variable the CANVAS is focused on, and
+        # focusing is done by position -- so it could not reach a variable inside a
+        # group (the hit test resolves to the group itself, never its contents), and it
+        # had to refuse any variable sharing a point with another.
+        #
+        # Setting `name()` on an icon renames only THAT icon, which SPLITS a shared
+        # variable in two. But every icon of a variable can be found by its valueId,
+        # anywhere in the model, so renaming all of them does the same job with no
+        # dependence on where anything sits. Verified: one valueId afterwards, the
+        # initial value carries across, and the model still resets.
         was = (raw.name() or "").strip()
-        self.minsky.canvas.renameAllInstances(new)
-        got = self.minsky.model.items[item.index].name()
+        vid = raw.valueId()
+        targets = self.icons_of(vid)
+        if not targets:
+            raise RuntimeError(f"no icon of {was!r} could be found to rename")
+        for _ref, r in targets:
+            r.name(new)
+        got = item._raw.name()
 
         # The engine CANONICALISES names: it LaTeX-escapes "%", "#" and "&", and strips a
         # leading ":" (the global-namespace marker). Comparing literally called every one

@@ -827,10 +827,16 @@ c.post(f"/api/item/{items[1]['index']}/move", json={"x": here["x"], "y": here["y
 r = c.delete(f"/api/item/{items[1]['index']}")
 check("deleting one of a stacked pair is refused",
       r.status_code == 400 and "same point" in r.text, r.text[:90])
+# rename does NOT need that refusal any more: it finds every icon of the variable by
+# valueId rather than by asking the canvas what is at a point, so it acts on exactly the
+# item it was given even when another sits on top of it
 r = c.post(f"/api/item/{items[1]['index']}/rename", json={"name":"nope"})
-check("renaming one of a stacked pair is refused",
-      r.status_code == 400 and "same point" in r.text, r.text[:70])
-check("nothing was changed by either refusal",
+check("renaming one of a stacked pair works",
+      r.status_code == 200, f"{r.status_code} {r.text[:70]}")
+names = [i.get("name") for i in c.get("/api/state").json()["items"]]
+check("and it renamed that one, not its neighbour",
+      names.count("nope") == 1, str(names))
+check("the refused delete changed nothing",
       len(c.get("/api/state").json()["items"]) == 3)
 
 # same hazard for wires: an input takes one wire, so the destination is unambiguous --
@@ -859,9 +865,13 @@ check("no CSS rule sets the port radius",
       not re.search(r"\.port\{[^}]*\br\s*:", ui), "a .port{r:...} rule is back")
 check("applyView still writes the counter-scaled radius",
       'setAttribute("r", r)' in ui or "setAttribute('r', r)" in ui)
-# group members carry index null, and sel is null when nothing is selected
-check("selection compares indices only when both exist",
-      "it.index !== null && sel !== null" in ui)
+# Selection is by REF, not index. A group member has no index -- it is not in
+# model.items -- so comparing indices meant null === null, and every group member lit up
+# as selected whenever nothing was. Every item has a ref, and `sel` is null or a string,
+# so the two can never match by accident.
+check("selection is compared by ref", "sel === it.ref" in ui)
+check("and nothing compares a possibly-null index for selection",
+      "sel === it.index" not in ui)
 # the inline stroke set for the item colour beat the .sel rule
 check("the selected item's stroke is set inline, where it can win",
       'isSel ? "var(--accent)"' in ui)
@@ -1266,15 +1276,20 @@ check("and it is undoable", c.post("/api/undo").status_code == 200)
 vals = c.get("/api/state").json()["values"]
 check("undo brings the separate variable back", len(vals) == 2, str(vals))
 
-# two items at one point cannot be told apart by the engine, which resolves by position
+# Two items at one point cannot be told apart by the ENGINE's hit test, which is how
+# delete and wiring find their target -- but rename no longer goes that way, so it can
+# act on exactly the item it was given.
 c.post("/api/clear")
 c.post("/api/item", json={"kind":"parameter","name":"aa","value":1,"at":[300,300]})
 b = c.post("/api/item", json={"kind":"parameter","name":"bb","value":2,"at":[600,300]}).json()["index"]
 c.post(f"/api/item/{b}/move", json={"x":300,"y":300})
-r = c.post(f"/api/item/{b}/rename", json={"name":"cc"})
-check("renaming one of two coincident items is refused", r.status_code == 400)
-check("and neither was renamed",
-      sorted(i.get("name") for i in c.get("/api/state").json()["items"]) == ["aa","bb"])
+check("renaming one of two coincident items works",
+      c.post(f"/api/item/{b}/rename", json={"name":"cc"}).status_code == 200)
+check("and it renamed the right one",
+      sorted(i.get("name") for i in c.get("/api/state").json()["items"]) == ["aa","cc"],
+      str(sorted(i.get("name") for i in c.get("/api/state").json()["items"])))
+check("while deleting one of them is still refused -- that DOES resolve by position",
+      c.delete(f"/api/item/{b}").status_code == 400)
 
 
 print("\n35. adding items")
@@ -1573,6 +1588,100 @@ if os.path.exists(EX):
               c.get("/api/state").json()["dirty"] is False)
     finally:
         (SAVE_DIR / "dirty-probe.mky").unlink(missing_ok=True)
+
+
+print("\n43. editing what is inside a group")
+import os
+EX = "/Users/ryneschultz/minsky/examples/GoodwinLinear02.mky"
+if os.path.exists(EX):
+    def load_grouped():
+        c.post("/api/load", params={"path": EX})
+        return c.get("/api/state").json()
+
+    st = load_grouped()
+    inside = [i for i in st["items"] if i["index"] is None]
+    check("a group's members are reported with a ref but no index",
+          len(inside) == 8 and all(i["ref"].startswith("g0:") for i in inside),
+          f"{len(inside)} members")
+    check("and each says what can be done to it",
+          all(i["can"]["move"] and i["can"]["rename"]
+              and not i["can"]["delete"] and not i["can"]["wire"] for i in inside))
+
+    # moveTo works on the raw item, so this reaches inside a group
+    ref = inside[0]["ref"]
+    r = c.post(f"/api/item/{ref}/move", json={"x": 400, "y": 400})
+    check("a group member can be moved", r.status_code == 200, r.text[:70])
+    moved = next(i for i in c.get("/api/state").json()["items"] if i["ref"] == ref)
+    check("and it went where it was told",
+          (round(moved["x"]), round(moved["y"])) == (400, 400),
+          f"{moved['x']},{moved['y']}")
+
+    # rename finds every icon of the variable by valueId, so it reaches inside too
+    st = load_grouped()
+    vref = next(i["ref"] for i in st["items"]
+                if i["index"] is None and i.get("name") == "NAIRU")
+    r = c.post(f"/api/item/{vref}/rename", json={"name": "NaturalRate"})
+    check("a group member can be renamed", r.status_code == 200, r.text[:70])
+    names = [i.get("name") for i in c.get("/api/state").json()["items"]]
+    check("and the new name is the one in the model",
+          "NaturalRate" in names and "NAIRU" not in names, str(names))
+    check("the model still resets after it", c.post("/api/reset").status_code == 200)
+
+    # delete and wiring go through the canvas hit test, which never enters a group
+    st = load_grouped()
+    ref = next(i["ref"] for i in st["items"] if i["index"] is None)
+    r = c.delete(f"/api/item/{ref}")
+    check("deleting a group member is refused", r.status_code == 409, str(r.status_code))
+    check("and the refusal says what to do instead", "Ungroup" in r.text, r.text[:90])
+    r = c.post("/api/wire", json={"src": ref, "dst": "3", "port": 1})
+    check("wiring to a group member is refused", r.status_code == 409, str(r.status_code))
+    check("nothing was changed by either refusal",
+          len(c.get("/api/state").json()["items"]) == len(st["items"]))
+
+    # ungroup is the way in
+    st = load_grouped()
+    n_items, n_wires = len(st["items"]), len(st["wires"])
+    r = c.post("/api/group/0/ungroup")
+    check("a group can be dissolved", r.status_code == 200, r.text[:70])
+    check("and it reports how many items it freed", r.json()["freed"] == 8,
+          str(r.json().get("freed")))
+    st2 = c.get("/api/state").json()
+    check("every item is now top level",
+          len(st2["items"]) == n_items and not st2["groups"]
+          and all(i["index"] is not None for i in st2["items"]),
+          f"{len(st2['items'])} items, {len(st2['groups'])} groups")
+    check("no wire was lost or mis-pointed",
+          len(st2["wires"]) == n_wires and not any(w.get("desync") for w in st2["wires"]),
+          f"{len(st2['wires'])} wires")
+    check("the model still resets", c.post("/api/reset").status_code == 200)
+
+    # and the freed contents answer every ordinary edit path
+    idx = next(i["index"] for i in st2["items"] if i.get("name") == "NAIRU")
+    check("a freed item can now be deleted",
+          c.delete(f"/api/item/{idx}").status_code == 200)
+    c.post("/api/undo")
+    c.post("/api/undo")
+    back = c.get("/api/state").json()
+    check("undo puts the group back",
+          len(back["groups"]) == 1 and len(back["items"]) == n_items
+          and not any(w.get("desync") for w in back["wires"]),
+          f"{len(back['groups'])} groups, {len(back['items'])} items")
+
+    # a group has a name of its own
+    r = c.post("/api/group/0/rename", json={"name": "Wage Dynamics"})
+    check("a group can be renamed", r.status_code == 200 and r.json()["name"] == "Wage Dynamics",
+          r.text[:70])
+    c.post("/api/undo")
+    check("and that is undoable too",
+          c.get("/api/state").json()["groups"][0]["title"] == "Phillips Curve",
+          str(c.get("/api/state").json()["groups"][0]["title"]))
+
+    check("ungrouping a group that is not there is refused",
+          c.post("/api/group/9/ungroup").status_code == 422)
+    check("so is an item reference into a group that is not there",
+          c.post("/api/item/g9:0/move", json={"x":1,"y":1}).status_code == 422)
+    check("and a malformed reference",
+          c.post("/api/item/nonsense/move", json={"x":1,"y":1}).status_code == 422)
 
 
 print(f"\n{'ALL PASS' if not FAILED else 'FAILURES: ' + ', '.join(FAILED)}")

@@ -773,5 +773,38 @@ check("the client places new items itself", "function freeSlot()" in ui)
 check("and every add path uses it",
       ui.count("at: freeSlot()") >= 2, f"{ui.count('at: freeSlot()')} call sites")
 
+print("\n23. out-of-range Godley indices are refused, not passed to C++")
+# An out-of-range index does not raise in the engine -- it KILLS THE PROCESS. row/delete
+# with at=9999 took the whole server down and the unsaved model with it.
+c.post("/api/clear")
+gi = c.post("/api/item", json={"kind":"godley"}).json()["index"]
+crashes = []
+for action in ("row/delete", "row/insert", "col/delete", "col/insert"):
+    for at in (9999, -5, 0, 10**9):
+        r = c.post(f"/api/godley/{gi}/{action}", json={"at": at})
+        if r.status_code not in (400, 422):
+            crashes.append((action, at, r.status_code))
+check("every out-of-range row/column index is refused", not crashes, str(crashes[:4]))
+check("the server is still answering after all of them",
+      c.get("/api/state").status_code == 200)
+
+check("an absurd resize is refused",
+      c.post(f"/api/godley/{gi}/resize", json={"rows":99999,"cols":99999}).status_code == 422)
+check("a resize below the structural minimum is refused",
+      c.post(f"/api/godley/{gi}/resize", json={"rows":1,"cols":1}).status_code == 422)
+check("an out-of-range asset class column is refused",
+      c.post(f"/api/godley/{gi}/class", json={"col":999,"cls":"asset"}).status_code == 422)
+check("a cell outside the table is refused",
+      c.post(f"/api/godley/{gi}/cell", json={"row":500,"col":500,"value":"x"}).status_code == 422)
+
+# and the table is still usable afterwards
+g = c.get(f"/api/godley/{gi}").json()
+check("the table survived the battering", g["rows"] >= 2 and g["cols"] >= 2,
+      f"{g['rows']}x{g['cols']}")
+
+check("a save name with no stem is refused rather than 500",
+      c.post("/api/save", json={"name":"/"}).status_code == 422)
+check("and so is '//'", c.post("/api/save", json={"name":"//"}).status_code == 422)
+
 print(f"\n{'ALL PASS' if not FAILED else 'FAILURES: ' + ', '.join(FAILED)}")
 sys.exit(1 if FAILED else 0)

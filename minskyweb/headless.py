@@ -149,6 +149,21 @@ class Godley:
             icRow=[bool(t.initialConditionRow(r)) for r in range(rows)],
             doubleEntry=bool(t.doubleEntryCompliant()))
 
+    def _bounds(self, r=None, c=None, *, r_max_extra=0, c_max_extra=0):
+        """Range-check before anything reaches C++.
+
+        An out-of-range index passed through to the engine does not raise -- it KILLS THE
+        PROCESS. `row/delete` with at=9999 took the whole server down and the unsaved
+        model with it. Every index that crosses into the engine is checked here first.
+        """
+        t = self._t
+        if r is not None and not 0 <= r < t.rows() + r_max_extra:
+            raise IndexError(
+                f"row {r} is outside 0..{t.rows() - 1 + r_max_extra}")
+        if c is not None and not 0 <= c < t.cols() + c_max_extra:
+            raise IndexError(
+                f"column {c} is outside 0..{t.cols() - 1 + c_max_extra}")
+
     def set_cell(self, r: int, c: int, text: str):
         t = self._t
         if not (0 <= r < t.rows() and 0 <= c < t.cols()):
@@ -157,6 +172,7 @@ class Godley:
         self._commit()
 
     def set_class(self, col: int, cls: str):
+        self._bounds(c=col)
         if cls not in self.CLASSES:
             raise ValueError(f"asset class must be one of {self.CLASSES}, got {cls!r}")
         if col == 0:
@@ -165,18 +181,31 @@ class Godley:
         self._commit()
 
     def resize(self, rows: int, cols: int):
-        self._t.resize(max(2, rows), max(2, cols))
+        if not (2 <= rows <= 500 and 2 <= cols <= 200):
+            raise ValueError(
+                f"a table of {rows}x{cols} is out of range (rows 2..500, cols 2..200)")
+        self._t.resize(rows, cols)
         self._commit()
 
     def insert_row(self, at: int):
+        # inserting is legal one past the end, hence the extra
+        self._bounds(r=at, r_max_extra=1)
+        if at == 0:
+            raise ValueError("row 0 holds the stock names; insert below it")
         self._t.insertRow(at); self._commit()
 
     def delete_row(self, at: int):
+        self._bounds(r=at)
         if at == 0:
             raise ValueError("row 0 holds the stock names and cannot be deleted")
+        if self._t.rows() <= 2:
+            raise ValueError("a Godley table needs its header and initial-conditions rows")
         self._t.deleteRow(at); self._commit()
 
     def insert_col(self, at: int):
+        self._bounds(c=at, c_max_extra=1)
+        if at == 0:
+            raise ValueError("column 0 holds the flow labels; insert to the right of it")
         self._t.insertCol(at); self._commit()
 
     def delete_col(self, at: int):
@@ -195,6 +224,7 @@ class Godley:
         Rewriting is deterministic: read the grid, drop the column, shrink, write it back,
         and carry the asset classes across with the shift.
         """
+        self._bounds(c=at)
         if at == 0:
             raise ValueError("column 0 holds the flow labels and cannot be deleted")
         snap = self.snapshot()

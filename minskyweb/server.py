@@ -360,7 +360,11 @@ def check_save_path(name: str) -> Path:
                  f"{SAVE_DIR}, or a full path inside a writable directory.")
     p = raw if raw.is_absolute() else SAVE_DIR / raw.name
     if p.suffix.lower() != ".mky":
-        p = p.with_suffix(".mky")
+        try:
+            p = p.with_suffix(".mky")
+        except ValueError:
+            # "/" and "//" have no name to give a suffix to, and raised a bare 500
+            raise HTTPException(422, f"{name!r} is not a usable file name")
     p = Path(os.path.normpath(str(p)))
     for r in WRITE_ROOTS:
         try:

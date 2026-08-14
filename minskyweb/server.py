@@ -291,93 +291,166 @@ WRITE_ROOTS = [SAVE_DIR, Path.cwd() / "models", UPLOAD_DIR]
 _CURRENT: str | None = None
 _DIRTY = False
 
-#: Wire topology snapshots, keyed by the ENGINE's history pointer.
+#: Undo history, owned by us rather than by the engine.
 #:
-#: Undo rewrites engine state without telling us, and `_WIRES` is the only record of
-#: which ports each wire joins -- the engine cannot report it. So undoing would leave the
-#: canvas drawing wires that no longer exist. Snapshotting `_WIRES` at exactly the points
-#: the engine pushes history, and keying by its own pointer, keeps the two in step
-#: without a second pointer of our own to drift.
+#: The engine's own history cannot be driven correctly from outside the Tk client:
 #:
-#: `undo(0)` is a non-mutating getter for that pointer (1-based); `undo(1)` / `undo(-1)`
-#: move it and return the new value.
-_WHIST: dict[int, list] = {}
+#:  * `pushHistory()` early-returns false whenever its `undone` flag is set, so the FIRST
+#:    push after any undo or redo silently does nothing. An edit made straight after an
+#:    undo therefore got no undo point at all.
+#:  * `undo(0)` looks like a getter for the pointer, and returns it, but it restores the
+#:    state at the pointer (discarding unpushed edits) AND sets `undone`, poisoning the
+#:    next push. There is no way to read the pointer without moving something.
+#:  * `Minsky::save()` pushes history behind our back, so a push we made right after
+#:    saving returned false and our mirror of the pointer stopped advancing -- the edit
+#:    after a Save became permanently un-undoable.
+#:  * `pushHistory()` never truncates the redo tail; it appends and jumps the pointer to
+#:    the end, leaving the abandoned branch in the middle of the deque for a later undo
+#:    to walk back into.
+#:
+#: Every one of those is invisible from Python: the calls report success. So we keep the
+#: history ourselves, as full serialized documents. `save()` round-trips exactly, is
+#: byte-deterministic for a given state, and costs ~2ms to write and ~5ms to restore --
+#: cheap enough to snapshot on every edit, and it makes undo semantics ours to define.
+#:
+#: Each entry pairs the document with the wire topology at that instant, because `_WIRES`
+#: is the only record of which PORTS each wire joins -- the engine cannot report it, so
+#: restoring a document without its topology would leave the canvas drawing wires that no
+#: longer exist.
+MAX_HISTORY = 60
+_HIST: list[tuple[bytes, list]] = []
 
+#: Index into `_HIST` of the entry matching the live model. Invariant: after `_snap()` or
+#: `_restore()`, `_HIST[_PTR]` IS the live state.
+_PTR = -1
 
-#: Our own history pointer.
-#:
-#: DO NOT use `undo(0)` to read the engine's. It is NOT a getter -- it restores the state
-#: at the current pointer, DISCARDING anything not yet pushed. Calling it from snapshot()
-#: to compute canUndo/canRedo silently reverted every edit the moment the client read
-#: state back: add an item, ask for state, item gone. `pushHistory()` returns True only
-#: when the state actually changed, which is enough to keep this in step.
-_PTR = 1
+#: Whether the model has been mutated since the last entry was recorded. Serializing on
+#: every state read just to answer "can I undo?" would be wasteful, and every mutating
+#: endpoint already announces itself through `mark_dirty()`.
+_PENDING = False
 
 
 def history_ptr() -> int:
-    return _PTR
+    return _PTR + 1
+
+
+def _hist_file() -> Path:
+    d = Path(tempfile.gettempdir()) / "minskyweb"
+    d.mkdir(parents=True, exist_ok=True)
+    return d / "history.mky"
+
+
+def settle():
+    """Bring every item's cached geometry up to date.
+
+    `updateBoundingBox()` is not a read: it REWRITES the item's geometry, and those
+    coordinates are part of the saved document. `snapshot()` has to call it to report
+    honest port positions, which meant the first history entry after a load was taken in
+    a different geometric state from every entry after it -- so the first edit recorded a
+    spurious extra undo point, and undoing twice made the diagram visibly jump.
+    Normalising here means both sides of every comparison are measured the same way.
+    """
+    m = engine().minsky
+    for _ref, it in _iter_items(m):
+        try:
+            it.updateBoundingBox()
+        except Exception:
+            pass
+
+
+def _serialize() -> bytes:
+    settle()
+    f = _hist_file()
+    engine().minsky.save(str(f))
+    return f.read_bytes()
+
+
+def _restore(entry: tuple[bytes, list]):
+    global _PENDING
+    doc, wires = entry
+    f = _hist_file()
+    f.write_bytes(doc)
+    engine().minsky.load(str(f))
+    _WIRES[:] = list(wires)
+    _PENDING = False
+
+
+def _snap() -> bool:
+    """Record the live state as a history entry, if anything has changed since the last.
+
+    "Has anything changed" is answered by `_PENDING`, not by comparing documents. A
+    reload does not reproduce the saved bytes exactly for every model -- restore a state
+    and re-serialise it and the two can differ -- so a byte comparison decided the model
+    had changed when nothing had, appended a duplicate, and the second undo in a row
+    stepped back onto the state it had just restored. Every mutating endpoint announces
+    itself through `mark_dirty()`, which is an exact signal.
+    """
+    global _PTR, _PENDING
+    if _HIST and not _PENDING:
+        return False
+    del _HIST[_PTR + 1:]                 # a new state abandons the redo tail
+    _HIST.append((_serialize(), list(_WIRES)))
+    if len(_HIST) > MAX_HISTORY:
+        del _HIST[0]
+    _PTR = len(_HIST) - 1
+    _PENDING = False
+    return True
 
 
 def checkpoint():
     """Record an undo point for the state as it is NOW, BEFORE a mutation.
 
-    Two reasons it must run before rather than after:
-
-    1. NOTHING pushes engine history from pyminsky. The REPL gets it free because
-       RESTService.cc calls commandHook after every command; direct method calls do not.
-       Without this, undo silently does nothing at all.
-
-    2. `pushHistory()` REORDERS `model.items`. It round-trips the model, and Godley-owned
-       variables are regenerated at the end of the list. Pushing after a mutation
-       therefore invalidates the index that mutation just returned -- an /api/item call
-       reported index 5, a push moved it to 1, and the next /api/wire against index 5 hit
-       a different item entirely. Pushing first means every index handed out afterwards
-       stays valid until the next checkpoint.
-
-    The wire topology is snapshotted at the same instant and keyed by the engine's own
-    history pointer, so the two timelines cannot drift.
+    Recording before rather than after keeps the index a mutation just returned valid:
+    the client gets an index and uses it in the next call, so nothing may reorder
+    `model.items` in between.
     """
-    global _PTR
-    mk = engine().minsky
-    if mk.pushHistory():
-        _PTR += 1
-    for k in [k for k in _WHIST if k > _PTR]:   # a new edit truncates the redo tail
-        del _WHIST[k]
-    _WHIST[_PTR] = list(_WIRES)
+    _snap()
+
+
+def capture_tip():
+    """Record the live state so the newest action can be redone.
+
+    Checkpoints happen before mutations, so the state produced by the most recent edit is
+    not in the history yet. It has to go in before we step backwards, or the first undo
+    would have nothing to come back to.
+    """
+    _snap()
 
 
 def reset_history():
     """Start a fresh timeline, with the current model as its baseline."""
-    mk = engine().minsky
     global _PTR
-    mk.clearHistory()
-    _WHIST.clear()
-    mk.pushHistory()
-    _PTR = 1
-    _WHIST[_PTR] = list(_WIRES)
+    disable_engine_history()
+    _HIST.clear()
+    _PTR = -1
+    _snap()
 
 
 def reset_history_sync():
     reset_history()
 
 
-def capture_tip():
-    """Record the live state at the tip so the newest action can be redone.
+def can_undo() -> bool:
+    return _PTR > 0 or (_PENDING and _PTR >= 0)
 
-    Undo steps back through pushed states; the current one was never pushed (checkpoints
-    happen before mutations). `checkPushHistory()` pushes it only if we are at the tip,
-    which is exactly the condition that matters.
+
+def can_redo() -> bool:
+    return not _PENDING and _PTR < len(_HIST) - 1
+
+
+def mark_dirty(v: bool = True, pending: bool = True):
+    """Note that the model changed.
+
+    `_DIRTY` is about the FILE -- is there anything unsaved. `_PENDING` is about the
+    HISTORY -- is the live state ahead of the newest recorded entry. They move together
+    for an edit, but not otherwise: saving clears the first and must leave the second
+    alone, and undo/redo dirties the file while leaving the history exactly in step
+    (pass pending=False there, or the restored state looks un-redoable).
     """
-    global _PTR
-    mk = engine().minsky
-    if mk.pushHistory():
-        _PTR += 1
-        _WHIST[_PTR] = list(_WIRES)
-
-
-def mark_dirty(v: bool = True):
-    global _DIRTY
+    global _DIRTY, _PENDING
     _DIRTY = v
+    if v and pending:
+        _PENDING = True
 
 
 def _roots() -> list[Path]:
@@ -457,6 +530,18 @@ def check_model_path(path: str) -> Path:
 
 def engine() -> Model:
     return Model.current()
+
+
+def disable_engine_history():
+    """Stop the engine keeping a history we do not use.
+
+    We keep our own (see `_HIST`). Left on, the engine's would still grow on every
+    `save()` -- and `Minsky::save()` pushes whether we ask it to or not.
+    """
+    try:
+        engine().minsky.doPushHistory(False)
+    except Exception:
+        pass    # older builds without the member: harmless, just wasted memory
 
 
 def locked(fn, *a, **kw):
@@ -633,14 +718,20 @@ def snapshot() -> dict[str, Any]:
         running=_RUNNING.is_set(), diverged=bad or None,
         currentFile=(Path(_CURRENT).stem if _CURRENT else None),
         currentPath=_CURRENT, dirty=_DIRTY,
-        canUndo=(history_ptr() > 1),
-        canRedo=any(k > history_ptr() for k in _WHIST),
+        canUndo=can_undo(),
+        canRedo=can_redo(),
         solver=dict(epsRel=m.epsRel(), epsAbs=m.epsAbs(), order=m.order(),
                     implicit=m.implicit(), t0=m.t0(), tmax=m.tmax())))
 
 
 def create_app() -> FastAPI:
     app = FastAPI(title="Minsky headless server", version="0.1")
+
+    @app.on_event("startup")
+    async def _boot():
+        # baseline the history against whatever the model is at start, so the very first
+        # edit already has something to undo back to
+        await call(reset_history)
 
     @app.exception_handler(WiringError)
     async def _wiring(_req, exc: WiringError):
@@ -989,29 +1080,20 @@ def create_app() -> FastAPI:
     async def _step_history(delta: int, what: str):
         require_idle()
 
-        await call(capture_tip)
-
         def _go():
             global _PTR
-            mk = engine().minsky
-            was = _PTR
-            now = int(mk.undo(delta))
-            _PTR = now
-            if now == was:
+            capture_tip()                     # the newest edit must be redoable
+            target = _PTR - delta
+            if not 0 <= target < len(_HIST):
                 return False
-            # the engine has just rewritten the model; our wire record must follow it
-            snap = _WHIST.get(now)
-            if snap is None:
-                # no snapshot for this point -- say so rather than draw stale wires
-                _WIRES.clear()
-            else:
-                _WIRES[:] = list(snap)
+            _restore(_HIST[target])
+            _PTR = target
             return True
 
         moved = await call(_go)
         if not moved:
             raise HTTPException(409, f"nothing to {what}")
-        mark_dirty()
+        mark_dirty(pending=False)   # _restore() left the history exactly in step
         return await call(snapshot)
 
     @app.post("/api/undo")

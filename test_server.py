@@ -1072,5 +1072,69 @@ check("it leaks no reprs or pixel coordinates",
       body.get("detail","")[:70])
 check("the diagnosis is kept for the log", bool(body.get("diagnostic")))
 
+print("\n31. history is ours, not the engine's")
+# The engine's history cannot be driven correctly from outside its own client, and every
+# way it fails reports success. These check the symptoms, one per engine trap.
+EX = "/Users/ryneschultz/minsky/examples/GoodwinLinear02.mky"
+import os
+if os.path.exists(EX):
+    def load(): c.post("/api/load", params={"path": EX})
+
+    # Minsky::save() pushes engine history behind our back
+    for label, act in (("save", lambda: c.post("/api/save", json={"name": "hist-probe"})),
+                       ("download", lambda: c.get("/api/download"))):
+        load(); act()
+        c.delete("/api/item/3")
+        check(f"the edit after {label} is undoable",
+              c.get("/api/state").json()["canUndo"] is True)
+        check(f"and undo after {label} actually runs",
+              c.post("/api/undo").status_code == 200)
+
+    # pushHistory() early-returns false while `undone` is set, so the first push after an
+    # undo did nothing and the next edit had no undo point at all
+    load(); c.delete("/api/item/3"); c.post("/api/undo")
+    n = len(c.get("/api/state").json()["items"])
+    c.post("/api/item", json={"kind": "parameter", "name": "zz", "value": 1})
+    check("an edit made after an undo is itself undoable",
+          c.get("/api/state").json()["canUndo"] is True)
+    u = c.post("/api/undo")
+    check("undoing it removes it", u.status_code == 200 and
+          not any(i.get("name") == "zz" for i in u.json()["items"]))
+    # pushHistory() never truncates the redo tail; it appends and jumps the pointer past
+    # the abandoned branch, leaving it there for a later redo to walk into
+    r = c.post("/api/redo").json()
+    check("redo returns the new edit, not the abandoned branch",
+          any(i.get("name") == "zz" for i in r["items"]) and len(r["items"]) == n + 1,
+          f"{len(r['items'])} items")
+
+# an endpoint that answers with an error must not have moved the model
+c.post("/api/clear")
+before = c.get("/api/state").json()
+check("a refused undo changes nothing",
+      c.post("/api/undo").status_code == 409 and
+      c.get("/api/state").json()["items"] == before["items"])
+
+# a request rejected without touching the model must leave the redo point alone
+r  = c.post("/api/item", json={"kind":"parameter","name":"c","value":2}).json()["index"]
+ig = c.post("/api/item", json={"kind":"operation","op":"integrate"}).json()["index"]
+c.post("/api/wire", json={"src": r, "dst": ig, "port": 1})
+c.post("/api/undo")
+check("redo is available after the undo", c.get("/api/state").json()["canRedo"] is True)
+check("a 422 delete is refused", c.delete("/api/item/999").status_code == 422)
+check("a 422 godley edit is refused",
+      c.post("/api/godley/0/cell", json={"row":99,"col":99,"value":"x"}).status_code == 422)
+check("neither destroyed the redo point",
+      c.get("/api/state").json()["canRedo"] is True)
+rr = c.post("/api/redo")
+check("and redo restores the wire",
+      rr.status_code == 200 and len(rr.json()["wires"]) == 1,
+      f"{rr.status_code}, {len(rr.json().get('wires', []))} wires")
+
+# undo must restore the wire TOPOLOGY too -- the engine cannot report which ports a wire
+# joins, so a document restored without our record draws wires that do not exist
+check("no desync anywhere in that sequence",
+      not any(w.get("desync") for w in c.get("/api/state").json()["wires"]))
+
+
 print(f"\n{'ALL PASS' if not FAILED else 'FAILURES: ' + ', '.join(FAILED)}")
 sys.exit(1 if FAILED else 0)

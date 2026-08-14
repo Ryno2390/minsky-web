@@ -413,9 +413,29 @@ class Model:
             raise TypeError(f"item {index} is a {ct}, not a Godley table")
         return Godley(self, index)
 
+    def value_id(self, name: str) -> str:
+        """The key `variableValues` actually stores a variable under.
+
+        It is NOT ":name". Minsky MANGLES the name into the id -- `alpha_1` becomes
+        `:alpha<sub>1</sub>`, `r^2` becomes `:r<sup>2</sup>`, a space becomes U+2423 --
+        so writing to ":alpha_1" created a phantom entry and the real variable kept 0.
+        Every parameter whose name contained an underscore, a caret or a space silently
+        had no value, which is most of them in an economic model (`C_D`, `I_D`, `w_s`).
+        """
+        for i in range(len(self.minsky.model.items)):
+            it = self.minsky.model.items[i]
+            if not it.classType().startswith("Variable:"):
+                continue
+            try:
+                if it.name() == name or it.rawName() == name:
+                    return it.valueId()
+            except Exception:
+                continue
+        return f":{name}"
+
     def set_init(self, name: str, value) -> None:
         """Initial value / parameter value. Minsky wants this as a STRING expression."""
-        self.minsky.variableValues[f":{name}"].init(str(value))
+        self.minsky.variableValues[self.value_id(name)].init(str(value))
 
     # ---- the part that actually needed writing -------------------------------
     def wire(self, src: Item, dst: Item, port: int = 1) -> None:

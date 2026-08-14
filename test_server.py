@@ -946,5 +946,54 @@ check("the panel reflects the model rather than hardcoded values",
 check("and it does not fight the user's typing",
       "document.activeElement !== el" in ui)
 
+print("\n28. a value reaches the variable whatever its name looks like")
+# variableValues is NOT keyed by ":name". Minsky mangles the name into the id: alpha_1
+# becomes :alpha<sub>1</sub>, r^2 becomes :r<sup>2</sup>, a space becomes U+2423. Writing
+# to ":alpha_1" created a phantom entry and the real variable kept 0 -- so every parameter
+# with an underscore, caret or space silently had no value. In an economic model that is
+# most of them: C_D, I_D, w_s.
+c.post("/api/clear")
+names = ["alpha", "alpha_1", "r^2", "has space", "C_D", "W_C"]
+for n in names:
+    c.post("/api/item", json={"kind":"parameter","name":n,"value":2.5})
+c.post("/api/reset")
+vals = c.get("/api/state").json()["values"]
+lost = {k: v for k, v in vals.items() if v != 2.5}
+check("every parameter carries its value", not lost, f"lost: {lost}")
+check("all six exist", len(vals) == len(names), f"{len(vals)} of {len(names)}")
+
+c.post("/api/clear")
+c.post("/api/item", json={"kind":"variable","name":"K_t","var_type":"stock","value":300})
+c.post("/api/reset")
+vals = c.get("/api/state").json()["values"]
+check("a stock's initial value survives a mangled name",
+      list(vals.values()) == [300.0], str(vals))
+
+c.post("/api/item", json={"kind":"parameter","name":"C_D","value":1.0})
+c.post("/api/init", json={"name":"C_D","value":99})
+c.post("/api/reset")
+vals = c.get("/api/state").json()["values"]
+check("/api/init reaches a mangled name too",
+      99.0 in vals.values(), str(vals))
+
+# and the model actually integrates with such a parameter driving it
+c.post("/api/clear")
+p1 = c.post("/api/item", json={"kind":"parameter","name":"g_r","value":4.0}).json()["index"]
+ig = c.post("/api/item", json={"kind":"operation","op":"integrate"}).json()["index"]
+c.post("/api/wire", json={"src":p1,"dst":ig,"port":1})
+last = None
+with c.websocket_connect("/ws/sim") as ws:
+    ws.send_json({"cmd":"run","steps":600,"tmax":2.0})
+    while True:
+        m = ws.receive_json()
+        if "error" in m: check("runs with a mangled parameter name", False, m["error"]); break
+        if m.get("done") or m.get("stopped"): break
+        last = m
+if last:
+    t_ = last["t"]
+    v = [x for k, x in last["values"].items() if "int" in k][0]
+    check("a mangled parameter actually drives the model", abs(v - 4.0*t_) < 1e-6,
+          f"t={t_:.4f} int={v:.4f} expect {4.0*t_:.4f}")
+
 print(f"\n{'ALL PASS' if not FAILED else 'FAILURES: ' + ', '.join(FAILED)}")
 sys.exit(1 if FAILED else 0)

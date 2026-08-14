@@ -693,3 +693,67 @@ screen. Decode for legibility, escape on the way into the DOM.
 
 Also handled while there: Minsky renders a space as **U+2423 OPEN BOX** inside value ids
 and U+00A0 elsewhere, so both are mapped back to a space for display.
+
+## The engine's own undo history cannot be driven from outside its client
+
+Read `Minsky::pushHistory` and `Minsky::undo` in `model/minsky.cc` before trusting either.
+Four behaviours, none of them reported, and each one produces a wrong result silently:
+
+* **`pushHistory()` early-returns `false` whenever its `undone` flag is set.** The flag is
+  raised by any `undo()`, so the FIRST push after an undo or redo does nothing at all. An
+  edit made straight after an undo therefore got no undo point.
+* **`undo(0)` is not a getter.** It returns the pointer, which makes it look like one, but
+  it restores the state at that pointer — discarding anything unpushed — and sets `undone`,
+  poisoning the next push. There is no way to read the pointer without moving something.
+* **`Minsky::save()` pushes history** (`minsky.cc:1046`). A push of our own straight after
+  a save therefore returned `false`, so a pointer mirrored in Python stopped advancing, and
+  the first edit after any Save or Download became permanently un-undoable.
+* **`pushHistory()` never truncates the redo tail.** It appends and jumps the pointer to the
+  end, leaving the abandoned branch in the middle of the deque for a later undo to walk
+  back into.
+
+`minskyweb` keeps its own history instead: whole documents via `save()`/`load()`, paired
+with the wire topology. `save()` round-trips exactly and costs ~2 ms to write and ~5 ms to
+restore, so snapshotting every edit is affordable, and `doPushHistory(False)` switches the
+engine's own history off so it does not grow unused.
+
+Two traps found while building that:
+
+* **`updateBoundingBox()` is not a read.** It rewrites the item's geometry, and those
+  coordinates are part of the saved document. Any snapshot taken before it runs differs
+  from every snapshot taken after.
+* **A reload does not reproduce the saved bytes for every model.** Restore a state,
+  re-serialise it, and the two can differ — so "has anything changed" cannot be answered by
+  comparing documents.
+
+## A Godley table is not stored the way it is displayed
+
+Writing the document groups the table's columns by asset class — assets, then liabilities,
+then equity — and appends an empty column for any class the table lacks. A table edited to
+read `A B C D` (asset, liability, equity, asset) is written, and reopens, as `A D B C`.
+
+Nothing reports this. `minskyweb` reads the file back after writing it, so the reordering
+happens in front of the user at the moment they ask for the model to be saved.
+
+Related: **the engine regenerates a table's variables at the END of `model.items`.** Renaming
+a stock header moves that variable from index 1 to index 4 and shifts everything between,
+so any recorded index above it now names a different item.
+
+## Things that create nothing and raise nothing
+
+* **`canvas.addVariable(name, type)` with a type it does not know.** The call returns, no
+  item appears, no exception. Accepted types, probed: `flow`, `stock`, `parameter`,
+  `integral`, `constant`, `tempFlow`. `undefined` creates nothing.
+* **A constant is not a `Variable:constant`.** The engine gives it class `VarConstant`, and
+  its NAME is its value: `init("3.5")` sets both. There is no name to give it.
+* **`variableValues` keeps an entry after the last icon referring to it is gone**, until the
+  next reset — so reading it directly reports variables the model does not have.
+* **`value()` and `init()` are different numbers.** `value()` is what the variable holds
+  right now and only picks up a new initial condition at the next reset, so setting a
+  parameter and reading straight back returns the old value.
+
+## Solver orders
+
+`rungeKutta.cc:91` dispatches orders 1, 2 and 4 only; anything else throws "order N solver
+not supported" — at RESET time, long after the value was accepted and written to the file.
+Order 1 explicit is plain Euler and is legal. `epsAbs` and `epsRel` must be positive.

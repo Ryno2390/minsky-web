@@ -805,6 +805,15 @@ def create_app() -> FastAPI:
     @app.post("/api/solver")
     async def set_solver(spec: SolverSpec):
         require_idle()
+        # Distinguish "not sent" from "sent as null". A client that computes
+        # parseFloat("abc") sends null, and silently dropping it meant the solver kept its
+        # old value while the field on screen showed the new one -- the user believed a
+        # tolerance had been applied that never was.
+        sent = spec.model_fields_set
+        bad = [k for k in sent if getattr(spec, k) is None]
+        if bad:
+            raise HTTPException(
+                422, f"not a number: {', '.join(sorted(bad))}")
         kw = {k: v for k, v in spec.model_dump().items() if v is not None}
 
         def _cfg():

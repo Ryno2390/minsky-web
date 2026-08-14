@@ -587,5 +587,29 @@ if last:
     check("still integrates after column removal", abs(R-(100+5*t_)) < 1e-6,
           f"t={t_:.4f} Reserves={R:.4f} expect {100+5*t_:.4f}")
 
+print("\n17. solver settings: applied or refused, never silently dropped")
+c.post("/api/clear")
+# A client computing parseFloat("abc") sends null. Dropping it silently meant the solver
+# kept its old value while the field on screen showed the new one.
+r = c.post("/api/solver", json={"epsRel": None})
+check("an explicit null is refused", r.status_code == 422 and "not a number" in r.text,
+      r.text[:70])
+check("the refusal names the field", "epsRel" in r.text, r.text[:70])
+check("omitting a field is still fine",
+      c.post("/api/solver", json={"order": 2}).status_code == 200)
+
+c.post("/api/solver", json={"epsRel": 1e-7, "epsAbs": 1e-9, "order": 2, "implicit": False})
+sv = c.get("/api/state").json()["solver"]
+check("valid settings are applied",
+      sv["epsRel"] == 1e-7 and sv["order"] == 2 and sv["implicit"] is False, str(sv))
+
+# a bad value must not leave a partially applied solver
+c.post("/api/solver", json={"epsRel": 1e-8, "order": 4})
+before = c.get("/api/state").json()["solver"]
+c.post("/api/solver", json={"epsRel": 1e-6, "epsAbs": None})
+after = c.get("/api/state").json()["solver"]
+check("a rejected request changes nothing", before == after,
+      f"{before} vs {after}")
+
 print(f"\n{'ALL PASS' if not FAILED else 'FAILURES: ' + ', '.join(FAILED)}")
 sys.exit(1 if FAILED else 0)

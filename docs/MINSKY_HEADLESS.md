@@ -618,3 +618,32 @@ leave the count untouched where row operations do not.
 `exp(exp(t))` overflows a double once `exp(t)` passes 709. Run it and the status pill
 turns red at **t = 6.61**, the stream stops, and the frame names the offending variable.
 Everything downstream depends on `inf` surviving serialisation as `null`.
+
+## Solver settings are applied or refused, never dropped
+
+Typing `abc` into epsRel and pressing Run used to complete normally. `parseFloat("abc")`
+is NaN, which JSON-encodes as `null`; the handler filtered `None` out as "not provided",
+so the solver kept its previous value while the field on screen showed the new one. The
+run then used a tolerance the user thought they had changed.
+
+Pydantic distinguishes the two through `model_fields_set`, so a key sent as null is now a
+422 naming the field, while omitting it still means "leave alone". A rejected request
+changes nothing — asserted, so a partial application cannot creep in.
+
+The client validates first: every field is parsed and range-checked before the run
+(`epsRel`/`epsAbs` positive, `order` one of 1/2/4, `steps` positive, `tmax` finite), the
+offending input is marked, and the run is refused with a message naming the value.
+
+## Placeholders only where there is nothing to read
+
+Cell hints turned into clutter on a real table — LoanableFunds is mostly empty cells, so
+"flow variable" appeared about thirty times. A row with any content now shows none, which
+keeps the guidance on a new or newly added row and leaves a populated table clean.
+
+## Two failure modes that turned out to be handled
+
+**Reloading mid-run** kills the websocket. `_RUNNING` clears in the disconnect path, so
+the model is editable again immediately rather than being stuck behind a permanent 409.
+
+**Resizing while zoomed** keeps the same model area visible and recomputes port radius
+from the new zoom, so ports stay the same size on screen at any window size.

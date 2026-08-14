@@ -97,6 +97,7 @@ svg#board.panning{cursor:grabbing}
 .field input{width:96px;font:12px var(--mono);color:var(--ink);background:var(--bg);
   border:1px solid var(--line-2);border-radius:5px;padding:4px 7px;text-align:right}
 .field input[type=checkbox]{width:auto}
+.field input.bad{border-color:var(--bad);background:#2A1416}
 .toast{position:fixed;left:50%;bottom:22px;transform:translateX(-50%);max-width:560px;
   background:#2A1416;border:1px solid var(--bad);color:#FFC9C4;padding:10px 14px;
   border-radius:7px;font-size:13px;z-index:50;box-shadow:0 8px 30px rgba(0,0,0,.5)}
@@ -706,18 +707,51 @@ function drawPlot(){
 addEventListener("resize", drawPlot);
 
 /* ---------- run ---------- */
+// Every solver field is validated before the run. parseFloat("abc") is NaN, which
+// JSON-encodes as null; the server used to drop it and keep the old value while the field
+// on screen showed the new one, so nothing told the user their tolerance was ignored.
+function readSolver(){
+  const spec = [["epsRel", parseFloat, v => v > 0],
+                ["epsAbs", parseFloat, v => v > 0],
+                ["order",  parseInt,   v => [1,2,4].includes(v)],
+                ["tmax",   parseFloat, v => isFinite(v)],
+                ["steps",  parseInt,   v => v > 0]];
+  const out = {};
+  let bad = null;
+  for (const [id, parse, ok] of spec) {
+    const el = $("#" + id);
+    el.classList.remove("bad");
+    const v = parse(el.value);
+    if (!isFinite(v) || !ok(v)) {
+      el.classList.add("bad");
+      if (!bad) bad = {id, text: el.value};
+      continue;
+    }
+    out[id] = v;
+  }
+  if (bad) {
+    toast(bad.id === "order"
+      ? `Order must be 1, 2 or 4 — "${bad.text}" is not.`
+      : `${bad.id}: "${bad.text}" is not a valid number.`);
+    $("#" + bad.id).focus();
+    return null;
+  }
+  return out;
+}
+
 $("#run").onclick = guard(async () => {
+  const cfg = readSolver();
+  if (!cfg) return;
   await api("/solver", {method:"POST", body: JSON.stringify({
-    epsRel: parseFloat($("#epsRel").value), epsAbs: parseFloat($("#epsAbs").value),
-    order: parseInt($("#order").value), implicit: $("#implicit").checked})});
+    epsRel: cfg.epsRel, epsAbs: cfg.epsAbs,
+    order: cfg.order, implicit: $("#implicit").checked})});
   series = {}; tSeries = []; drawPlot();
   const proto = location.protocol === "https:" ? "wss" : "ws";
   ws = new WebSocket(`${proto}://${location.host}/ws/sim`);
   ws.onopen = () => {
     $("#run").disabled = true; $("#stop").disabled = false;
     $("#status").textContent = "running"; $("#status").className = "pill live";
-    ws.send(JSON.stringify({cmd:"run", steps: parseInt($("#steps").value),
-                            tmax: parseFloat($("#tmax").value)}));
+    ws.send(JSON.stringify({cmd:"run", steps: cfg.steps, tmax: cfg.tmax}));
   };
   ws.onmessage = ev => {
     const m = JSON.parse(ev.data);
@@ -787,9 +821,14 @@ async function drawGodley(g){
   // Each cell says what belongs in it. The table's three row kinds mean three different
   // things and nothing on screen used to distinguish them, so a new table looked like a
   // blank grid.
+  // Guidance only where there is nothing to read. A populated table like LoanableFunds
+  // is mostly empty cells, and repeating "flow variable" thirty times turns a hint into
+  // clutter -- so a row that already has content shows none.
+  const rowEmpty = g.cells.map(row => row.every(v => !String(v || "").trim()));
   const hint = (r, c) => {
-    if (r === 0)          return c === 0 ? "flows ↓  stocks →" : "stock name";
-    if (g.icRow[r])       return c === 0 ? "" : "initial value";
+    if (!rowEmpty[r]) return "";
+    if (r === 0)      return c === 0 ? "flows ↓  stocks →" : "stock name";
+    if (g.icRow[r])   return c === 0 ? "" : "initial value";
     return c === 0 ? "flow label" : "flow variable";
   };
   for (let r = 0; r < g.rows; r++) {

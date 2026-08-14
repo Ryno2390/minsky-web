@@ -57,7 +57,7 @@ it, or place it at `~/minsky`.
 ## Tests
 
     python3 test_headless.py    # 12 checks
-    python3 test_server.py      # 100 checks
+    python3 test_server.py      # 105 checks
 
 Both build models whose answers are known analytically, so a mis-wired model fails loudly
 instead of producing plausible numbers.

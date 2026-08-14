@@ -645,7 +645,10 @@ function render() {
     }
     gItems.appendChild(g);
   }
-  const vals = Object.entries(state.values || {}).filter(([k])=>!k.includes(":0"));
+  // No ":0" filter here any more. It was there to hide the engine's constant:zero, but
+  // the server drops constants now -- and the pattern also hid any variable the user
+  // named "0", which the shipped Goodwin model actually has.
+  const vals = Object.entries(state.values || {});
   $("#series").innerHTML = vals.length ? vals.map(([k,v]) => {
     if (!colors[k]) colors[k] = PALETTE[Object.keys(colors).length % PALETTE.length];
     return `<div class="row"><span class="kk"><i class="sw" style="background:${colors[k]}"></i>
@@ -1075,7 +1078,6 @@ $("#run").onclick = guard(async () => {
     }
     tSeries.push(m.t);
     for (const [k,v] of Object.entries(m.values || {})) {
-      if (k.includes(":0")) continue;
       if (!colors[k]) colors[k] = PALETTE[Object.keys(colors).length % PALETTE.length];
       (series[k] ||= Array(tSeries.length-1).fill(null)).push(v);
     }

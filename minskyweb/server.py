@@ -779,6 +779,24 @@ class SaveSpec(BaseModel):
 
 
 # ------------------------------------------------------------------------ read model
+def live_value_ids() -> set[str]:
+    """The value ids that some item on the canvas actually refers to.
+
+    `variableValues` keeps an entry after the last icon referring to it is gone, until the
+    next reset, so reading it directly reports variables the model does not have.
+    """
+    out = set()
+    m = engine().minsky
+    for _ref, it in _iter_items(m):
+        try:
+            vid = it.valueId()
+        except Exception:
+            continue
+        if vid and not vid.startswith("constant:"):
+            out.add(vid)
+    return out
+
+
 def snapshot() -> dict[str, Any]:
     """Everything a client needs to draw the model."""
     m = engine().minsky
@@ -1629,9 +1647,11 @@ def create_app() -> FastAPI:
                 await call(lambda: engine().minsky.tmax(tmax))
                 mark_dirty()
 
+            # Same filter the snapshot uses, so the plot's series and the values panel
+            # list the same variables -- and neither shows one the model has dropped.
             names = await call(
                 lambda: [k for k in engine().minsky.variableValues.keys()
-                         if not k.startswith("constant:")])
+                         if k in live_value_ids()])
             for i in range(steps):
                 if stop.is_set():
                     await say({"stopped": True, "step": i})

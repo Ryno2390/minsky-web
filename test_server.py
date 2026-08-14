@@ -1501,5 +1501,26 @@ check("a free position is used exactly as asked",
       (round(it["x"]), round(it["y"])) == (420, 260), f"{it['x']},{it['y']}")
 
 
+print("\n40. a value that has been set reads back as set")
+c.post("/api/clear")
+c.post("/api/item", json={"kind":"parameter","name":"alpha","value":0.4})
+c.post("/api/item", json={"kind":"operation","op":"integrate"})
+# value() is what the variable holds RIGHT NOW and only picks up a new initial condition
+# at the next reset, so a caller who set a parameter to 0.9 read 0.4 straight back and
+# concluded nothing had happened
+r = c.post("/api/init", json={"name":"alpha","value":0.9}).json()
+check("setting a value is visible immediately",
+      r["inits"][":alpha"] in ("0.9", 0.9), str(r["inits"]))
+r = c.post("/api/init", json={"name":"int1","value":1.5}).json()
+check("an integral's initial condition too",
+      r["inits"][":int1"] in ("1.5", 1.5), str(r["inits"]))
+check("the running values still say what the model currently holds",
+      r["values"][":alpha"] == 0.0, str(r["values"]))
+c.post("/api/reset")
+vals = c.get("/api/state").json()["values"]
+check("and a reset brings them into line",
+      vals[":alpha"] == 0.9 and vals[":int1"] == 1.5, str(vals))
+
+
 print(f"\n{'ALL PASS' if not FAILED else 'FAILURES: ' + ', '.join(FAILED)}")
 sys.exit(1 if FAILED else 0)

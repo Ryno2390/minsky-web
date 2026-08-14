@@ -330,6 +330,14 @@ svg#board.panning{cursor:grabbing}
     </div>
     <div style="font-size:11.5px;color:var(--ink-3);padding:0 2px" id="renamenote"></div>
   </div>
+  <div id="initwrap" style="display:none;margin-top:8px">
+    <div class="field" style="gap:6px">
+      <label id="initlab" style="white-space:nowrap">value</label>
+      <input id="initval" style="width:100%" autocomplete="off" spellcheck="false">
+      <button id="initok" style="font-size:12px;padding:4px 10px">Set</button>
+    </div>
+    <div style="font-size:11.5px;color:var(--ink-3);padding:0 2px" id="initnote"></div>
+  </div>
 </div>
 
 <script>
@@ -577,11 +585,17 @@ function render() {
       gt.setAttribute("class","ilabel"); gt.textContent = glyph;
       g.appendChild(gt);
     }
-    const t = document.createElementNS("http://www.w3.org/2000/svg","text");
-    t.setAttribute("x", it.x); t.setAttribute("y", B + 13);
-    t.setAttribute("class", glyph ? "isub" : "ilabel");
-    t.textContent = name;
-    g.appendChild(t);
+    // The caption under an item names it. An operation has no name of its own, so the
+    // caption fell back to the operator -- and an IntOp then read as an integral sign
+    // inside the box with a second integral sign printed underneath it. Caption only
+    // what the glyph does not already say.
+    if (name && name !== glyph) {
+      const t = document.createElementNS("http://www.w3.org/2000/svg","text");
+      t.setAttribute("x", it.x); t.setAttribute("y", B + 13);
+      t.setAttribute("class", glyph ? "isub" : "ilabel");
+      t.textContent = name;
+      g.appendChild(t);
+    }
     for (const p of it.ports) {
       const c = document.createElementNS("http://www.w3.org/2000/svg","circle");
       c.setAttribute("cx", p.x); c.setAttribute("cy", p.y);
@@ -662,6 +676,25 @@ function render() {
       ? state.items.filter(i => i.name && i.name === selItem.name).length : 1;
     $("#renamenote").textContent = others > 1
       ? `renames all ${others} icons of this variable` : "";
+  }
+
+  // A parameter's value and a stock's initial condition were set once, at creation, and
+  // then unreachable: there was no way to change a parameter or to give an integral a
+  // starting value at all, which is most of what setting up a model consists of.
+  const VALUED = {"Variable:parameter":"value", "Variable:stock":"initial value",
+                  "Variable:integral":"initial value", "Variable:flow":"initial value",
+                  "VarConstant":"value"};
+  const label = selItem ? VALUED[ct] : null;
+  $("#initwrap").style.display = label ? "" : "none";
+  if (label && document.activeElement !== $("#initval")) {
+    $("#initlab").textContent = label;
+    const vid = ":" + (selItem.name || "");
+    // the INITIAL value, not the running one: the running value only picks up a new
+    // initial condition at the next reset, so the field read back the old number
+    const v = state.inits?.[vid] ?? state.values?.[vid];
+    $("#initval").value = v === undefined || v === null ? "" : String(v);
+    $("#initnote").textContent = ct === "Variable:integral"
+      ? "where the integral starts" : "";
   }
 }
 async function refresh(){ state = await api("/state"); render(); }
@@ -1149,6 +1182,24 @@ async function doRename(){
   toast(`Renamed to ${r.name}`, true);
 }
 $("#renameok").onclick = guard(doRename);
+
+async function doSetValue(){
+  if (sel === null) return;
+  const it = state.items.find(i => i.index === sel);
+  if (!it || !it.name) return;
+  const raw = $("#initval").value.trim();
+  if (raw === "") return;
+  const v = Number(raw);
+  if (!Number.isFinite(v)) { toast(`"${raw}" is not a number.`); return; }
+  await api("/init", {method:"POST", body: JSON.stringify({name: it.name, value: v})});
+  await refresh();
+  toast(`${pretty(it.name)} = ${v}`, true);
+}
+$("#initok").onclick = guard(doSetValue);
+$("#initval").addEventListener("keydown", e => {
+  if (e.key === "Enter")  { e.preventDefault(); $("#initok").click(); }
+  if (e.key === "Escape") { e.preventDefault(); $("#initval").blur(); render(); }
+});
 $("#rename").addEventListener("keydown", e => {
   if (e.key === "Enter")  { e.preventDefault(); $("#renameok").click(); }
   if (e.key === "Escape") { e.preventDefault(); $("#rename").blur(); render(); }

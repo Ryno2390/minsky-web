@@ -831,7 +831,12 @@ def snapshot() -> dict[str, Any]:
         # our record and the engine disagree -- say so rather than draw a wrong picture
         wires.append(dict(index=-1, desync=True,
                           engine=n_engine, tracked=len(_WIRES)))
-    vals = {}
+    # Two different numbers, and conflating them made setting a value look like it had
+    # done nothing. `value()` is what the variable holds RIGHT NOW, which only picks up a
+    # new initial condition at the next reset -- so a caller who set a parameter to 0.9
+    # read 0.4 straight back. `init()` is the initial condition itself, and is true the
+    # moment it is written.
+    vals, inits = {}, {}
     for k in m.variableValues.keys():
         if k.startswith("constant:"):
             continue
@@ -839,9 +844,13 @@ def snapshot() -> dict[str, Any]:
             vals[k] = m.variableValues[k].value()
         except Exception:
             vals[k] = None
+        try:
+            inits[k] = m.variableValues[k].init()
+        except Exception:
+            inits[k] = None
     bad = nonfinite(vals)
     return jsonable(dict(
-        items=items, groups=groups, wires=wires, values=vals, t=m.t(),
+        items=items, groups=groups, wires=wires, values=vals, inits=inits, t=m.t(),
         running=_RUNNING.is_set(), diverged=bad or None,
         currentFile=(Path(_CURRENT).stem if _CURRENT else None),
         currentPath=_CURRENT, dirty=_DIRTY,

@@ -806,5 +806,48 @@ check("a save name with no stem is refused rather than 500",
       c.post("/api/save", json={"name":"/"}).status_code == 422)
 check("and so is '//'", c.post("/api/save", json={"name":"//"}).status_code == 422)
 
+print("\n24. nothing is resolved by position when two things share a point")
+# delete, rename and wire-removal all focus their target with getItemAt, which resolves by
+# POSITION. Auto-placement used to index a grid by len(self.items) -- a counter over our
+# own list -- which drifts the moment anything is deleted, so a new item landed EXACTLY on
+# an existing one and the engine then picked between them arbitrarily.
+c.post("/api/clear")
+for n in ("p1","p2","p3"):
+    c.post("/api/item", json={"kind":"parameter","name":n,"value":1.0})
+c.delete("/api/item/1")
+c.post("/api/item", json={"kind":"parameter","name":"p4","value":1.0})
+items = c.get("/api/state").json()["items"]
+pos = [(i["x"], i["y"]) for i in items]
+check("auto-placement never stacks two items", len(set(pos)) == len(pos), str(pos))
+check("and it reuses the freed slot", len(items) == 3, str([i.get("name") for i in items]))
+
+# a user can still stack them by dragging, and then positional work must refuse
+here = items[0]
+c.post(f"/api/item/{items[1]['index']}/move", json={"x": here["x"], "y": here["y"]})
+r = c.delete(f"/api/item/{items[1]['index']}")
+check("deleting one of a stacked pair is refused",
+      r.status_code == 400 and "same point" in r.text, r.text[:90])
+r = c.post(f"/api/item/{items[1]['index']}/rename", json={"name":"nope"})
+check("renaming one of a stacked pair is refused",
+      r.status_code == 400 and "same point" in r.text, r.text[:70])
+check("nothing was changed by either refusal",
+      len(c.get("/api/state").json()["items"]) == 3)
+
+# same hazard for wires: an input takes one wire, so the destination is unambiguous --
+# unless another wire's destination sits at the same point
+c.post("/api/clear")
+a = c.post("/api/item", json={"kind":"operation","op":"time"}).json()["index"]
+y1 = c.post("/api/item", json={"kind":"variable","name":"y1","var_type":"flow"}).json()["index"]
+y2 = c.post("/api/item", json={"kind":"variable","name":"y2","var_type":"flow"}).json()["index"]
+c.post("/api/wire", json={"src":a,"dst":y1,"port":1})
+c.post("/api/wire", json={"src":a,"dst":y2,"port":1})
+tgt = [i for i in c.get("/api/state").json()["items"] if i.get("name") == "y1"][0]
+c.post(f"/api/item/{y2}/move", json={"x": tgt["x"], "y": tgt["y"]})
+r = c.delete("/api/wire/0")
+check("deleting a wire whose destination is shared is refused",
+      r.status_code == 400 and "same point" in r.text, r.text[:80])
+check("both wires are still there",
+      len([w for w in c.get("/api/state").json()["wires"] if not w.get("desync")]) == 2)
+
 print(f"\n{'ALL PASS' if not FAILED else 'FAILURES: ' + ', '.join(FAILED)}")
 sys.exit(1 if FAILED else 0)

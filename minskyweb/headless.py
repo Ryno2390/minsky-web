@@ -296,11 +296,56 @@ class Model:
         return self
 
     def _place(self, at):
+        """A free slot, measured against the ENGINE's items.
+
+        This used to index a grid by `len(self.items)`, a counter over our own list, which
+        drifts from the model the moment anything is deleted or undone: add three, delete
+        one, add another, and the new item lands EXACTLY on top of an existing one. That
+        matters because delete, rename and wire-removal all resolve their target by
+        position -- with two items at the same point the engine's hit test picks one
+        arbitrarily, so the wrong item is acted on intermittently.
+        """
         if at is not None:
             return at
-        i = len(self.items)
-        return (self.X0 + (i % self.COLS) * self.DX,
-                self.Y0 + (i // self.COLS) * self.DY)
+        taken = []
+        for i in range(len(self.minsky.model.items)):
+            it = self.minsky.model.items[i]
+            taken.append((it.x(), it.y()))
+        for row in range(200):
+            for col in range(self.COLS):
+                x = self.X0 + col * self.DX
+                y = self.Y0 + row * self.DY
+                if all(abs(tx - x) > self.DX * 0.5 or abs(ty - y) > self.DY * 0.5
+                       for tx, ty in taken):
+                    return (x, y)
+        return (self.X0, self.Y0)
+
+    #: two items closer than this are ambiguous to the engine's hit test
+    COINCIDENT = 6.0
+
+    def _unique_at(self, item: Item, what: str):
+        """Refuse a positional operation when another item shares the spot.
+
+        delete, rename and wire removal all focus their target with getItemAt, which
+        resolves by position. If two items overlap the engine picks one arbitrarily, so
+        acting would corrupt the model silently and non-deterministically. Refusing is
+        the only safe answer, and it is actionable: move one of them.
+        """
+        item.refresh()
+        raw = item._raw
+        x, y = raw.x(), raw.y()
+        clashes = 0
+        for i in range(len(self.minsky.model.items)):
+            if i == item.index:
+                continue
+            o = self.minsky.model.items[i]
+            if abs(o.x() - x) < self.COINCIDENT and abs(o.y() - y) < self.COINCIDENT:
+                clashes += 1
+        if clashes:
+            raise RuntimeError(
+                f"cannot {what}: {clashes} other item(s) sit at the same point "
+                f"({x:.0f},{y:.0f}), and the engine resolves this by position, so it "
+                f"could act on the wrong one. Drag them apart first.")
 
     def _adopt(self, kind: str, name: str | None, at, expect: str) -> Item:
         """Take ownership of the item the engine just added, and CHECK it is the right one.
@@ -418,6 +463,7 @@ class Model:
         the model; the server returns a fresh snapshot after every mutation for exactly
         this reason.
         """
+        self._unique_at(item, "delete this item")
         before = len(self.minsky.model.items)
         item.refresh()
         raw = item._raw
@@ -470,6 +516,7 @@ class Model:
                 f"{ct} has no name to change. Only variables, parameters and Godley "
                 f"tables can be renamed.")
 
+        self._unique_at(item, "rename this item")
         if not self.minsky.canvas.getItemAt(raw.x(), raw.y()):
             raise RuntimeError(
                 f"no item found at {item}'s own coordinates to rename")

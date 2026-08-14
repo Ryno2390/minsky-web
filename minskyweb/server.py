@@ -814,6 +814,23 @@ def create_app() -> FastAPI:
             si, sp, di, dp = _WIRES[index]
             x1, y1 = _port_pos(mk, si, sp)
             x2, y2 = _port_pos(mk, di, dp)
+            # The probe starts at the DESTINATION because an input takes one wire, which
+            # makes it unambiguous -- unless another wire's destination sits at the same
+            # point, which happens when two items overlap. Then the hit test could focus
+            # either, and the count check below would still see a clean -1 while the
+            # wrong wire went.
+            for j, (oi, op_, od, odp) in enumerate(_WIRES):
+                if j == index:
+                    continue
+                try:
+                    ox, oy = _port_pos(mk, od, odp)
+                except Exception:
+                    continue
+                if abs(ox - x2) < 6.0 and abs(oy - y2) < 6.0:
+                    raise HTTPException(
+                        400, "another wire ends at the same point, so the engine cannot "
+                             "tell them apart by position. Drag the items apart, or use "
+                             "Undo.")
             # count wires INSIDE GROUPS too. Deleting a top-level wire can remove a
             # group's internal wiring as a side effect -- on GoodwinLinear02 the group's
             # 8 wires vanished across 16 deletions -- and counting only top-level wires

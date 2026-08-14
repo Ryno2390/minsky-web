@@ -16,8 +16,9 @@ See **[docs/MINSKY_HEADLESS.md](docs/MINSKY_HEADLESS.md)** for what the engine e
 
 - **Build** — palette of variables, parameters, operations and Godley tables; drag to
   place, drag output→input to wire.
-- **Edit Godley tables** — full double-entry grid with asset/liability/equity classes and
-  a **live per-row balance check**, which is the thing that makes Minsky worth keeping.
+- **Edit Godley tables** — full double-entry grid with asset/liability/equity classes,
+  add and remove rows and columns, and a **live per-row balance check**, which is the
+  thing that makes Minsky worth keeping.
 - **Edit** — click a wire to select it, Delete to remove; an input that is already
   connected says so rather than failing obscurely.
 - **Undo / redo** — ⌘Z and ⇧⌘Z across items, wires and Godley edits.
@@ -56,7 +57,7 @@ it, or place it at `~/minsky`.
 ## Tests
 
     python3 test_headless.py    # 12 checks
-    python3 test_server.py      # 91 checks
+    python3 test_server.py      # 100 checks
 
 Both build models whose answers are known analytically, so a mis-wired model fails loudly
 instead of producing plausible numbers.

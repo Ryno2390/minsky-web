@@ -129,6 +129,10 @@ svg#board.panning{cursor:grabbing}
 .gtable th.equity{border-top:2px solid var(--godley)}
 .gtable th.noAssetClass{border-top:2px solid var(--line-2)}
 .gtable tr.ic td{background:#12181C}
+.gtable .rm{border:0;background:none;color:var(--ink-3);font-size:13px;line-height:1;
+  padding:2px 6px;cursor:pointer;border-radius:4px}
+.gtable .rm:hover{color:var(--bad);background:var(--accent-soft)}
+.gtable th .rm{float:right;margin:-2px -4px 0 0}
 .sum{font-family:var(--mono);font-size:11.5px;padding:6px 12px;white-space:nowrap;
   min-width:92px;text-align:right;background:#12181C}
 .sum.ok{color:var(--ok)}
@@ -773,11 +777,13 @@ async function drawGodley(g){
   let h = `<table class="gtable"><thead><tr>`;
   h += `<th></th>`;
   for (let c = 1; c < g.cols; c++) {
-    h += `<th class="${g.classes[c]}"><select data-col="${c}">` +
+    h += `<th class="${g.classes[c]}">` +
+      (g.cols > 2 ? `<button class="rm" data-delcol="${c}" title="Remove this stock column">×</button>` : "") +
+      `<select data-col="${c}">` +
       CLASSES.map(k => `<option value="${k}"${k===g.classes[c]?" selected":""}>${
         k==="noAssetClass"?"unclassified":k}</option>`).join("") + `</select></th>`;
   }
-  h += `<th style="border-top:0"></th></tr></thead><tbody>`;
+  h += `<th style="border-top:0"></th><th style="border-top:0"></th></tr></thead><tbody>`;
   // Each cell says what belongs in it. The table's three row kinds mean three different
   // things and nothing on screen used to distinguish them, so a new table looked like a
   // blank grid.
@@ -797,6 +803,10 @@ async function drawGodley(g){
     h += r === 0 ? `<td class="sum"></td>`
        : `<td class="sum ${v && v.trim()==="0" ? "ok":"bad"}">${
             v === null ? "" : (v.trim()==="0" ? "✓ 0" : "≠ " + v)}</td>`;
+    // row 0 names the stocks and the initial-conditions row is structural; neither can go
+    const removable = r > 0 && !g.icRow[r];
+    h += `<td style="border:0;padding:0 2px">${removable
+      ? `<button class="rm" data-delrow="${r}" title="Remove this flow row">×</button>` : ""}</td>`;
     h += `</tr>`;
   }
   const flowRows = g.rows - 1 - g.icRow.filter(Boolean).length;
@@ -810,6 +820,18 @@ async function drawGodley(g){
       const g2 = await api(`/godley/${gIdx}/cell`, {method:"POST", body: JSON.stringify(
         {row:+inp.dataset.r, col:+inp.dataset.c, value: inp.value})});
       await drawGodley(g2);
+    });
+  });
+  $("#gbody").querySelectorAll("[data-delrow]").forEach(b => {
+    b.onclick = guard(async () => {
+      await drawGodley(await api(`/godley/${gIdx}/row/delete`, {method:"POST",
+        body: JSON.stringify({at: +b.dataset.delrow})}));
+    });
+  });
+  $("#gbody").querySelectorAll("[data-delcol]").forEach(b => {
+    b.onclick = guard(async () => {
+      await drawGodley(await api(`/godley/${gIdx}/col/delete`, {method:"POST",
+        body: JSON.stringify({at: +b.dataset.delcol})}));
     });
   });
   $("#gbody").querySelectorAll("select").forEach(sel => {

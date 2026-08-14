@@ -588,3 +588,33 @@ An input accepts one wire. Attempting a second used to surface the wiring diagno
 which prints internal reprs and port pixel coordinates and is written for a log. It now
 returns "that input is already connected; delete the existing wire first", and a test
 asserts the message leaks no internals.
+
+## Removing Godley rows and columns
+
+The editor's `×` controls sit on each flow row and each stock column header. Row 0 holds
+the stock names, the initial-conditions row is structural, and the last stock column is
+protected; none of those show a control.
+
+**`deleteRow` behaves and is used directly** — it is 0-based and removes the row asked for.
+
+**`deleteCol` cannot be used at all.** It is not "remove column N": it indexes differently
+from `deleteRow`, it SWAPS the last column into the gap rather than shifting, and it
+sometimes leaves the column count unchanged.
+
+    deleteCol(2): ['', 'A','B','C','D'] -> ['', 'D','B','C']
+    deleteCol(3): ['', 'A','B','C','D'] -> ['', 'A','D','','C']
+
+A user removing the second of four stocks would silently find the fourth had moved into
+its place. `Godley.delete_col` therefore rewrites the grid: read it, drop the column,
+shrink, write it back, and carry the asset classes across with the shift. Verified that
+the requested column goes, later ones shift left, each keeps its own class, the balance
+still holds and the model still integrates.
+
+This is the same engine asymmetry behind the earlier undo finding — column operations
+leave the count untouched where row operations do not.
+
+## The divergence path, seen at last
+
+`exp(exp(t))` overflows a double once `exp(t)` passes 709. Run it and the status pill
+turns red at **t = 6.61**, the stream stops, and the frame names the offending variable.
+Everything downstream depends on `inf` surviving serialisation as `null`.

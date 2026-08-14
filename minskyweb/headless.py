@@ -180,9 +180,39 @@ class Godley:
         self._t.insertCol(at); self._commit()
 
     def delete_col(self, at: int):
+        """Remove a stock column, by rewriting the grid.
+
+        The engine's own `deleteCol` cannot be used. It is not "remove column N": it
+        indexes differently from `deleteRow`, it SWAPS the last column into the gap
+        instead of shifting, and it sometimes leaves the column count unchanged --
+
+            deleteCol(2): ['', 'A','B','C','D'] -> ['', 'D','B','C']
+            deleteCol(3): ['', 'A','B','C','D'] -> ['', 'A','D','','C']
+
+        so a user removing the second of four stocks would silently find the fourth had
+        moved into its place. `deleteRow` behaves correctly and is used directly.
+
+        Rewriting is deterministic: read the grid, drop the column, shrink, write it back,
+        and carry the asset classes across with the shift.
+        """
         if at == 0:
             raise ValueError("column 0 holds the flow labels and cannot be deleted")
-        self._t.deleteCol(at); self._commit()
+        snap = self.snapshot()
+        if snap["cols"] <= 2:
+            raise ValueError("a Godley table needs at least one stock column")
+        if at >= snap["cols"]:
+            raise IndexError(f"column {at} outside 0..{snap['cols'] - 1}")
+        cells = [[v for c, v in enumerate(row) if c != at] for row in snap["cells"]]
+        classes = [v for c, v in enumerate(snap["classes"]) if c != at]
+        t = self._t
+        t.resize(snap["rows"], snap["cols"] - 1)
+        for r, row in enumerate(cells):
+            for c, v in enumerate(row):
+                t.setCell(r, c, v)
+        for c in range(1, len(classes)):
+            if classes[c] in self.CLASSES:
+                t.assetClass(c, classes[c])
+        self._commit()
 
     def unbalanced(self) -> list[int]:
         """Rows whose sum is not '0' -- the stock-flow consistency check."""

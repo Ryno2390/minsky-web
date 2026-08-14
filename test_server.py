@@ -518,5 +518,74 @@ while True:
     gone += 1
 check("a hand-built model deletes every wire", gone == made and made == 3, f"{gone}/{made}")
 
+print("\n16. Godley rows and columns can be removed, and removal is exact")
+c.post("/api/clear")
+gi = c.post("/api/item", json={"kind":"godley"}).json()["index"]
+c.post(f"/api/godley/{gi}/resize", json={"rows":5,"cols":5})
+for c_, lab in ((1,"A"),(2,"B"),(3,"C"),(4,"D")):
+    c.post(f"/api/godley/{gi}/cell", json={"row":0,"col":c_,"value":lab})
+for c_, cl in ((1,"asset"),(2,"liability"),(3,"equity"),(4,"asset")):
+    c.post(f"/api/godley/{gi}/class", json={"col":c_,"cls":cl})
+for r_, lab in ((2,"ROW2"),(3,"ROW3"),(4,"ROW4")):
+    c.post(f"/api/godley/{gi}/cell", json={"row":r_,"col":0,"value":lab})
+
+# rows: the engine's deleteRow is correct and 0-based
+g = c.post(f"/api/godley/{gi}/row/delete", json={"at":3}).json()
+check("the requested row is the one removed",
+      [row[0] for row in g["cells"]] == ["", "Initial Conditions", "ROW2", "ROW4"],
+      str([row[0] for row in g["cells"]]))
+
+# columns: the engine's deleteCol swaps the LAST column into the gap and sometimes does
+# not shrink at all, so removal is done by rewriting the grid
+g = c.post(f"/api/godley/{gi}/col/delete", json={"at":2}).json()
+check("the requested column is the one removed",
+      g["cells"][0] == ["", "A", "C", "D"], str(g["cells"][0]))
+check("later columns shift left rather than being swapped",
+      g["cols"] == 4, f"{g['cols']} cols")
+check("each surviving column keeps its own asset class",
+      g["classes"] == ["noAssetClass","asset","equity","asset"], str(g["classes"]))
+
+check("column 0 cannot be removed",
+      c.post(f"/api/godley/{gi}/col/delete", json={"at":0}).status_code == 422)
+check("row 0 cannot be removed",
+      c.post(f"/api/godley/{gi}/row/delete", json={"at":0}).status_code == 422)
+
+# down to a single stock column, removal stops
+c.post(f"/api/godley/{gi}/col/delete", json={"at":3})
+c.post(f"/api/godley/{gi}/col/delete", json={"at":2})
+last = c.post(f"/api/godley/{gi}/col/delete", json={"at":1})
+check("the last stock column is protected", last.status_code == 422, last.text[:70])
+
+# a table survives removal and still runs
+c.post("/api/clear")
+gi = c.post("/api/item", json={"kind":"godley"}).json()["index"]
+c.post(f"/api/godley/{gi}/resize", json={"rows":3,"cols":5})
+for r_,c_,v in ((0,1,"Reserves"),(0,2,"Junk"),(0,3,"Deposits"),
+                (1,0,"Initial Conditions"),(1,1,"100"),(1,3,"100"),
+                (2,0,"Lending"),(2,1,"Lend"),(2,3,"Lend")):
+    c.post(f"/api/godley/{gi}/cell", json={"row":r_,"col":c_,"value":v})
+c.post(f"/api/godley/{gi}/class", json={"col":3,"cls":"liability"})
+c.post(f"/api/godley/{gi}/col/delete", json={"at":2})          # drop the unused middle
+g = c.get(f"/api/godley/{gi}").json()
+check("balance survives the removal", all(v == "0" for v in g["rowSums"][1:]),
+      f"{g['cells'][0]} sums={g['rowSums']}")
+rate = c.post("/api/item", json={"kind":"parameter","name":"rate","value":5.0,
+                                 "at":[140,420]}).json()["index"]
+lend = c.post("/api/item", json={"kind":"variable","name":"Lend","var_type":"flow",
+                                 "at":[420,420]}).json()["index"]
+c.post("/api/wire", json={"src":rate,"dst":lend,"port":1})
+last = None
+with c.websocket_connect("/ws/sim") as ws:
+    ws.send_json({"cmd":"run","steps":900,"tmax":2.0})
+    while True:
+        m = ws.receive_json()
+        if "error" in m: check("runs after column removal", False, m["error"]); break
+        if m.get("done") or m.get("stopped"): break
+        last = m
+if last:
+    t_, R = last["t"], last["values"][":Reserves"]
+    check("still integrates after column removal", abs(R-(100+5*t_)) < 1e-6,
+          f"t={t_:.4f} Reserves={R:.4f} expect {100+5*t_:.4f}")
+
 print(f"\n{'ALL PASS' if not FAILED else 'FAILURES: ' + ', '.join(FAILED)}")
 sys.exit(1 if FAILED else 0)

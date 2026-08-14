@@ -767,8 +767,10 @@ check("the message avoids index arithmetic",
 
 ui = open(os.path.join(os.path.dirname(os.path.abspath(__file__)),
                        "minskyweb", "ui", "index.html")).read()
-check("the editor is closed from render(), so no path can miss it",
-      "if (!still) closeGodley(false)" in ui)
+# The invariant is what matters, not the shape it takes: render() is the single place
+# that reconciles the open editor with the model, so no call site can miss it.
+check("the editor is reconciled from render(), so no path can miss it",
+      "if (now === null) closeGodley(false)" in ui)
 
 print("\n22. new items are placed where the user can see them")
 c.post("/api/clear")
@@ -2194,6 +2196,14 @@ if os.path.exists(_ex2):
     check("deleting any wire removes that wire and no other",
           _wrong == 0, f"{_wrong} of {len(_live)} removed something else")
 check("the chord sweep is gone", "chord, from the destination end back" not in src)
+
+# The open Godley editor held an item INDEX. Undo, redo, a delete or a stock rename all
+# reorder model.items, and the editor then addressed whatever sat at its old index -- so
+# it silently retargeted to a DIFFERENT table and the edits landed there.
+check("the Godley editor remembers WHICH table it is open on",
+      "let gKey" in ui and "function findGodley()" in ui)
+check("and re-finds it rather than trusting the index",
+      "gIdx = now" in ui and "godleyKey(" in ui)
 
 
 print(f"\n{'ALL PASS' if not FAILED else 'FAILURES: ' + ', '.join(FAILED)}")

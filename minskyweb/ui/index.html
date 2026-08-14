@@ -716,9 +716,9 @@ function render() {
   // typing in it produced "index 0 out of range (0..-1)". Check on every render rather
   // than at each call site, so no future path can miss it.
   if (gIdx !== null) {
-    const still = state.items.find(i => i.index === gIdx &&
-                                        String(i.classType).includes("Godley"));
-    if (!still) closeGodley(false);
+    const now = findGodley();
+    if (now === null) closeGodley(false);
+    else { gIdx = now; gKey = godleyKey(state.items.find(i => i.index === now)) || gKey; }
   }
   // The solver panel was hardcoded, so it claimed epsRel 1e-8 while a loaded model
   // actually carried 0.01 -- Minsky's own default, which produces NaN and reports
@@ -1246,16 +1246,38 @@ addEventListener("keydown", e => {
 
 /* ---------- godley editor ---------- */
 let gIdx = null;
+// What the open editor is a table OF. An index is not enough: undo, redo, a delete or a
+// stock rename all reorder model.items, and the editor went on addressing whatever now
+// sat at its old index -- so it silently retargeted to a DIFFERENT table and the edits
+// landed there. Remember something that survives a reorder, and re-find it each time.
+let gKey = null;
 const CLASSES = ["noAssetClass","asset","liability","equity"];
+
+function godleyKey(it){
+  return it ? `${it.name || ""}@${Math.round(it.x)},${Math.round(it.y)}` : null;
+}
+// Where the table the editor is open on is NOW, or null if it is gone.
+function findGodley(){
+  if (gKey === null) return null;
+  const tables = state.items.filter(
+    i => i.index !== null && String(i.classType).includes("Godley"));
+  const exact = tables.find(i => godleyKey(i) === gKey);
+  if (exact) return exact.index;
+  // it may have been renamed or moved while the editor was open; fall back to the one
+  // still at the index we were using, but only if it really is a table
+  const atIdx = tables.find(i => i.index === gIdx);
+  return atIdx ? atIdx.index : null;
+}
 
 async function openGodley(i){
   gIdx = i;
+  gKey = godleyKey(state.items.find(x => x.index === i));
   $("#gwrap").classList.add("open");
   await drawGodley(await api(`/godley/${i}`));
 }
 function closeGodley(reload = true){
   $("#gwrap").classList.remove("open");
-  gIdx = null;
+  gIdx = null; gKey = null;
   if (reload) refresh();          // called from render() with false, to avoid recursing
 }
 $("#gclose").onclick = closeGodley;
@@ -1353,10 +1375,13 @@ async function afterGodley(g2){
   await drawGodley(g2);
   if (g2 && g2.conflicts) g2.conflicts.forEach(c => toast(c.note));
   state = await api("/state");
-  const still = state.items.find(
-    i => i.index === gIdx && (i.classType || "").includes("Godley"));
+  const now = findGodley();
+  if (now !== null) {
+    gIdx = now;
+    gKey = godleyKey(state.items.find(i => i.index === now)) || gKey;
+  }
   render();
-  if (!still) closeGodley();       // the table this editor was open on is gone
+  if (now === null) closeGodley();   // the table this editor was open on is gone
 }
 $("#gaddflow").onclick = guard(async () => {
   const g = await api(`/godley/${gIdx}`);

@@ -445,6 +445,13 @@ function edgeOf(b, tx, ty){
   return {x: b.cx + dx*s, y: b.cy + dy*s};
 }
 
+function fmtVal(v){
+  if (v === null || v === undefined) return "—";
+  if (!Number.isFinite(v)) return Number.isNaN(v) ? "NaN" : (v > 0 ? "∞" : "−∞");
+  return (Math.abs(v) > 1e5 || (v && Math.abs(v) < 1e-3)) ? v.toExponential(3)
+                                                          : v.toFixed(4);
+}
+
 function render() {
   claimed = [];                     // the model we are about to draw is the truth again
   $("#empty").style.display = state.items.length ? "none" : "grid";
@@ -618,11 +625,9 @@ function render() {
   const vals = Object.entries(state.values || {}).filter(([k])=>!k.includes(":0"));
   $("#series").innerHTML = vals.length ? vals.map(([k,v]) => {
     if (!colors[k]) colors[k] = PALETTE[Object.keys(colors).length % PALETTE.length];
-    const shown = v === null ? "—" : (Math.abs(v) > 1e5 || (v && Math.abs(v) < 1e-3)
-      ? v.toExponential(3) : v.toFixed(4));
     return `<div class="row"><span class="kk"><i class="sw" style="background:${colors[k]}"></i>
       <span class="k" title="${esc(k)}">${esc(pretty(k))}</span></span>
-      <span class="v">${esc(shown)}</span></div>`;
+      <span class="v" data-vid="${esc(k)}">${esc(fmtVal(v))}</span></div>`;
   }).join("") : `<div style="color:var(--ink-3);font-size:12.5px;padding:4px">No variables yet.</div>`;
   // A view must exist before the first paint. applyView() early-returns without one,
   // which left every port with NO r attribute -- radius 0, invisible, undroppable -- on
@@ -1051,7 +1056,16 @@ $("#run").onclick = guard(async () => {
     for (const k of Object.keys(series))
       while (series[k].length < tSeries.length) series[k].push(null);
     $("#tval").textContent = m.t.toFixed(3);
-    if (tSeries.length % 3 === 0) drawPlot();
+    if (tSeries.length % 3 === 0) {
+      drawPlot();
+      // These rows are built by render(), which does not run during a simulation -- so a
+      // panel of numbers sat frozen beside a live plot for the whole run, reading as if
+      // nothing in the model was moving. Update the cells in place instead.
+      for (const [k, v] of Object.entries(m.values || {})) {
+        const cell = $("#series").querySelector(`.v[data-vid="${CSS.escape(k)}"]`);
+        if (cell) cell.textContent = fmtVal(v);
+      }
+    }
   };
   ws.onclose = finish;
   ws.onerror = () => { toast(UNREACHABLE); finish(); };

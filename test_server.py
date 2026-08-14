@@ -911,5 +911,40 @@ check("a partial solver post changes only what it sends",
       (sv["epsRel"], sv["epsAbs"], sv["order"], sv["implicit"]) == (1e-6, 1e-8, 4, False),
       str({k: sv[k] for k in ("epsRel","epsAbs","order","implicit")}))
 
+print("\n27. solver settings survive a run, and a loaded file keeps its own")
+c.post("/api/clear")
+sv = c.get("/api/state").json()["solver"]
+# Minsky's own default epsRel is 1e-2, which produces NaN on stiff models and reports
+# success, so a NEW model gets sane tolerances
+check("a new model starts with sane tolerances",
+      sv["epsRel"] <= 1e-6 and sv["implicit"] is True, str(sv))
+
+p1 = c.post("/api/item", json={"kind":"parameter","name":"c","value":1.0}).json()["index"]
+ig = c.post("/api/item", json={"kind":"operation","op":"integrate"}).json()["index"]
+c.post("/api/wire", json={"src":p1,"dst":ig,"port":1})
+c.post("/api/solver", json={"epsRel":1e-5,"epsAbs":1e-7,"order":2,"implicit":False})
+with c.websocket_connect("/ws/sim") as ws:
+    ws.send_json({"cmd":"run","steps":100,"tmax":1.0})
+    while True:
+        m = ws.receive_json()
+        if m.get("done") or m.get("stopped") or "error" in m: break
+sv = c.get("/api/state").json()["solver"]
+# the run used to call configure(), which reimposed the defaults, so the solver the
+# caller had just set was thrown away and the panel had no effect
+check("a run does not overwrite the solver",
+      (sv["epsRel"], sv["order"], sv["implicit"]) == (1e-5, 2, False), str(sv))
+
+c.post(f"/api/load?path={os.path.expanduser('~/minsky/examples/GoodwinLinear02.mky')}")
+sv = c.get("/api/state").json()["solver"]
+check("a loaded model keeps the solver block from its file",
+      sv["epsRel"] == 0.01, str(sv["epsRel"]))
+
+ui = open(os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                       "minskyweb", "ui", "index.html")).read()
+check("the panel reflects the model rather than hardcoded values",
+      "state.solver || {}" in ui)
+check("and it does not fight the user's typing",
+      "document.activeElement !== el" in ui)
+
 print(f"\n{'ALL PASS' if not FAILED else 'FAILURES: ' + ', '.join(FAILED)}")
 sys.exit(1 if FAILED else 0)

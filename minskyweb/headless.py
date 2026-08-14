@@ -293,6 +293,10 @@ class Model:
     def clear(self):
         self.minsky.clearAllMaps()
         self.items = []
+        # Minsky's own default epsRel is 1e-2, which produces NaN on stiff models and
+        # then reports success. A NEW model gets sane tolerances; a LOADED one keeps
+        # whatever its file specifies.
+        self.configure()
         return self
 
     def _place(self, at):

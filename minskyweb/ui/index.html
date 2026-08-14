@@ -509,6 +509,22 @@ function render() {
                                         String(i.classType).includes("Godley"));
     if (!still) closeGodley(false);
   }
+  // The solver panel was hardcoded, so it claimed epsRel 1e-8 while a loaded model
+  // actually carried 0.01 -- Minsky's own default, which produces NaN and reports
+  // success. Show what the model really has, without fighting the user's typing.
+  const sv = state.solver || {};
+  const fmt = v => (v === null || v === undefined) ? ""
+    : (Math.abs(v) < 1e-3 || Math.abs(v) >= 1e5) ? Number(v).toExponential(0)
+    : String(v);
+  for (const [id, val] of [["epsRel", sv.epsRel], ["epsAbs", sv.epsAbs],
+                           ["order", sv.order], ["tmax", sv.tmax]]) {
+    const el = $("#" + id);
+    if (el && document.activeElement !== el && val !== undefined && val !== null)
+      el.value = fmt(val);
+  }
+  if (document.activeElement !== $("#implicit") && sv.implicit !== undefined)
+    $("#implicit").checked = !!sv.implicit;
+
   applyView();          // render() rebuilt the ports; restore their zoom-corrected size
   $("#tval").textContent = (state.t ?? 0).toFixed(3);
   const st = $("#status");

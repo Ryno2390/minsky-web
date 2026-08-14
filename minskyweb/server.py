@@ -1071,7 +1071,11 @@ def create_app() -> FastAPI:
             task = asyncio.create_task(reader())
             try:
                 try:
-                    await call(lambda: engine().configure())
+                    # NO configure() here. It applied SANE_SOLVER on every run, so the
+                    # solver the caller had just set was thrown away and the run used the
+                    # defaults -- the solver panel had no effect unless its values
+                    # happened to match. Sane defaults belong to a NEW model, not to
+                    # every run, and a loaded file's own solver block must be respected.
                     await call(lambda: engine().reset())
                 except RuntimeError as ex:
                     await ws.send_json({"error": str(ex)})

@@ -18,6 +18,8 @@ See **[docs/MINSKY_HEADLESS.md](docs/MINSKY_HEADLESS.md)** for what the engine e
   place, drag output→input to wire.
 - **Edit Godley tables** — full double-entry grid with asset/liability/equity classes and
   a **live per-row balance check**, which is the thing that makes Minsky worth keeping.
+- **Edit** — click a wire to select it, Delete to remove; an input that is already
+  connected says so rather than failing obscurely.
 - **Undo / redo** — ⌘Z and ⇧⌘Z across items, wires and Godley edits.
 - **Navigate** — zoom about the cursor, pan by drag or two-finger scroll, fit to model.
 - **Run** — simulation streams over a WebSocket with a live plot; diverging models are
@@ -54,7 +56,7 @@ it, or place it at `~/minsky`.
 ## Tests
 
     python3 test_headless.py    # 12 checks
-    python3 test_server.py      # 63 checks
+    python3 test_server.py      # 91 checks
 
 Both build models whose answers are known analytically, so a mis-wired model fails loudly
 instead of producing plausible numbers.

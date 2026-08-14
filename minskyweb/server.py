@@ -89,6 +89,43 @@ def _resolve(m, ref: str):
     return m.model.items[int(ref)]
 
 
+def _engine_wire_count(m) -> int:
+    return len(m.model.wires) + sum(len(m.model.groups[g].wires)
+                                    for g in range(len(m.model.groups)))
+
+
+def _wire_probes(x1, y1, x2, y2):
+    """Points to try when hit-testing a wire, ordered so the FIRST hit is the right wire.
+
+    Deletion is geometric: focus a wire by a point on it, then delete what is focused.
+    Two things make the obvious approach wrong.
+
+    The engine draws wires as CURVES, so the midpoint of the chord between the ports
+    misses 6 of 27 wires on GoodwinLinear02.
+
+    Worse, probing near the SOURCE is ambiguous: an output port fans out to many wires,
+    so a hit there can focus a different one -- which deleted the wrong wire and left the
+    tracked topology desynced. Probing near the DESTINATION cannot: an input port accepts
+    exactly one wire, so whatever is found within a few pixels of it is the target.
+
+    So probe outward from the destination only, then fall back to the chord and a bezier
+    for long or oddly routed wires.
+    """
+    L = math.hypot(x2 - x1, y2 - y1) or 1.0
+    ux, uy = (x2 - x1) / L, (y2 - y1) / L
+    for d in (4, 6, 8, 11, 14, 18, 23, 28, 35, 45):
+        if d < L:
+            yield x2 - ux * d, y2 - uy * d
+    for k in range(1, 21):                       # chord, from the destination end back
+        t = 1 - k / 21
+        yield x1 + (x2 - x1) * t, y1 + (y2 - y1) * t
+    dx = max(30.0, abs(x2 - x1) * 0.45)
+    for k in range(1, 21):
+        t = 1 - k / 21; u = 1 - t
+        yield (u**3 * x1 + 3*u*u*t * (x1 + dx) + 3*u*t*t * (x2 - dx) + t**3 * x2,
+               u**3 * y1 + 3*u*u*t * y1 + 3*u*t*t * y2 + t**3 * y2)
+
+
 def _port_pos(m, ref, port: int):
     it = _resolve(m, str(ref))
     it.updateBoundingBox()
@@ -584,6 +621,12 @@ def create_app() -> FastAPI:
             for label, i in (("src", spec.src), ("dst", spec.dst)):
                 if not 0 <= i < n:
                     raise HTTPException(422, f"{label} index {i} out of range (0..{n-1})")
+            # An input accepts one wire. Say that, rather than letting the wiring
+            # diagnostic -- which prints internal reprs and port pixel coordinates and
+            # is written for a log -- reach the user.
+            if any(w[2] == str(spec.dst) and w[3] == spec.port for w in _WIRES):
+                raise HTTPException(
+                    409, "that input is already connected; delete the existing wire first")
             from .headless import Item
             m.wire(Item(m, spec.src, "?"), Item(m, spec.dst, "?"), spec.port)
             _WIRES.append((str(spec.src), 0, str(spec.dst), spec.port))
@@ -709,6 +752,47 @@ def create_app() -> FastAPI:
             t.insert_col(spec.at) if action == "insert" else t.delete_col(spec.at)))
         mark_dirty()
         return await call(lambda: _godley_op(index, lambda t: t.snapshot()))
+
+    @app.delete("/api/wire/{index}")
+    async def delete_wire(index: int):
+        require_idle()
+        await call(checkpoint)
+
+        def _del():
+            if not 0 <= index < len(_WIRES):
+                raise HTTPException(422, f"wire {index} out of range (0..{len(_WIRES)-1})")
+            mk = engine().minsky
+            si, sp, di, dp = _WIRES[index]
+            x1, y1 = _port_pos(mk, si, sp)
+            x2, y2 = _port_pos(mk, di, dp)
+            # count wires INSIDE GROUPS too. Deleting a top-level wire can remove a
+            # group's internal wiring as a side effect -- on GoodwinLinear02 the group's
+            # 8 wires vanished across 16 deletions -- and counting only top-level wires
+            # let that pass silently while the tracked record drifted.
+            before = _engine_wire_count(mk)
+            # deletion is geometric, like everything else here: focus the wire by a point
+            # on it, then delete what is focused
+            if not any(mk.canvas.getWireAt(px, py)
+                       for px, py in _wire_probes(x1, y1, x2, y2)):
+                raise HTTPException(
+                    400, "That wire ends inside a collapsed group or on a plot widget, "
+                         "where it is not drawn along its own port positions and cannot "
+                         "be picked. Press Undo to remove it, or delete one of the items "
+                         "it connects.")
+            mk.canvas.deleteWire()
+            after = _engine_wire_count(mk)
+            if after != before - 1:
+                # the engine took more than we asked for; undo puts it back
+                mk.undo(1)
+                raise HTTPException(
+                    400, f"deleting that wire would have removed {before - after} wires, "
+                         f"not 1 -- it is entangled with a group's internal wiring. "
+                         f"Nothing was changed.")
+            _WIRES.pop(index)
+
+        await call(_del)
+        mark_dirty()
+        return await call(snapshot)
 
     @app.post("/api/init")
     async def set_init(spec: InitSpec):

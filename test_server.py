@@ -423,5 +423,100 @@ if last:
     check("seeded table integrates correctly", abs(R-(100+5*t_)) < 1e-6,
           f"t={t_:.4f} Reserves={R:.4f} expect {100+5*t_:.4f}")
 
+print("\n14. wires can be deleted, and a busy input says so")
+c.post("/api/clear")
+a = c.post("/api/item", json={"kind":"operation","op":"time"}).json()["index"]
+b = c.post("/api/item", json={"kind":"variable","name":"y","var_type":"flow"}).json()["index"]
+st = c.post("/api/wire", json={"src":a,"dst":b,"port":1}).json()
+check("wired", len(st["wires"]) == 1)
+
+dup = c.post("/api/wire", json={"src":a,"dst":b,"port":1})
+check("a busy input is refused in plain language",
+      dup.status_code == 409 and "already connected" in dup.text, dup.text[:80])
+check("the refusal leaks no internals",
+      "<?" not in dup.text and "expected 1" not in dup.text, dup.text[:80])
+
+st = c.delete("/api/wire/0").json()
+check("wire deleted", len(st["wires"]) == 0 and not any(w.get("desync") for w in st["wires"]),
+      str(st["wires"]))
+check("the input is free again",
+      c.post("/api/wire", json={"src":a,"dst":b,"port":1}).status_code == 200)
+check("out-of-range wire index refused",
+      c.delete("/api/wire/9").status_code == 422)
+
+# deleting a wire is undoable, and the topology comes back with it
+st = c.delete("/api/wire/0").json()
+check("deleted again", len(st["wires"]) == 0)
+u = c.post("/api/undo").json()
+check("undo restores the wire", len(u["wires"]) == 1 and not any(w.get("desync") for w in u["wires"]),
+      str(u["wires"])[:80])
+
+# and the restored wire still carries signal
+c.post("/api/clear")
+p1 = c.post("/api/item", json={"kind":"parameter","name":"k","value":3.0}).json()["index"]
+ig = c.post("/api/item", json={"kind":"operation","op":"integrate"}).json()["index"]
+c.post("/api/wire", json={"src":p1,"dst":ig,"port":1})
+c.delete("/api/wire/0")
+c.post("/api/undo")
+c.post("/api/init", json={"name":"int1","value":0.0})
+last = None
+with c.websocket_connect("/ws/sim") as ws:
+    ws.send_json({"cmd":"run","steps":600,"tmax":2.0})
+    while True:
+        m = ws.receive_json()
+        if "error" in m: check("model runs after wire undo", False, m["error"]); break
+        if m.get("done") or m.get("stopped"): break
+        last = m
+if last:
+    t_, v = last["t"], last["values"][":int1"]
+    check("a wire restored by undo still carries signal", abs(v - 3.0*t_) < 1e-6,
+          f"t={t_:.4f} int1={v:.4f} expect {3.0*t_:.4f}")
+
+print("\n15. wire deletion is exact or it refuses")
+import os
+# The invariant that matters is not how many delete, but that the engine and the tracked
+# record never disagree. Deleting a top-level wire can take a group's internal wiring with
+# it -- on GoodwinLinear02 the group's 8 wires once vanished across 16 deletions while the
+# record kept them -- so the count spans wires inside groups and a cascade is rolled back.
+c.post(f"/api/load?path={os.path.expanduser('~/minsky/examples/GoodwinLinear02.mky')}")
+start = len([w for w in c.get("/api/state").json()["wires"] if not w.get("desync")])
+deleted = refused = 0
+desynced = False
+for _ in range(80):
+    st = c.get("/api/state").json()
+    if any(w.get("desync") for w in st["wires"]): desynced = True; break
+    live = [w for w in st["wires"] if not w.get("desync")]
+    if not live: break
+    moved = False
+    for w in live:
+        if c.delete(f"/api/wire/{w['index']}").status_code == 200:
+            deleted += 1; moved = True; break
+    if not moved: refused = len(live); break
+check("the record never desynced while deleting", not desynced)
+check("every wire either deleted or was refused", deleted + refused == start,
+      f"{deleted} deleted + {refused} refused vs {start}")
+check("most wires are deletable", deleted >= start * 0.8, f"{deleted}/{start}")
+if refused:
+    r = c.delete(f"/api/wire/0")
+    check("a refusal explains itself and changes nothing",
+          r.status_code == 400 and ("collapsed group" in r.text or "entangled" in r.text),
+          r.text[:90])
+
+# a model built by hand -- no groups, no plots -- deletes every wire
+c.post("/api/clear")
+ids = [c.post("/api/item", json=spec).json()["index"] for spec in (
+    {"kind":"parameter","name":"a","value":1.0}, {"kind":"operation","op":"multiply"},
+    {"kind":"operation","op":"integrate"}, {"kind":"parameter","name":"b","value":2.0})]
+for s_, d_, p_ in ((ids[0],ids[1],1),(ids[3],ids[1],2),(ids[1],ids[2],1)):
+    c.post("/api/wire", json={"src":s_,"dst":d_,"port":p_})
+made = len([w for w in c.get("/api/state").json()["wires"] if not w.get("desync")])
+gone = 0
+while True:
+    live = [w for w in c.get("/api/state").json()["wires"] if not w.get("desync")]
+    if not live: break
+    if c.delete(f"/api/wire/{live[0]['index']}").status_code != 200: break
+    gone += 1
+check("a hand-built model deletes every wire", gone == made and made == 3, f"{gone}/{made}")
+
 print(f"\n{'ALL PASS' if not FAILED else 'FAILURES: ' + ', '.join(FAILED)}")
 sys.exit(1 if FAILED else 0)

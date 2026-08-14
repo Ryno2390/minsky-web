@@ -547,3 +547,44 @@ parameter requires one.
 Worth knowing: **the same name twice is legitimate.** Minsky treats it as one variable
 with two icons, so the form does not reject it — verified that two `alpha` icons yield a
 single `:alpha` value.
+
+## Deleting wires
+
+    DELETE /api/wire/{index}     click a wire on the canvas, then Delete
+
+A 2px line is far too thin to hit, so each wire is drawn twice: the visible stroke, and
+an invisible 14px one over the same path that takes the clicks.
+
+### Picking the right wire is the whole problem
+
+Deletion is geometric like everything else: focus a wire by a point on it, then delete
+what is focused. Three things make the obvious version wrong, and each was found by
+measuring rather than reasoning.
+
+**The engine draws wires as CURVES.** The midpoint of the chord between the two ports
+misses 6 of GoodwinLinear02's 27 wires.
+
+**Probing near the SOURCE picks the wrong wire.** An output port fans out to many wires,
+so a hit near it can focus a different one — which deleted the wrong wire and left the
+tracked topology desynced. An *input* port accepts exactly one wire, so probing outward
+from the DESTINATION cannot be ambiguous. That is the order used: out from the
+destination, then along the chord, then along a bezier with horizontal handles.
+
+**Deleting one wire can take a group's internal wiring with it.** Across 16 deletions on
+GoodwinLinear02 the group's 8 internal wires silently vanished, because the guard counted
+only top-level wires and saw a clean −1 each time. The count now spans wires inside
+groups, and a delete that removes more than one is rolled back with `undo(1)` and
+reported. With that in place 24 of 27 delete cleanly and the record never drifts.
+
+**What is refused:** wires ending inside a collapsed group or on a plot widget, where the
+engine does not draw them along their own port positions. The refusal says so and points
+at Undo. Refusing is the right outcome — removing the wrong wire silently is far worse.
+
+A model built by hand, with no groups or plot widgets, deletes every wire.
+
+### A busy input says so
+
+An input accepts one wire. Attempting a second used to surface the wiring diagnostic,
+which prints internal reprs and port pixel coordinates and is written for a log. It now
+returns "that input is already connected; delete the existing wire first", and a test
+asserts the message leaks no internals.

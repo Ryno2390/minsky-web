@@ -70,7 +70,10 @@ svg#board.panning{cursor:grabbing}
 .port.target{fill:var(--ok)}
 .wire{stroke:var(--line-2);stroke-width:2;fill:none;marker-end:url(#arrow);
   vector-effect:non-scaling-stroke}
+.wire{cursor:pointer}
 .wire:hover{stroke:var(--accent)}
+.wire.sel{stroke:var(--accent);stroke-width:3}
+.wirehit{stroke:transparent;stroke-width:14;fill:none;cursor:pointer}
 .dragwire{stroke:var(--accent);stroke-width:2;stroke-dasharray:5 4;fill:none;
   pointer-events:none;vector-effect:non-scaling-stroke}
 .empty{position:absolute;inset:0;display:grid;place-content:center;text-align:center;
@@ -314,7 +317,7 @@ function pretty(name){
     .trim();
 }
 const board = $("#board"), gItems = $("#items"), gWires = $("#wires");
-let state = {items:[],wires:[],values:{}}, sel = null, ws = null;
+let state = {items:[],wires:[],values:{}}, sel = null, selWire = null, ws = null;
 let series = {}, tSeries = [], colors = {};
 const PALETTE = ["#4C9AFF","#3FB950","#D29922","#BC8CFF","#FF7B72","#39C5CF","#F778BA","#E3B341"];
 
@@ -358,8 +361,15 @@ function render() {
     const [x1,y1] = [c[0],c[1]], [x2,y2] = [c[c.length-2],c[c.length-1]];
     const dx = Math.max(30, Math.abs(x2-x1)*0.45);
     p.setAttribute("d", `M${x1},${y1} C${x1+dx},${y1} ${x2-dx},${y2} ${x2},${y2}`);
-    p.setAttribute("class","wire");
-    gWires.appendChild(p);
+    p.setAttribute("class","wire" + (selWire === w.index ? " sel" : ""));
+    p.dataset.wire = w.index;
+    // a 2px line is far too thin to hit; an invisible fat stroke over the same path
+    // gives it a real target without changing how it looks
+    const hit = document.createElementNS("http://www.w3.org/2000/svg","path");
+    hit.setAttribute("d", p.getAttribute("d"));
+    hit.setAttribute("class","wirehit");
+    hit.dataset.wire = w.index;
+    gWires.appendChild(p); gWires.appendChild(hit);
   }
 
   for (const it of state.items) {
@@ -439,7 +449,7 @@ function render() {
   if (state.diverged) { st.textContent = "diverged"; st.className = "pill diverged"; }
   else if (state.running) { st.textContent = "running"; st.className = "pill live"; }
   else { st.textContent = "idle"; st.className = "pill"; }
-  $("#del").disabled = sel === null;
+  $("#del").disabled = sel === null && selWire === null;
   const nm = state.currentFile;
   $("#fname").textContent = (nm || "untitled") + (state.dirty ? " •" : "");
   $("#fname").title = state.currentPath || "not saved yet";
@@ -447,7 +457,9 @@ function render() {
   $("#save").disabled = !state.dirty && !!nm;
   $("#undo").disabled = !state.canUndo;
   $("#redo").disabled = !state.canRedo;
-  $("#selinfo").textContent = sel === null ? "Nothing selected."
+  $("#selinfo").textContent =
+    selWire !== null ? `wire #${selWire} — press Delete to remove it`
+    : sel === null ? "Nothing selected."
     : `#${sel} · ${byIdx.get(sel)?.classType ?? "?"}`;
 }
 async function refresh(){ state = await api("/state"); render(); }
@@ -540,6 +552,10 @@ $("#clear").onclick = guard(async () => {
   sel = null; series = {}; tSeries = []; colors = {}; drawPlot(); render();
 });
 $("#del").onclick = guard(async () => {
+  if (selWire !== null) {
+    state = await api(`/wire/${selWire}`, {method:"DELETE"});
+    selWire = null; render(); return;
+  }
   if (sel === null) return;
   state = await api(`/item/${sel}`, {method:"DELETE"}); sel = null; render();
 });
@@ -558,6 +574,8 @@ function svgPt(e){
   return {x: q.x, y: q.y};
 }
 board.addEventListener("pointerdown", e => {
+  const w = e.target.closest("[data-wire]");
+  if (w) { selWire = +w.dataset.wire; sel = null; render(); return; }
   const port = e.target.closest(".port");
   if (port) {
     if (port.dataset.role !== "output") {
@@ -573,6 +591,7 @@ board.addEventListener("pointerdown", e => {
   const body = e.target.closest(".item-body");
   if (body) {
     const idx = +body.dataset.idx;
+    selWire = null;
     if (e.detail >= 2) {
       const it = state.items.find(i => i.index === idx);
       if (it && it.classType.includes("Godley")) { openGodley(idx); return; }
@@ -586,6 +605,7 @@ board.addEventListener("pointerdown", e => {
   }
   // empty canvas: start a pan. Deselect happens on pointerup only if the pointer did
   // not move, so a pan does not clear the selection.
+  selWire = null;
   drag = {mode:"pan", cx:e.clientX, cy:e.clientY, moved:false,
           x0:view ? view.x : 0, y0:view ? view.y : 0};
   board.classList.add("panning");
@@ -725,8 +745,9 @@ function finish(){
 }
 $("#stop").onclick = () => { try { ws?.send(JSON.stringify({cmd:"stop"})); } catch {} };
 addEventListener("keydown", e => {
-  if ((e.key === "Delete" || e.key === "Backspace") && sel !== null
-      && !/INPUT/.test(document.activeElement.tagName)) { e.preventDefault(); $("#del").click(); }
+  if ((e.key === "Delete" || e.key === "Backspace") && (sel !== null || selWire !== null)
+      && !/INPUT|TEXTAREA/.test(document.activeElement.tagName)) {
+    e.preventDefault(); $("#del").click(); }
 });
 
 /* ---------- godley editor ---------- */

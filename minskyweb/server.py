@@ -408,7 +408,12 @@ def _restore(entry: tuple[bytes, list]):
     _PENDING = False
 
 
-def _snap() -> bool:
+#: The history entry that matches what is on disk, so stepping back onto it can clear the
+#: unsaved marker instead of leaving the file looking edited when it is not.
+_SAVED_PTR: int | None = None
+
+
+def _snap(force: bool = False) -> bool:
     """Record the live state as a history entry, if anything has changed since the last.
 
     "Has anything changed" is answered by `_PENDING`, not by comparing documents. A
@@ -419,7 +424,7 @@ def _snap() -> bool:
     itself through `mark_dirty()`, which is an exact signal.
     """
     global _PTR, _PENDING
-    if _HIST and not _PENDING:
+    if _HIST and not _PENDING and not force:
         return False
     del _HIST[_PTR + 1:]                 # a new state abandons the redo tail
     _HIST.append((_serialize(), list(_WIRES)))
@@ -464,10 +469,11 @@ def rollback():
     return True
 
 
-def reset_history():
+def reset_history(saved: bool = False):
     """Start a fresh timeline, with the current model as its baseline."""
-    global _PTR
+    global _PTR, _SAVED_PTR
     disable_engine_history()
+    _SAVED_PTR = 0 if saved else None
     _HIST.clear()
     _PTR = -1
     _snap()
@@ -1389,7 +1395,10 @@ def create_app() -> FastAPI:
         moved = await call(_go)
         if not moved:
             raise HTTPException(409, f"nothing to {what}")
-        mark_dirty(pending=False)   # _restore() left the history exactly in step
+        # Stepping back onto the state that was written to disk means the file is NOT
+        # edited, whatever route got us here. _restore() left the history exactly in step,
+        # so nothing is pending either way.
+        mark_dirty(_PTR != _SAVED_PTR, pending=False)
         return await call(snapshot)
 
     @app.post("/api/undo")
@@ -1446,7 +1455,7 @@ def create_app() -> FastAPI:
         _WIRES.clear()
         _WIRES.extend(await call(_topology_from_mky, str(dest)))
         _CURRENT = str(dest); mark_dirty(False)
-        await call(reset_history)
+        await call(reset_history, True)
         return dict(loaded=str(dest), state=await call(snapshot))
 
     @app.post("/api/load")
@@ -1474,7 +1483,7 @@ def create_app() -> FastAPI:
         _WIRES.clear()
         _WIRES.extend(await call(_topology_from_mky, path))
         _CURRENT = path; mark_dirty(False)
-        await call(reset_history)
+        await call(reset_history, True)
         return await call(snapshot)
 
     @app.post("/api/save")
@@ -1501,6 +1510,12 @@ def create_app() -> FastAPI:
             # of saving what is on screen IS what is in the file.
             restructuring(lambda: m.load(str(dest)))
         await call(_write)
+
+        def _mark():
+            global _SAVED_PTR
+            _snap(force=True)          # the file's exact contents, as a history entry
+            _SAVED_PTR = _PTR
+        await call(_mark)
         _CURRENT = str(dest)
         mark_dirty(False)
         return dict(saved=str(dest), name=dest.stem, dirty=False,

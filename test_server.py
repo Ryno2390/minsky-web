@@ -1544,5 +1544,36 @@ check("and the canvas agrees with the values panel",
       f"{[i.get('name') for i in st['items']]} vs {list(st['values'])}")
 
 
+print("\n42. the unsaved marker means what it says")
+import os
+from minskyweb.server import SAVE_DIR
+EX = "/Users/ryneschultz/minsky/examples/GoodwinLinear02.mky"
+if os.path.exists(EX):
+    c.post("/api/load", params={"path": EX})
+    check("a freshly opened file is not edited",
+          c.get("/api/state").json()["dirty"] is False)
+    c.post("/api/item/0/move", json={"x":500,"y":500})
+    check("moving something marks it edited",
+          c.get("/api/state").json()["dirty"] is True)
+    # undo takes the model back to exactly what is on disk, so the file is NOT edited --
+    # leaving the marker set asked the user to save a file that already matched
+    c.post("/api/undo")
+    check("undoing back to the file clears the marker",
+          c.get("/api/state").json()["dirty"] is False)
+    c.post("/api/redo")
+    check("and redoing sets it again",
+          c.get("/api/state").json()["dirty"] is True)
+
+    r = c.post("/api/save", json={"name": "dirty-probe"}).json()
+    try:
+        check("saving clears it", c.get("/api/state").json()["dirty"] is False)
+        c.post("/api/item/0/move", json={"x":700,"y":700})
+        c.post("/api/undo")
+        check("and undo back to the SAVED state clears it too",
+              c.get("/api/state").json()["dirty"] is False)
+    finally:
+        (SAVE_DIR / "dirty-probe.mky").unlink(missing_ok=True)
+
+
 print(f"\n{'ALL PASS' if not FAILED else 'FAILURES: ' + ', '.join(FAILED)}")
 sys.exit(1 if FAILED else 0)

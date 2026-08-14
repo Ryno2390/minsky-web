@@ -573,7 +573,7 @@ class Model:
         node = self.minsky.model
         for part in path.split("."):
             n = len(node.groups)
-            if not part.isdigit() or not 0 <= int(part) < n:
+            if not (part.isascii() and part.isdigit()) or not 0 <= int(part) < n:
                 raise IndexError(f"group {gref} out of range" if n
                                  else "this model has no groups")
             node = node.groups[int(part)]

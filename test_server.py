@@ -1854,5 +1854,38 @@ check("every transient scratch path is built from the private directory",
       f'{src.count("_SCRATCH /")} uses')
 
 
+print("\n46. a wire never moves to an item it was not on")
+# Two items the fingerprint cannot tell apart -- same class, no name -- in different
+# places. Deleting one used to re-attach its neighbour's wires to the survivor, with the
+# counts still matching so nothing flagged it.
+c.post("/api/clear")
+_sA = c.post("/api/item", json={"kind":"operation","op":"sqrt","at":[300,150]}).json()["index"]
+_sB = c.post("/api/item", json={"kind":"operation","op":"sqrt","at":[300,400]}).json()["index"]
+_a  = c.post("/api/item", json={"kind":"parameter","name":"a","value":4,"at":[120,150]}).json()["index"]
+_b  = c.post("/api/item", json={"kind":"parameter","name":"b","value":9,"at":[120,400]}).json()["index"]
+_oA = c.post("/api/item", json={"kind":"variable","name":"outA","var_type":"flow","at":[520,150]}).json()["index"]
+_oB = c.post("/api/item", json={"kind":"variable","name":"outB","var_type":"flow","at":[520,400]}).json()["index"]
+for _s, _d in ((_a,_sA), (_sA,_oA), (_b,_sB), (_sB,_oB)):
+    c.post("/api/wire", json={"src":_s,"dst":_d,"port":1})
+
+def _rows():
+    st = c.get("/api/state").json()
+    m = {i["ref"]: round(i["y"]) for i in st["items"]}
+    return [(m.get(w["src"]), m.get(w["dst"])) for w in st["wires"] if not w.get("desync")], \
+           any(w.get("desync") for w in st["wires"])
+
+rows, _ = _rows()
+check("four wires, each within one row", len(rows) == 4 and all(x == y for x, y in rows),
+      str(rows))
+_tgt = next(i["index"] for i in c.get("/api/state").json()["items"]
+            if i["classType"] == "Operation:sqrt" and round(i["y"]) == 150)
+c.delete(f"/api/item/{_tgt}")
+rows, desync = _rows()
+check("deleting one of the pair leaves only the other row's wires",
+      len(rows) == 2 and all(x == 400 and y == 400 for x, y in rows), str(rows))
+check("and no wire was left pointing somewhere it never was", not desync)
+check("the model still resets", c.post("/api/reset").status_code == 200)
+
+
 print(f"\n{'ALL PASS' if not FAILED else 'FAILURES: ' + ', '.join(FAILED)}")
 sys.exit(1 if FAILED else 0)

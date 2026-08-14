@@ -143,23 +143,46 @@ def _remap_wires(m, before):
     after = _identity_list(m)
     pending, free, remap = list(before), list(after), {}
 
-    def take(same):
+    def take(same, unique=True):
+        """Claim the matches this layer can make.
+
+        With `unique`, a layer may only claim a match it can make UNAMBIGUOUSLY: exactly
+        one free candidate fits this item, and no other pending item fits that same
+        candidate. Taking the first fit instead meant two items the layer could not tell
+        apart -- two unnamed sqrt operations, say -- were paired in list order, and after
+        a delete a wire was silently re-attached to the wrong one with the counts still
+        matching, so nothing flagged it. Deferring an ambiguous pair leaves it to a later
+        layer that also looks at WHERE the items are, which does tell them apart.
+        """
         nonlocal pending
         rest = []
-        for b in pending:
-            hit = next((a for a in free if same(b, a)), None)
-            if hit is None:
+        cand = [[a for a in free if same(b, a)] for b in pending]
+        for i, b in enumerate(pending):
+            fits = [a for a in cand[i] if a in free]
+            if not fits:
                 rest.append(b)
-            else:
-                free.remove(hit)
-                remap[b[0]] = hit[0]
+                continue
+            if unique and (len(fits) > 1
+                           or sum(1 for j in range(len(pending))
+                                  if b is not pending[j] and fits[0] in cand[j]) > 0):
+                rest.append(b)             # ambiguous here; a later layer knows more
+                continue
+            free.remove(fits[0])
+            remap[b[0]] = fits[0][0]
         pending = rest
 
-    take(lambda b, a: a[0] == b[0] and a[1:3] == b[1:3])   # same slot, same identity
-    take(lambda b, a: a[1:3] == b[1:3])                    # same identity, moved slot
-    take(lambda b, a: a[0] == b[0] and a[1] == b[1])       # same slot and class: renamed
-    take(lambda b, a: a[1] == b[1] and a[3:] == b[3:])     # same class, same place
-    take(lambda b, a: a[1] == b[1])                        # same class, in order
+    # Order matters, and POSITION comes before SLOT. A slot is only stable across a
+    # rename; a delete shifts every slot above it, so "same slot, same identity" matched
+    # a deleted item against the one that had moved down into its place -- two unnamed
+    # sqrt operations in different rows, and the wires of the deleted one were re-attached
+    # to the survivor. A position is stable across both.
+    take(lambda b, a: a[1:] == b[1:])                      # class, name and place: unmoved
+    take(lambda b, a: a[1] == b[1] and a[3:] == b[3:])     # class and place: renamed there
+    take(lambda b, a: a[1:3] == b[1:3])                    # class and name: moved
+    take(lambda b, a: a[0] == b[0] and a[1] == b[1])       # same slot and class
+    # last resort: whatever is left is indistinguishable by class, name and position, so
+    # any pairing is as good as another. Match in order.
+    take(lambda b, a: a[1] == b[1], unique=False)
 
     _WIRES[:] = [(remap[a], b, remap[c], d) for a, b, c, d in _WIRES
                  if a in remap and c in remap]
@@ -207,6 +230,15 @@ def _resolve(m, ref: str):
     return m.model.items[int(ref)]
 
 
+#: str.isdigit() is True for characters int() will not take -- superscripts ("\u00b2"),
+#: and other scripts' digits -- so `isdigit()` followed by `int()` is a 500 waiting to
+#: happen. And `lstrip("-").isdigit()` accepted "-0" and "--5": the first named an item
+#: that does not exist (nothing is ever reffed "-0", so a wire recorded against it was
+#: silently dropped at the next remap), the second reached int() and threw.
+def _is_index(part: str) -> bool:
+    return part.isascii() and part.isdigit()
+
+
 def check_group_ref(ref: str):
     """Validate a group reference ("g0", or "g0.1" for a group inside a group)."""
     m = engine().minsky
@@ -214,7 +246,7 @@ def check_group_ref(ref: str):
         raise HTTPException(422, f"{ref!r} is not a group reference")
     node = m.model
     for part in ref[1:].split("."):
-        if not part.isdigit():
+        if not _is_index(part):
             raise HTTPException(422, f"{ref!r} is not a group reference")
         n = len(node.groups)
         if not 0 <= int(part) < n:
@@ -229,14 +261,14 @@ def check_ref(ref: str) -> str:
     m = engine().minsky
     if ":" in ref:
         head, _, tail = ref.partition(":")
-        if not tail.isdigit():
+        if not _is_index(tail):
             raise HTTPException(422, f"{ref!r} is not an item reference")
         grp = check_group_ref(head)
         ni = len(grp.items)
         if not 0 <= int(tail) < ni:
             raise HTTPException(422, f"group {head} has items 0..{ni - 1}, not {tail}")
         return ref
-    if not ref.lstrip("-").isdigit():
+    if not _is_index(ref):
         raise HTTPException(422, f"{ref!r} is not an item reference")
     n = len(m.model.items)
     if not 0 <= int(ref) < n:

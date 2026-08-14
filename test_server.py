@@ -611,5 +611,53 @@ after = c.get("/api/state").json()["solver"]
 check("a rejected request changes nothing", before == after,
       f"{before} vs {after}")
 
+print("\n18. rename")
+c.post("/api/clear")
+a1 = c.post("/api/item", json={"kind":"parameter","name":"alpha","value":2.5}).json()["index"]
+c.post("/api/item", json={"kind":"parameter","name":"alpha","value":2.5,"at":[140,340]})
+op = c.post("/api/item", json={"kind":"operation","op":"multiply"}).json()["index"]
+ig = c.post("/api/item", json={"kind":"operation","op":"integrate"}).json()["index"]
+c.post("/api/wire", json={"src":a1,"dst":ig,"port":1})
+
+r = c.post(f"/api/item/{a1}/rename", json={"name":"beta"}).json()
+names = [i.get("name") for i in r["state"]["items"]]
+# renameItem would rename ONE icon and split the variable in two; renameAllInstances is
+# what "rename this variable" means to someone looking at one of its icons
+check("every icon of the variable is renamed", names.count("beta") == 2, str(names))
+vals = list(r["state"]["values"])
+check("the old name is gone and the new one appears once",
+      ":alpha" not in vals and vals.count(":beta") == 1, str(vals))
+check("wires survive a rename",
+      len([w for w in r["state"]["wires"] if not w.get("desync")]) == 1)
+
+c.post("/api/reset")
+check("the value survives a rename",
+      c.get("/api/state").json()["values"].get(":beta") == 2.5,
+      str(c.get("/api/state").json()["values"]))
+
+bad = c.post(f"/api/item/{op}/rename", json={"name":"nope"})
+check("an operation has no name to change",
+      bad.status_code == 422 and "no name to change" in bad.text, bad.text[:80])
+check("an empty name is refused",
+      c.post(f"/api/item/{a1}/rename", json={"name":"   "}).status_code == 422)
+check("an out-of-range index is refused",
+      c.post("/api/item/99/rename", json={"name":"x"}).status_code == 422)
+
+# a Godley table's name is its title, and it must reach the canvas
+c.post("/api/clear")
+gi = c.post("/api/item", json={"kind":"godley"}).json()["index"]
+r = c.post(f"/api/item/{gi}/rename", json={"name":"Bank balance sheet"}).json()
+check("a Godley table is renamed by its title",
+      c.get(f"/api/godley/{gi}").json()["title"] == "Bank balance sheet")
+check("and the title labels it on the canvas",
+      [i.get("name") for i in r["state"]["items"]] == ["Bank balance sheet"],
+      str([i.get("name") for i in r["state"]["items"]]))
+
+# rename is undoable
+c.post("/api/undo")
+check("a rename can be undone",
+      c.get(f"/api/godley/{gi}").json()["title"] != "Bank balance sheet",
+      repr(c.get(f"/api/godley/{gi}").json()["title"]))
+
 print(f"\n{'ALL PASS' if not FAILED else 'FAILURES: ' + ', '.join(FAILED)}")
 sys.exit(1 if FAILED else 0)

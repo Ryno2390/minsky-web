@@ -647,3 +647,25 @@ the model is editable again immediately rather than being stuck behind a permane
 
 **Resizing while zoomed** keeps the same model area visible and recomputes port radius
 from the new zoom, so ports stay the same size on screen at any window size.
+
+## Rename
+
+    select an item → the Selection panel offers a name field
+    F2 focuses it · double-clicking a variable jumps straight to it · Enter applies
+
+**`renameItem` and `renameAllInstances` do different things, and only one is "rename".**
+`renameItem` renames a single icon, which SPLITS a shared variable: two icons of `alpha`
+become `alpha` and `beta` and the model gains a variable. `renameAllInstances` renames the
+variable itself, which is what someone looking at one of its icons means. That is what the
+UI does, and when a variable has more than one icon the panel says so.
+
+Wires survive, and so does the value: a parameter of 2.5 still reads 2.5 after a rename
+and a reset.
+
+**A Godley table's name is its TITLE**, which lives on the table rather than the icon, so
+renaming one used to change nothing visible — the node still read "godley". The snapshot
+now carries the title as the item's name and the canvas labels it.
+
+**Operations have no name to change.** `renameAllInstances` accepts the call on an
+operation and does nothing with it, so the control is hidden for anything that is not a
+variable or a Godley table rather than appearing to work.

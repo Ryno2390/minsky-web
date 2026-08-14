@@ -410,6 +410,46 @@ class Model:
     def move(self, item: Item, x: float, y: float) -> None:
         item.move_to(x, y)
 
+    #: Item classes that carry a user-visible name worth renaming. An operation accepts
+    #: a rename call and does nothing with it, so offering one would be a lie.
+    RENAMEABLE = ("Variable:", "GodleyIcon")
+
+    def rename(self, item: Item, new: str) -> str:
+        """Rename a variable everywhere, or retitle a Godley table. Verified.
+
+        `renameItem` renames only THIS icon, which SPLITS a shared variable into two --
+        two icons of `alpha` become `alpha` and `beta`, and the model gains a variable.
+        `renameAllInstances` renames the variable itself, which is what "rename" means to
+        someone looking at one of its icons, and is what this does. The value carries
+        across: a parameter of 2.5 renamed still reads 2.5 after a reset.
+        """
+        new = new.strip()
+        if not new:
+            raise ValueError("a name cannot be empty")
+        item.refresh()
+        raw = item._raw
+        ct = raw.classType()
+
+        if "Godley" in ct:                      # a table's name is its title
+            raw.table.title(new)
+            self.minsky.model.items[item.index].update()
+            return new
+
+        if not ct.startswith("Variable:"):
+            raise ValueError(
+                f"{ct} has no name to change. Only variables, parameters and Godley "
+                f"tables can be renamed.")
+
+        if not self.minsky.canvas.getItemAt(raw.x(), raw.y()):
+            raise RuntimeError(
+                f"no item found at {item}'s own coordinates to rename")
+        self.minsky.canvas.renameAllInstances(new)
+        got = self.minsky.model.items[item.index].name()
+        if got.strip() != new:
+            raise RuntimeError(
+                f"rename to {new!r} left the item called {got!r}")
+        return got
+
     # ---- running -------------------------------------------------------------
     def configure(self, **kw):
         cfg = {**SANE_SOLVER, **kw}

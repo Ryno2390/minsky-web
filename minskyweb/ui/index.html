@@ -292,6 +292,13 @@ svg#board.panning{cursor:grabbing}
   <div class="field"><label>max steps</label><input id="steps" value="2000"></div>
   <h3>Selection</h3>
   <div id="selinfo" style="color:var(--ink-3);font-size:12.5px;padding:0 4px">Nothing selected.</div>
+  <div id="renamewrap" style="display:none;margin-top:8px">
+    <div class="field" style="gap:6px">
+      <input id="rename" style="width:100%;text-align:left" autocomplete="off" spellcheck="false">
+      <button id="renameok" style="font-size:12px;padding:4px 10px">Rename</button>
+    </div>
+    <div style="font-size:11.5px;color:var(--ink-3);padding:0 2px" id="renamenote"></div>
+  </div>
 </div>
 
 <script>
@@ -466,6 +473,22 @@ function render() {
     selWire !== null ? `wire #${selWire} — press Delete to remove it`
     : sel === null ? "Nothing selected."
     : `#${sel} · ${byIdx.get(sel)?.classType ?? "?"}`;
+
+  // Rename is offered only where there is a name to change. An operation accepts a
+  // rename call and does nothing with it, so showing the control would be a lie.
+  const selItem = sel === null ? null : byIdx.get(sel);
+  const ct = selItem?.classType || "";
+  const canRename = !!selItem && (ct.startsWith("Variable:") || ct.includes("Godley"));
+  $("#renamewrap").style.display = canRename ? "" : "none";
+  if (canRename && document.activeElement !== $("#rename")) {
+    $("#rename").value = pretty(selItem.name || "");
+    $("#rename").placeholder = ct.includes("Godley") ? "table title" : "variable name";
+    // renaming a variable renames every icon of it, which is what people mean; say so
+    const others = ct.startsWith("Variable:")
+      ? state.items.filter(i => i.name && i.name === selItem.name).length : 1;
+    $("#renamenote").textContent = others > 1
+      ? `renames all ${others} icons of this variable` : "";
+  }
 }
 async function refresh(){ state = await api("/state"); render(); }
 
@@ -600,6 +623,10 @@ board.addEventListener("pointerdown", e => {
     if (e.detail >= 2) {
       const it = state.items.find(i => i.index === idx);
       if (it && it.classType.includes("Godley")) { openGodley(idx); return; }
+      if (it && it.classType.startsWith("Variable:")) {
+        sel = idx; render();
+        $("#rename").focus(); $("#rename").select(); return;
+      }
     }
     sel = idx; render();
     const it = state.items.find(i => i.index === idx);
@@ -889,6 +916,28 @@ $("#gaddstock").onclick = guard(async () => {
   const g = await api(`/godley/${gIdx}`);
   await drawGodley(await api(`/godley/${gIdx}/col/insert`, {method:"POST",
     body: JSON.stringify({at: g.cols})}));
+});
+
+/* ---------- rename ---------- */
+async function doRename(){
+  if (sel === null) return;
+  const name = $("#rename").value.trim();
+  const current = pretty(state.items.find(i => i.index === sel)?.name || "");
+  if (!name || name === current) return;
+  const r = await api(`/item/${sel}/rename`, {method:"POST",
+                                              body: JSON.stringify({name})});
+  state = r.state; render();
+  toast(`Renamed to ${r.name}`, true);
+}
+$("#renameok").onclick = guard(doRename);
+$("#rename").addEventListener("keydown", e => {
+  if (e.key === "Enter")  { e.preventDefault(); $("#renameok").click(); }
+  if (e.key === "Escape") { e.preventDefault(); $("#rename").blur(); render(); }
+});
+addEventListener("keydown", e => {
+  if (e.key !== "F2" || sel === null) return;
+  if ($("#renamewrap").style.display === "none") return;
+  e.preventDefault(); $("#rename").focus(); $("#rename").select();
 });
 
 /* ---------- undo / redo ---------- */

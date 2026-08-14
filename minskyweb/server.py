@@ -484,6 +484,10 @@ class AtSpec(BaseModel):
     at: int
 
 
+class RenameSpec(BaseModel):
+    name: str
+
+
 class SaveSpec(BaseModel):
     name: str | None = None
 
@@ -506,6 +510,15 @@ def snapshot() -> dict[str, Any]:
             entry["name"] = it.name()
         except Exception:
             pass
+        if "Godley" in entry["classType"]:
+            # a table's name is its TITLE, which lives on the table not the icon --
+            # without this a renamed table still read "godley" on the canvas
+            try:
+                t = (it.table.title() or "").strip()
+                if t:
+                    entry["name"] = t
+            except Exception:
+                pass
         items.append(entry)
     groups = []
     for gi in range(len(m.model.groups)):
@@ -650,6 +663,28 @@ def create_app() -> FastAPI:
         await call(_move)
         mark_dirty()
         return await call(snapshot)
+
+    @app.post("/api/item/{index}/rename")
+    async def rename_item(index: int, spec: RenameSpec):
+        require_idle()
+        await call(checkpoint)
+
+        def _rename():
+            from .headless import Item
+            m = engine()
+            n = len(m.minsky.model.items)
+            if not 0 <= index < n:
+                raise HTTPException(422, f"index {index} out of range (0..{n-1})")
+            try:
+                return m.rename(Item(m, index, "?"), spec.name)
+            except ValueError as ex:
+                raise HTTPException(422, str(ex))
+            except RuntimeError as ex:
+                raise HTTPException(400, str(ex))
+
+        name = await call(_rename)
+        mark_dirty()
+        return dict(name=name, state=await call(snapshot))
 
     @app.delete("/api/item/{index}")
     async def delete_item(index: int):

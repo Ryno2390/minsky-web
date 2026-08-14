@@ -18,6 +18,7 @@ See **[docs/MINSKY_HEADLESS.md](docs/MINSKY_HEADLESS.md)** for what the engine e
   place, drag output→input to wire.
 - **Edit Godley tables** — full double-entry grid with asset/liability/equity classes and
   a **live per-row balance check**, which is the thing that makes Minsky worth keeping.
+- **Navigate** — zoom about the cursor, pan by drag or two-finger scroll, fit to model.
 - **Run** — simulation streams over a WebSocket with a live plot; diverging models are
   detected and reported rather than crashing the stream.
 - **Open** — any of the shipped examples, or upload a `.mky`. All 37 shipped examples

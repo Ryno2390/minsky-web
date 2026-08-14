@@ -412,3 +412,31 @@ GoodwinLinear02, saving it, and comparing the parsed topology of both (27 wires,
 `test_server.py` section 9 goes further: build a model, Save As, clear, reopen from disk,
 confirm the topology is exact, and confirm it still integrates correctly
 (`int1 = 14.6` at `t = 3.04` against `7.0 + 2.5t`).
+
+## Zoom and pan
+
+    wheel / two-finger scroll   pan
+    pinch (wheel + ctrl/meta)   zoom about the cursor
+    drag empty canvas           pan
+    ⌘0 fit · ⌘+ in · ⌘− out · click the percentage for 100%
+
+**The viewBox is the single source of truth.** Everything on the canvas is already in
+model coordinates -- item positions and port positions both come from the engine -- so
+scaling the viewBox scales the whole picture and no per-item transform exists. Pointer
+maths goes through the SVG's inverse CTM, so drag and wiring need no special case at any
+zoom. Verified: dragging at 50% lands within **1e-5 model units** of the drop point, and
+wiring works at 0.894.
+
+Two counter-scales keep it usable when zoomed out. Strokes carry
+`vector-effect: non-scaling-stroke`, and port radius is divided by the zoom so ports stay
+clickable rather than shrinking to a pixel. Text is deliberately **not** counter-scaled:
+letting labels shrink is what makes zooming out declutter a dense model.
+
+`render()` rebuilds the DOM, so `applyView()` runs afterwards to restore port radii.
+
+**Pan versus deselect.** Dragging empty canvas pans; clicking empty canvas deselects.
+Both start the same way, so deselect fires on pointer-up only if the pointer never moved
+more than a pixel — otherwise every pan would clear the selection.
+
+Names also resolve LaTeX macros now (`\lambda` → λ), since Minsky stores them raw and
+economic models are full of them.

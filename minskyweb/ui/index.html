@@ -50,23 +50,29 @@ button.danger:hover:not(:disabled){border-color:var(--bad);color:var(--bad)}
 /* ---------- canvas ---------- */
 .canvas{grid-area:canvas;position:relative;overflow:hidden;background:
   radial-gradient(circle at 1px 1px,#1B2226 1px,transparent 0) 0 0/22px 22px,var(--bg)}
-svg#board{position:absolute;inset:0;width:100%;height:100%;touch-action:none}
+svg#board{position:absolute;inset:0;width:100%;height:100%;touch-action:none;
+  cursor:grab}
+svg#board.panning{cursor:grabbing}
 .item-body{cursor:grab}
 .item-body:active{cursor:grabbing}
 .sel .shape{stroke:var(--accent);stroke-width:2}
-.shape{stroke:var(--line-2);stroke-width:1.5;fill:var(--panel-2)}
+.shape{stroke:var(--line-2);stroke-width:1.5;fill:var(--panel-2);
+  vector-effect:non-scaling-stroke}
 .ilabel{font-family:var(--mono);font-size:11px;fill:var(--ink);pointer-events:none;
   dominant-baseline:middle;text-anchor:middle}
 .isub{font-family:var(--mono);font-size:9px;fill:var(--ink-3);pointer-events:none;
   dominant-baseline:middle;text-anchor:middle}
-.port{r:4.5;cursor:crosshair;stroke:var(--bg);stroke-width:1.5}
+.port{cursor:crosshair;stroke:var(--bg);stroke-width:1.5;
+  vector-effect:non-scaling-stroke}
 .port.output{fill:var(--accent)}
 .port.input{fill:var(--ink-3)}
-.port:hover{r:6.5}
-.port.target{fill:var(--ok);r:7}
-.wire{stroke:var(--line-2);stroke-width:2;fill:none;marker-end:url(#arrow)}
+
+.port.target{fill:var(--ok)}
+.wire{stroke:var(--line-2);stroke-width:2;fill:none;marker-end:url(#arrow);
+  vector-effect:non-scaling-stroke}
 .wire:hover{stroke:var(--accent)}
-.dragwire{stroke:var(--accent);stroke-width:2;stroke-dasharray:5 4;fill:none;pointer-events:none}
+.dragwire{stroke:var(--accent);stroke-width:2;stroke-dasharray:5 4;fill:none;
+  pointer-events:none;vector-effect:non-scaling-stroke}
 .empty{position:absolute;inset:0;display:grid;place-content:center;text-align:center;
   color:var(--ink-3);pointer-events:none;gap:6px}
 .empty b{color:var(--ink-2);font-weight:600;display:block;font-size:15px}
@@ -148,6 +154,15 @@ svg#board{position:absolute;inset:0;width:100%;height:100%;touch-action:none}
 .frow .sz{font:11px var(--mono);color:var(--ink-3)}
 .ffoot{display:flex;align-items:center;gap:10px;padding:12px 18px;border-top:1px solid var(--line)}
 .ffoot label{font-size:12.5px;color:var(--ink-3)}
+
+/* ---------- zoom controls ---------- */
+.zoomer{position:absolute;right:14px;bottom:14px;display:flex;align-items:center;gap:1px;
+  background:var(--panel);border:1px solid var(--line-2);border-radius:7px;overflow:hidden;
+  box-shadow:0 4px 16px rgba(0,0,0,.35);z-index:5}
+.zoomer button{border:0;border-radius:0;background:var(--panel);padding:5px 11px;font-size:14px}
+.zoomer button:hover{background:var(--panel-2)}
+.zoomer .pct{font:11.5px var(--mono);color:var(--ink-2);padding:0 9px;min-width:56px;
+  text-align:center;cursor:pointer;user-select:none}
 </style>
 
 <div class="top">
@@ -184,6 +199,12 @@ svg#board{position:absolute;inset:0;width:100%;height:100%;touch-action:none}
       <path d="M0,0 L10,5 L0,10 z" fill="var(--line-2)"/></marker></defs>
     <g id="wires"></g><g id="items"></g><path id="drag" class="dragwire"></path>
   </svg>
+  <div class="zoomer">
+    <button id="zout" title="Zoom out (⌘−)">−</button>
+    <span class="pct" id="zpct" title="Reset to 100%">100%</span>
+    <button id="zin" title="Zoom in (⌘+)">+</button>
+    <button id="zfit" title="Fit model (⌘0)">⤢</button>
+  </div>
   <div class="empty" id="empty">
     <b>Empty model</b><div>Add a block from the left, then drag between ports to wire.</div>
   </div>
@@ -245,6 +266,14 @@ const $ = s => document.querySelector(s);
 // Minsky stores names with its own markup and scope prefixes: "C_D" round-trips as
 // "C<sub>D</sub>", and a scoped variable reads ":w" only after "50191504896:". Show
 // something a person recognises; the raw key stays the identity used against the API.
+// Minsky names carry LaTeX macros -- economic models are full of \lambda, \alpha,
+// \Pi. Zooming in just makes the backslashes more legible, so map the common ones.
+const GREEK = {alpha:"α",beta:"β",gamma:"γ",delta:"δ",epsilon:"ε",zeta:"ζ",eta:"η",
+  theta:"θ",iota:"ι",kappa:"κ",lambda:"λ",mu:"μ",nu:"ν",xi:"ξ",pi:"π",rho:"ρ",
+  sigma:"σ",tau:"τ",upsilon:"υ",phi:"φ",chi:"χ",psi:"ψ",omega:"ω",
+  Gamma:"Γ",Delta:"Δ",Theta:"Θ",Lambda:"Λ",Xi:"Ξ",Pi:"Π",Sigma:"Σ",
+  Upsilon:"Υ",Phi:"Φ",Psi:"Ψ",Omega:"Ω"};
+
 function pretty(name){
   return String(name)
     .replace(/^\d+:/, "")            // numeric scope prefix
@@ -252,6 +281,7 @@ function pretty(name){
     .replace(/<sub>(.*?)<\/sub>/g, "_$1")
     .replace(/<sup>(.*?)<\/sup>/g, "^$1")
     .replace(/<[^>]+>/g, "")
+    .replace(/\\([A-Za-z]+)/g, (m, w) => GREEK[w] || m)
     .replace(/\u00a0/g, " ")
     .trim();
 }
@@ -371,6 +401,7 @@ function render() {
     return `<div class="row"><span class="kk"><i class="sw" style="background:${colors[k]}"></i>
       <span class="k" title="${k}">${pretty(k)}</span></span><span class="v">${shown}</span></div>`;
   }).join("") : `<div style="color:var(--ink-3);font-size:12.5px;padding:4px">No variables yet.</div>`;
+  applyView();          // render() rebuilt the ports; restore their zoom-corrected size
   $("#tval").textContent = (state.t ?? 0).toFixed(3);
   const st = $("#status");
   if (state.diverged) { st.textContent = "diverged"; st.className = "pill diverged"; }
@@ -461,10 +492,24 @@ board.addEventListener("pointerdown", e => {
     board.setPointerCapture(e.pointerId);
     return;
   }
-  sel = null; render();
+  // empty canvas: start a pan. Deselect happens on pointerup only if the pointer did
+  // not move, so a pan does not clear the selection.
+  drag = {mode:"pan", cx:e.clientX, cy:e.clientY, moved:false,
+          x0:view ? view.x : 0, y0:view ? view.y : 0};
+  board.classList.add("panning");
+  board.setPointerCapture(e.pointerId);
 });
 board.addEventListener("pointermove", e => {
   if (!drag) return;
+  if (drag.mode === "pan") {
+    if (!view) return;
+    const z = zoomLevel();
+    const dx = (e.clientX - drag.cx)/z, dy = (e.clientY - drag.cy)/z;
+    if (Math.abs(dx) > 1 || Math.abs(dy) > 1) drag.moved = true;
+    view = {...view, x: drag.x0 - dx, y: drag.y0 - dy};
+    applyView();
+    return;
+  }
   const p = svgPt(e);
   if (drag.mode === "wire") {
     const dx = Math.max(30, Math.abs(p.x - drag.x0)*0.45);
@@ -480,6 +525,11 @@ board.addEventListener("pointermove", e => {
 board.addEventListener("pointerup", guard(async e => {
   if (!drag) return;
   const d = drag; drag = null;
+  board.classList.remove("panning");
+  if (d.mode === "pan") {
+    if (!d.moved) { sel = null; render(); }   // a click, not a pan
+    return;
+  }
   $("#drag").removeAttribute("d");
   document.querySelectorAll(".port").forEach(p=>p.classList.remove("target"));
   if (d.mode === "wire") {
@@ -731,17 +781,102 @@ function afterLoad(name){
   else toast(`Loaded ${name}: ${state.items.length} items, ${state.wires.length} wires`, true);
 }
 
-// loaded models use the whole canvas; fit them into view
-function fitView(){
+/* ---------- view: zoom and pan ----------
+The viewBox is the single source of truth. Everything on the canvas lives in MODEL
+coordinates -- item positions and port positions both come from the engine -- so scaling
+the viewBox scales the whole picture consistently and no per-item transform is needed.
+
+Pointer maths already goes through the SVG's inverse CTM (see svgPt), so drag and wiring
+keep working at any zoom without special cases.
+
+Strokes carry vector-effect:non-scaling-stroke and port radius is divided by the zoom, so
+outlines stay crisp and ports stay clickable when zoomed out. Text is deliberately NOT
+counter-scaled: letting labels shrink is what makes zooming out declutter a dense model.
+*/
+const PORT_R = 4.5, ZMIN = 0.05, ZMAX = 12;
+let view = null;                 // {x,y,w,h} in model units
+
+function viewport(){ const r = board.getBoundingClientRect(); return {w:r.width, h:r.height}; }
+function zoomLevel(){ return view ? viewport().w / view.w : 1; }
+
+function applyView(){
+  if (!view) return;
+  board.setAttribute("viewBox", `${view.x} ${view.y} ${view.w} ${view.h}`);
+  const z = zoomLevel();
+  $("#zpct").textContent = `${Math.round(z*100)}%`;
+  // ports are sized in model units, so counter-scale to hold their on-screen size
+  const r = PORT_R / z;
+  board.querySelectorAll(".port").forEach(c => c.setAttribute("r", r));
+  board.querySelectorAll(".port.target").forEach(c => c.setAttribute("r", r*1.5));
+}
+
+function bounds(){
   const xs = state.items.flatMap(i => [i.x, ...i.ports.map(p=>p.x)]);
   const ys = state.items.flatMap(i => [i.y, ...i.ports.map(p=>p.y)]);
-  if (!xs.length) { board.removeAttribute("viewBox"); return; }
-  const pad = 60;
-  const x0 = Math.min(...xs)-pad, y0 = Math.min(...ys)-pad;
-  const w = Math.max(...xs)-x0+pad, h = Math.max(...ys)-y0+pad;
-  board.setAttribute("viewBox", `${x0} ${y0} ${w} ${h}`);
-  board.setAttribute("preserveAspectRatio", "xMidYMid meet");
+  if (!xs.length) return null;
+  return {x0:Math.min(...xs), x1:Math.max(...xs), y0:Math.min(...ys), y1:Math.max(...ys)};
 }
+
+function fitView(){
+  const b = bounds(), vp = viewport();
+  if (!b) { view = {x:0, y:0, w:vp.w||1000, h:vp.h||700}; return applyView(); }
+  const pad = 70;
+  let w = (b.x1-b.x0) + pad*2, h = (b.y1-b.y0) + pad*2;
+  // match the viewport's aspect so nothing is squashed
+  const ar = (vp.w||1000)/(vp.h||700);
+  if (w/h < ar) w = h*ar; else h = w/ar;
+  view = {x:(b.x0+b.x1)/2 - w/2, y:(b.y0+b.y1)/2 - h/2, w, h};
+  applyView();
+}
+
+function zoomBy(factor, clientX, clientY){
+  if (!view) fitView();
+  const z = zoomLevel();
+  const target = Math.min(ZMAX, Math.max(ZMIN, z*factor));
+  const k = z/target;                              // new width = old width * k
+  const vp = viewport(), r = board.getBoundingClientRect();
+  // keep the point under the cursor fixed
+  const fx = clientX == null ? 0.5 : (clientX - r.left)/vp.w;
+  const fy = clientY == null ? 0.5 : (clientY - r.top)/vp.h;
+  const px = view.x + fx*view.w, py = view.y + fy*view.h;
+  view = {w: view.w*k, h: view.h*k, x: px - fx*view.w*k, y: py - fy*view.h*k};
+  applyView();
+}
+
+function zoomTo100(){
+  if (!view) fitView();
+  const vp = viewport(), z = zoomLevel();
+  const cx = view.x + view.w/2, cy = view.y + view.h/2;
+  view = {w: vp.w, h: vp.h, x: cx - vp.w/2, y: cy - vp.h/2};
+  applyView();
+}
+
+$("#zin").onclick  = () => zoomBy(1.25, null, null);
+$("#zout").onclick = () => zoomBy(1/1.25, null, null);
+$("#zfit").onclick = () => fitView();
+$("#zpct").onclick = () => zoomTo100();
+
+board.addEventListener("wheel", e => {
+  if (!view) fitView();
+  e.preventDefault();
+  if (e.ctrlKey || e.metaKey) {
+    // trackpad pinch arrives as a wheel event with ctrlKey set
+    zoomBy(Math.exp(-e.deltaY * 0.01), e.clientX, e.clientY);
+  } else {
+    // plain two-finger scroll pans, which is the platform convention
+    const z = zoomLevel();
+    view = {...view, x: view.x + e.deltaX/z, y: view.y + e.deltaY/z};
+    applyView();
+  }
+}, {passive:false});
+
+addEventListener("keydown", e => {
+  if (!(e.metaKey || e.ctrlKey)) return;
+  if (e.key === "0")                    { e.preventDefault(); fitView(); }
+  else if (e.key === "=" || e.key === "+") { e.preventDefault(); zoomBy(1.25, null, null); }
+  else if (e.key === "-")               { e.preventDefault(); zoomBy(1/1.25, null, null); }
+});
+addEventListener("resize", () => { if (view) applyView(); });
 
 refresh().then(drawPlot).catch(e => toast(e.message));
 </script>

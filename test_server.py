@@ -258,5 +258,78 @@ try:
 except Exception: ok_xml = False
 check("downloaded bytes parse as XML", ok_xml)
 
+print("\n10. undo / redo")
+c.post("/api/clear")
+st = c.get("/api/state").json()
+check("fresh model has nothing to undo",
+      st["canUndo"] is False and st["canRedo"] is False)
+check("undo with empty history is refused",
+      c.post("/api/undo").status_code == 409)
+
+r  = c.post("/api/item", json={"kind":"parameter","name":"c","value":2.5}).json()["index"]
+ig = c.post("/api/item", json={"kind":"operation","op":"integrate"}).json()["index"]
+st = c.post("/api/wire", json={"src":r,"dst":ig,"port":1}).json()
+n_items, n_wires = len(st["items"]), len(st["wires"])
+check("built 3 items + 1 wire", n_wires == 1, f"{n_items} items, {n_wires} wires")
+check("canUndo is now true", c.get("/api/state").json()["canUndo"] is True)
+
+# the wire must disappear from OUR record too, not just the engine's
+u1 = c.post("/api/undo").json()
+check("undo removes the wire", len(u1["wires"]) == 0, f"{len(u1['wires'])} wires")
+check("no desync after undo",
+      not any(w.get("desync") for w in u1["wires"]), str(u1["wires"])[:80])
+u2 = c.post("/api/undo").json()
+check("undo removes an item", len(u2["items"]) < n_items,
+      f"{len(u2['items'])} items")
+check("canRedo becomes true", u2["canRedo"] is True)
+
+r1 = c.post("/api/redo").json()
+r2 = c.post("/api/redo").json()
+check("redo restores items and the wire",
+      len(r2["items"]) == n_items and len(r2["wires"]) == n_wires,
+      f"{len(r2['items'])} items, {len(r2['wires'])} wires")
+check("no desync after redo",
+      not any(w.get("desync") for w in r2["wires"]))
+
+# and the restored model must still RUN -- a wire record that disagrees with the
+# engine would produce a model that draws right and computes wrong
+c.post("/api/init", json={"name":"int1","value":4.0})
+last = None
+with c.websocket_connect("/ws/sim") as ws:
+    ws.send_json({"cmd":"run","steps":600,"tmax":2.0})
+    while True:
+        msg = ws.receive_json()
+        if "error" in msg: check("model after redo runs", False, msg["error"]); break
+        if msg.get("done") or msg.get("stopped"): break
+        last = msg
+if last:
+    t_, v = last["t"], last["values"][":int1"]
+    check("model after undo/redo integrates correctly", abs(v-(4.0+2.5*t_)) < 1e-6,
+          f"t={t_:.4f} int1={v:.4f} expect {4.0+2.5*t_:.4f}")
+
+# a new edit after undo must drop the redo tail
+c.post("/api/undo")
+c.post("/api/item", json={"kind":"operation","op":"time"})
+check("new edit truncates the redo tail",
+      c.get("/api/state").json()["canRedo"] is False)
+
+# godley edits are undoable
+c.post("/api/clear")
+gi = c.post("/api/item", json={"kind":"godley"}).json()["index"]
+c.post(f"/api/godley/{gi}/resize", json={"rows":3,"cols":3})
+c.post(f"/api/godley/{gi}/cell", json={"row":0,"col":1,"value":"Reserves"})
+c.post(f"/api/godley/{gi}/cell", json={"row":2,"col":1,"value":"Lend"})
+check("godley cell set", c.get(f"/api/godley/{gi}").json()["cells"][2][1] == "Lend")
+c.post("/api/undo")
+check("godley cell edit undone",
+      c.get(f"/api/godley/{gi}").json()["cells"][2][1] == "",
+      repr(c.get(f"/api/godley/{gi}").json()["cells"][2][1]))
+
+# loading resets the timeline
+import os
+c.post(f"/api/load?path={os.path.expanduser('~/minsky/examples/1Free.mky')}")
+check("loading starts a fresh timeline",
+      c.get("/api/state").json()["canUndo"] is False)
+
 print(f"\n{'ALL PASS' if not FAILED else 'FAILURES: ' + ', '.join(FAILED)}")
 sys.exit(1 if FAILED else 0)

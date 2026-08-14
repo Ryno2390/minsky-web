@@ -440,3 +440,54 @@ more than a pixel — otherwise every pan would clear the selection.
 
 Names also resolve LaTeX macros now (`\lambda` → λ), since Minsky stores them raw and
 economic models are full of them.
+
+## Undo and redo
+
+    ⌘Z undo · ⇧⌘Z redo · maxHistory 100
+
+### Three traps, in the order they bit
+
+**1. Nothing pushes history from pyminsky.** Three edits then `undo(1)` changed nothing.
+The REPL gets history free because `RESTService.cc` calls `commandHook` after every
+command; direct method calls do not. Without an explicit `pushHistory()`, undo is silently
+a no-op — the same shape as the Godley `icon.update()` trap.
+
+**2. `pushHistory()` REORDERS `model.items`.** It round-trips the model, and Godley-owned
+variables are regenerated at the end of the list. Pushing *after* a mutation therefore
+invalidates the index that mutation just returned: `/api/item` reported index 5, the push
+moved that item to 1, and the next `/api/wire` against index 5 hit a different item
+entirely. So checkpoints are taken **before** each mutation, which is also the more correct
+semantics — undo wants the pre-state. `pushHistory()` returns True only when the state
+actually changed, so back-to-back checkpoints do not pile up duplicates.
+
+**3. `undo(0)` is NOT a getter.** It restores the state at the current pointer, discarding
+anything not yet pushed. Using it to read the pointer for `canUndo`/`canRedo` meant that
+merely *reading* state reverted the model: add an item, `GET /api/state`, item gone. The
+pointer is now tracked in Python and the engine is never asked. An isolated probe made
+`undo(0)` look harmless, because it only destroys when the live state differs from the tip.
+
+### Wire topology has to travel with the history
+
+`_WIRES` is the only record of which ports each wire joins, and undo rewrites engine state
+without telling the server — so undoing would leave the canvas drawing wires that no longer
+exist. `_WHIST` snapshots `_WIRES` at exactly the points history is pushed, keyed by the
+same pointer, so the two timelines cannot drift. A new edit after an undo prunes the redo
+tail from both. Any residual mismatch still surfaces through the existing `desync` guard.
+
+### Coverage, measured
+
+Covered: add / delete / move item, wire, Godley cell, Godley asset class, Godley
+insert-and-delete **row**, parameter and initial values.
+
+Partial: Godley **column** operations. Undo removes the column's name and its stock
+variable but does not shrink the column count, leaving an empty trailing column. Verified
+cosmetic — a table with one still resets, runs and integrates correctly.
+
+Not covered: solver settings (`epsRel` and friends), which are not model structure.
+
+Undoing back to the state a file was saved at still reports the model as dirty; the flag
+is set on any undo rather than compared against the saved point.
+
+`test_server.py` section 10 covers it, including that a model still **integrates
+correctly** after undo→redo — a wire record disagreeing with the engine would otherwise
+draw right and compute wrong.

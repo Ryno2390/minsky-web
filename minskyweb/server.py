@@ -201,6 +201,89 @@ WRITE_ROOTS = [SAVE_DIR, Path.cwd() / "models", UPLOAD_DIR]
 _CURRENT: str | None = None
 _DIRTY = False
 
+#: Wire topology snapshots, keyed by the ENGINE's history pointer.
+#:
+#: Undo rewrites engine state without telling us, and `_WIRES` is the only record of
+#: which ports each wire joins -- the engine cannot report it. So undoing would leave the
+#: canvas drawing wires that no longer exist. Snapshotting `_WIRES` at exactly the points
+#: the engine pushes history, and keying by its own pointer, keeps the two in step
+#: without a second pointer of our own to drift.
+#:
+#: `undo(0)` is a non-mutating getter for that pointer (1-based); `undo(1)` / `undo(-1)`
+#: move it and return the new value.
+_WHIST: dict[int, list] = {}
+
+
+#: Our own history pointer.
+#:
+#: DO NOT use `undo(0)` to read the engine's. It is NOT a getter -- it restores the state
+#: at the current pointer, DISCARDING anything not yet pushed. Calling it from snapshot()
+#: to compute canUndo/canRedo silently reverted every edit the moment the client read
+#: state back: add an item, ask for state, item gone. `pushHistory()` returns True only
+#: when the state actually changed, which is enough to keep this in step.
+_PTR = 1
+
+
+def history_ptr() -> int:
+    return _PTR
+
+
+def checkpoint():
+    """Record an undo point for the state as it is NOW, BEFORE a mutation.
+
+    Two reasons it must run before rather than after:
+
+    1. NOTHING pushes engine history from pyminsky. The REPL gets it free because
+       RESTService.cc calls commandHook after every command; direct method calls do not.
+       Without this, undo silently does nothing at all.
+
+    2. `pushHistory()` REORDERS `model.items`. It round-trips the model, and Godley-owned
+       variables are regenerated at the end of the list. Pushing after a mutation
+       therefore invalidates the index that mutation just returned -- an /api/item call
+       reported index 5, a push moved it to 1, and the next /api/wire against index 5 hit
+       a different item entirely. Pushing first means every index handed out afterwards
+       stays valid until the next checkpoint.
+
+    The wire topology is snapshotted at the same instant and keyed by the engine's own
+    history pointer, so the two timelines cannot drift.
+    """
+    global _PTR
+    mk = engine().minsky
+    if mk.pushHistory():
+        _PTR += 1
+    for k in [k for k in _WHIST if k > _PTR]:   # a new edit truncates the redo tail
+        del _WHIST[k]
+    _WHIST[_PTR] = list(_WIRES)
+
+
+def reset_history():
+    """Start a fresh timeline, with the current model as its baseline."""
+    mk = engine().minsky
+    global _PTR
+    mk.clearHistory()
+    _WHIST.clear()
+    mk.pushHistory()
+    _PTR = 1
+    _WHIST[_PTR] = list(_WIRES)
+
+
+def reset_history_sync():
+    reset_history()
+
+
+def capture_tip():
+    """Record the live state at the tip so the newest action can be redone.
+
+    Undo steps back through pushed states; the current one was never pushed (checkpoints
+    happen before mutations). `checkPushHistory()` pushes it only if we are at the tip,
+    which is exactly the condition that matters.
+    """
+    global _PTR
+    mk = engine().minsky
+    if mk.pushHistory():
+        _PTR += 1
+        _WHIST[_PTR] = list(_WIRES)
+
 
 def mark_dirty(v: bool = True):
     global _DIRTY
@@ -414,6 +497,8 @@ def snapshot() -> dict[str, Any]:
         running=_RUNNING.is_set(), diverged=bad or None,
         currentFile=(Path(_CURRENT).stem if _CURRENT else None),
         currentPath=_CURRENT, dirty=_DIRTY,
+        canUndo=(history_ptr() > 1),
+        canRedo=any(k > history_ptr() for k in _WHIST),
         solver=dict(epsRel=m.epsRel(), epsAbs=m.epsAbs(), order=m.order(),
                     implicit=m.implicit(), t0=m.t0(), tmax=m.tmax())))
 
@@ -437,11 +522,13 @@ def create_app() -> FastAPI:
         await call(lambda: engine().clear())
         _WIRES.clear()
         _CURRENT = None; mark_dirty(False)
+        await call(reset_history)
         return await call(snapshot)
 
     @app.post("/api/item")
     async def add_item(spec: ItemSpec):
         require_idle()
+        await call(checkpoint)
 
         def _add():
             m = engine()
@@ -461,13 +548,14 @@ def create_app() -> FastAPI:
                 return m.godley(at=spec.at)
             raise HTTPException(422, f"unknown kind {spec.kind!r}")
 
-        mark_dirty()
         it = await call(_add)
+        mark_dirty()
         return {"index": it.index, "kind": it.kind, "state": await call(snapshot)}
 
     @app.post("/api/wire")
     async def add_wire(spec: WireSpec):
         require_idle()
+        await call(checkpoint)
 
         def _wire():
             m = engine()
@@ -479,13 +567,14 @@ def create_app() -> FastAPI:
             m.wire(Item(m, spec.src, "?"), Item(m, spec.dst, "?"), spec.port)
             _WIRES.append((str(spec.src), 0, str(spec.dst), spec.port))
 
-        mark_dirty()
         await call(_wire)
+        mark_dirty()
         return await call(snapshot)
 
     @app.post("/api/item/{index}/move")
     async def move_item(index: int, spec: MoveSpec):
         require_idle()
+        await call(checkpoint)
 
         def _move():
             from .headless import Item
@@ -494,13 +583,14 @@ def create_app() -> FastAPI:
             if not 0 <= index < n:
                 raise HTTPException(422, f"index {index} out of range (0..{n-1})")
             m.move(Item(m, index, "?"), spec.x, spec.y)
-        mark_dirty()
         await call(_move)
+        mark_dirty()
         return await call(snapshot)
 
     @app.delete("/api/item/{index}")
     async def delete_item(index: int):
         require_idle()
+        await call(checkpoint)
 
         def _del():
             from .headless import Item
@@ -555,6 +645,7 @@ def create_app() -> FastAPI:
     @app.post("/api/godley/{index}/cell")
     async def godley_cell(index: int, spec: CellSpec):
         require_idle()
+        await call(checkpoint)
         await call(lambda: _godley_op(
             index, lambda t: t.set_cell(spec.row, spec.col, spec.value)))
         mark_dirty()
@@ -563,40 +654,47 @@ def create_app() -> FastAPI:
     @app.post("/api/godley/{index}/class")
     async def godley_class(index: int, spec: ClassSpec):
         require_idle()
-        mark_dirty(); await call(lambda: _godley_op(index, lambda t: t.set_class(spec.col, spec.cls)))
+        await call(checkpoint)
+        await call(lambda: _godley_op(index, lambda t: t.set_class(spec.col, spec.cls)))
+        mark_dirty()
         return await call(lambda: _godley_op(index, lambda t: t.snapshot()))
 
     @app.post("/api/godley/{index}/resize")
     async def godley_resize(index: int, spec: SizeSpec):
         require_idle()
-        mark_dirty(); await call(lambda: _godley_op(index, lambda t: t.resize(spec.rows, spec.cols)))
+        await call(checkpoint)
+        await call(lambda: _godley_op(index, lambda t: t.resize(spec.rows, spec.cols)))
+        mark_dirty()
         return await call(lambda: _godley_op(index, lambda t: t.snapshot()))
 
     @app.post("/api/godley/{index}/row/{action}")
     async def godley_row(index: int, action: str, spec: AtSpec):
         require_idle()
+        await call(checkpoint)
         if action not in ("insert", "delete"):
             raise HTTPException(422, "action must be insert or delete")
-        mark_dirty()
         await call(lambda: _godley_op(index, lambda t:
             t.insert_row(spec.at) if action == "insert" else t.delete_row(spec.at)))
+        mark_dirty()
         return await call(lambda: _godley_op(index, lambda t: t.snapshot()))
 
     @app.post("/api/godley/{index}/col/{action}")
     async def godley_col(index: int, action: str, spec: AtSpec):
         require_idle()
+        await call(checkpoint)
         if action not in ("insert", "delete"):
             raise HTTPException(422, "action must be insert or delete")
-        mark_dirty()
         await call(lambda: _godley_op(index, lambda t:
             t.insert_col(spec.at) if action == "insert" else t.delete_col(spec.at)))
+        mark_dirty()
         return await call(lambda: _godley_op(index, lambda t: t.snapshot()))
 
     @app.post("/api/init")
     async def set_init(spec: InitSpec):
         require_idle()
-        mark_dirty()
+        await call(checkpoint)
         await call(lambda: engine().set_init(spec.name, spec.value))
+        mark_dirty()
         return await call(snapshot)
 
     @app.post("/api/solver")
@@ -624,6 +722,42 @@ def create_app() -> FastAPI:
             # client run a half-initialised model
             raise HTTPException(400, str(ex))
         return await call(snapshot)
+
+    async def _step_history(delta: int, what: str):
+        require_idle()
+
+        await call(capture_tip)
+
+        def _go():
+            global _PTR
+            mk = engine().minsky
+            was = _PTR
+            now = int(mk.undo(delta))
+            _PTR = now
+            if now == was:
+                return False
+            # the engine has just rewritten the model; our wire record must follow it
+            snap = _WHIST.get(now)
+            if snap is None:
+                # no snapshot for this point -- say so rather than draw stale wires
+                _WIRES.clear()
+            else:
+                _WIRES[:] = list(snap)
+            return True
+
+        moved = await call(_go)
+        if not moved:
+            raise HTTPException(409, f"nothing to {what}")
+        mark_dirty()
+        return await call(snapshot)
+
+    @app.post("/api/undo")
+    async def undo():
+        return await _step_history(1, "undo")
+
+    @app.post("/api/redo")
+    async def redo():
+        return await _step_history(-1, "redo")
 
     @app.get("/api/files")
     async def list_files():
@@ -655,6 +789,7 @@ def create_app() -> FastAPI:
         _WIRES.clear()
         _WIRES.extend(await call(_topology_from_mky, str(dest)))
         _CURRENT = str(dest); mark_dirty(False)
+        await call(reset_history)
         return dict(loaded=str(dest), state=await call(snapshot))
 
     @app.post("/api/load")
@@ -666,6 +801,7 @@ def create_app() -> FastAPI:
         _WIRES.clear()
         _WIRES.extend(await call(_topology_from_mky, path))
         _CURRENT = path; mark_dirty(False)
+        await call(reset_history)
         return await call(snapshot)
 
     @app.post("/api/save")

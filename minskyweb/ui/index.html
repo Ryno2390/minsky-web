@@ -168,6 +168,8 @@ svg#board.panning{cursor:grabbing}
 <div class="top">
   <div class="brand">Minsky <span>headless</span></div>
   <button id="open">Open…</button>
+  <button id="undo" title="Undo (⌘Z)">↶</button>
+  <button id="redo" title="Redo (⇧⌘Z)">↷</button>
   <button id="save">Save</button>
   <button id="saveas">Save As…</button>
   <button id="download" title="Download a copy to your computer">↓</button>
@@ -413,6 +415,8 @@ function render() {
   $("#fname").title = state.currentPath || "not saved yet";
   $("#fname").style.color = state.dirty ? "var(--warn)" : "var(--ink-3)";
   $("#save").disabled = !state.dirty && !!nm;
+  $("#undo").disabled = !state.canUndo;
+  $("#redo").disabled = !state.canRedo;
   $("#selinfo").textContent = sel === null ? "Nothing selected."
     : `#${sel} · ${byIdx.get(sel)?.classType ?? "?"}`;
 }
@@ -697,6 +701,28 @@ $("#gaddstock").onclick = guard(async () => {
   const g = await api(`/godley/${gIdx}`);
   await drawGodley(await api(`/godley/${gIdx}/col/insert`, {method:"POST",
     body: JSON.stringify({at: g.cols})}));
+});
+
+/* ---------- undo / redo ---------- */
+async function step(what){
+  const r = await fetch(`/api/${what}`, {method:"POST"});
+  if (r.status === 409) return;            // nothing to do; the buttons already say so
+  const body = await r.json();
+  if (!r.ok) throw new Error(body.error || body.detail || `HTTP ${r.status}`);
+  state = body; sel = null; render();
+  if (gIdx !== null && $("#gwrap").classList.contains("open")) {
+    try { await drawGodley(await api(`/godley/${gIdx}`)); } catch { closeGodley(); }
+  }
+  const d = state.wires.find(w => w.desync);
+  if (d) toast(`After ${what}, ${d.engine - d.tracked} wires could not be traced.`);
+}
+$("#undo").onclick = guard(() => step("undo"));
+$("#redo").onclick = guard(() => step("redo"));
+addEventListener("keydown", e => {
+  if (!(e.metaKey || e.ctrlKey) || e.key.toLowerCase() !== "z") return;
+  if (/INPUT|TEXTAREA/.test(document.activeElement.tagName)) return;  // let fields undo
+  e.preventDefault();
+  (e.shiftKey ? $("#redo") : $("#undo")).click();
 });
 
 /* ---------- save ---------- */

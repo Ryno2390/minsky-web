@@ -116,6 +116,14 @@ svg#board.panning{cursor:grabbing}
 .ghead{display:flex;align-items:center;gap:12px;padding:14px 18px;
   border-bottom:1px solid var(--line);position:sticky;top:0;background:var(--panel);z-index:2}
 .ghead b{font-size:15px}
+/* A wide table scrolls in its OWN container, so the header and the hint stay put. macOS
+   hides overlay scrollbars until you scroll, so a fade marks that there is more table --
+   with twelve stock columns the last one sat past the edge with nothing to say so. */
+.gscroll{overflow-x:auto;position:relative}
+/* fade the content itself at the right edge -- an ::after inside a scroll container that
+   holds a table does not position reliably, a mask does */
+.gscroll.more{-webkit-mask-image:linear-gradient(90deg,#000 calc(100% - 44px),transparent);
+  mask-image:linear-gradient(90deg,#000 calc(100% - 44px),transparent)}
 .gtable{border-collapse:separate;border-spacing:0;margin:16px 18px;font-family:var(--mono);font-size:12px}
 .gtable th,.gtable td{border:1px solid var(--line);padding:0}
 .gtable input{background:transparent;border:0;color:var(--ink);font:inherit;
@@ -938,7 +946,12 @@ async function drawGodley(g){
   const nudge = flowRows > 0 ? "" :
     `<div style="margin:0 18px 4px;color:var(--ink-3);font-size:12.5px">
        No flow rows yet — press <b>+ Flow row</b> to record a transaction.</div>`;
-  $("#gbody").innerHTML = h + `</tbody></table>` + nudge;
+  $("#gbody").innerHTML = `<div class="gscroll">` + h + `</tbody></table></div>` + nudge;
+  const sc = $("#gbody").querySelector(".gscroll");
+  const markOverflow = () => sc.classList.toggle(
+    "more", sc.scrollWidth - sc.clientWidth - sc.scrollLeft > 4);
+  markOverflow();
+  sc.addEventListener("scroll", markOverflow);
 
   $("#gbody").querySelectorAll("input").forEach(inp => {
     inp.onchange = guard(async () => {

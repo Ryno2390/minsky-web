@@ -62,7 +62,10 @@ svg#board.panning{cursor:grabbing}
   dominant-baseline:middle;text-anchor:middle}
 .isub{font-family:var(--mono);font-size:9px;fill:var(--ink-3);pointer-events:none;
   dominant-baseline:middle;text-anchor:middle}
-.port{r:4.5;cursor:crosshair;stroke:var(--bg);stroke-width:1.5;
+/* NO `r` here: a CSS rule beats the presentation attribute, so applyView's
+   counter-scaled radius was ignored and ports shrank to 3px when zoomed out.
+   render() establishes a view before painting, so applyView always sets it. */
+.port{cursor:crosshair;stroke:var(--bg);stroke-width:1.5;
   vector-effect:non-scaling-stroke}
 .port.output{fill:var(--accent)}
 .port.input{fill:var(--ink-3)}
@@ -73,7 +76,8 @@ svg#board.panning{cursor:grabbing}
 .wire{cursor:pointer}
 .wire:hover{stroke:var(--accent)}
 .wire.sel{stroke:var(--accent);stroke-width:3}
-.wirehit{stroke:transparent;stroke-width:14;fill:none;cursor:pointer}
+.wirehit{stroke:transparent;stroke-width:14;fill:none;cursor:pointer;
+  vector-effect:non-scaling-stroke}
 .dragwire{stroke:var(--accent);stroke-width:2;stroke-dasharray:5 4;fill:none;
   pointer-events:none;vector-effect:non-scaling-stroke}
 .empty{position:absolute;inset:0;display:grid;place-content:center;text-align:center;
@@ -423,7 +427,10 @@ function render() {
   for (const it of state.items) {
     const [cls, label] = kindOf(it.classType);
     const g = document.createElementNS("http://www.w3.org/2000/svg","g");
-    g.setAttribute("class","item" + (sel === it.index ? " sel" : ""));
+    // `it.index` is null for group members, and `sel` is null when nothing is selected,
+    // so a bare === lit up every group member as selected
+    const isSel = it.index !== null && sel !== null && sel === it.index;
+    g.setAttribute("class","item" + (isSel ? " sel" : ""));
     const name = pretty(it.name || label);
     // Engine items are SMALL -- half-widths of 12 to 24px -- while a label like
     // "multiply" needs ~60. They cannot share a box: sizing to the label puts ports
@@ -452,7 +459,8 @@ function render() {
     shape.setAttribute("rx", cls === "var" || cls === "par" ? 4 : hh);
     shape.setAttribute("class","shape item-body");
     shape.style.fill = `color-mix(in srgb, var(--${cls}) 18%, var(--panel-2))`;
-    shape.style.stroke = `var(--${cls})`;
+    shape.style.stroke = isSel ? "var(--accent)" : `var(--${cls})`;
+    if (isSel) shape.style.strokeWidth = "2.5";
     shape.dataset.idx = it.index;
     g.appendChild(shape);
 

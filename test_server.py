@@ -849,5 +849,24 @@ check("deleting a wire whose destination is shared is refused",
 check("both wires are still there",
       len([w for w in c.get("/api/state").json()["wires"] if not w.get("desync")]) == 2)
 
+print("\n25. renderer invariants that only source can assert")
+ui = open(os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                       "minskyweb", "ui", "index.html")).read()
+# A CSS `r` beats the presentation attribute, so applyView's counter-scaled radius was
+# ignored and ports shrank to 3px when zoomed out -- introduced by the fix that gave them
+# a radius on a fresh model, which render() now guarantees a different way.
+check("no CSS rule sets the port radius",
+      not re.search(r"\.port\{[^}]*\br\s*:", ui), "a .port{r:...} rule is back")
+check("applyView still writes the counter-scaled radius",
+      'setAttribute("r", r)' in ui or "setAttribute('r', r)" in ui)
+# group members carry index null, and sel is null when nothing is selected
+check("selection compares indices only when both exist",
+      "it.index !== null && sel !== null" in ui)
+# the inline stroke set for the item colour beat the .sel rule
+check("the selected item's stroke is set inline, where it can win",
+      'isSel ? "var(--accent)"' in ui)
+check("the wire hit target does not shrink with the zoom",
+      re.search(r"\.wirehit\{[^}]*vector-effect:non-scaling-stroke", ui) is not None)
+
 print(f"\n{'ALL PASS' if not FAILED else 'FAILURES: ' + ', '.join(FAILED)}")
 sys.exit(1 if FAILED else 0)

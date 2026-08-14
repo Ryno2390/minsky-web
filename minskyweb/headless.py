@@ -309,12 +309,25 @@ class Model:
         position -- with two items at the same point the engine's hit test picks one
         arbitrarily, so the wrong item is acted on intermittently.
         """
+        taken_now = [(self.minsky.model.items[i].x(), self.minsky.model.items[i].y())
+                     for i in range(len(self.minsky.model.items))]
         if at is not None:
-            return at
-        taken = []
-        for i in range(len(self.minsky.model.items)):
-            it = self.minsky.model.items[i]
-            taken.append((it.x(), it.y()))
+            # An explicit position is honoured, but never ON TOP of something. The client
+            # picks placement because only it knows what is visible, and two adds in
+            # quick succession both measure the same model and choose the same point.
+            # Two items at one point are ambiguous to the engine's hit test, and delete,
+            # rename and wire removal all resolve their target by position -- so from
+            # then on those operations act on whichever of the two the engine picks.
+            x, y = float(at[0]), float(at[1])
+            for ring in range(24):
+                for dx, dy in ((0, 0), (self.DX, 0), (0, self.DY), (self.DX, self.DY),
+                               (-self.DX, 0), (0, -self.DY)):
+                    px, py = x + dx * ring, y + dy * ring
+                    if all(abs(tx - px) > self.COINCIDENT or abs(ty - py) > self.COINCIDENT
+                           for tx, ty in taken_now):
+                        return (px, py)
+            return (x, y)
+        taken = taken_now
         for row in range(200):
             for col in range(self.COLS):
                 x = self.X0 + col * self.DX

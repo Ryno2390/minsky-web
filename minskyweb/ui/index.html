@@ -438,6 +438,7 @@ function edgeOf(b, tx, ty){
 }
 
 function render() {
+  claimed = [];                     // the model we are about to draw is the truth again
   $("#empty").style.display = state.items.length ? "none" : "grid";
   gItems.innerHTML = ""; gWires.innerHTML = "";
   const byIdx = new Map(state.items.map(i => [i.index, i]));
@@ -733,17 +734,25 @@ async function submitAddForm(){
 // right and down, so after thirty additions a third of them sat outside the viewBox with
 // nothing to say so. Only the client knows what is visible, so placement belongs here:
 // find a free slot inside the current view, near the top-left where the eye already is.
+// Slots handed out since the last render. Adding an item is a round trip, so two clicks
+// in quick succession both measured the same `state.items` and got the SAME slot -- the
+// two items landed exactly on top of each other, and the engine resolves delete, rename
+// and wire-removal by position, so from then on those operations hit whichever of the
+// two it happened to pick.
+let claimed = [];
 function freeSlot(){
   if (!view) fitView();
   const DX = 190, DY = 120, PAD = 80;
-  const taken = state.items.map(i => [i.x, i.y]);
+  const taken = state.items.map(i => [i.x, i.y]).concat(claimed);
   const clear = (x, y) => taken.every(([tx, ty]) =>
     Math.abs(tx - x) > DX * 0.55 || Math.abs(ty - y) > DY * 0.55);
   for (let y = view.y + PAD; y < view.y + view.h - PAD; y += DY)
     for (let x = view.x + PAD; x < view.x + view.w - PAD; x += DX)
-      if (clear(x, y)) return [Math.round(x), Math.round(y)];
+      if (clear(x, y)) { const s = [Math.round(x), Math.round(y)]; claimed.push(s); return s; }
   // everything visible is occupied: drop it in the middle and let the user move it
-  return [Math.round(view.x + view.w / 2), Math.round(view.y + view.h / 2)];
+  const mid = [Math.round(view.x + view.w / 2), Math.round(view.y + view.h / 2)];
+  claimed.push(mid);
+  return mid;
 }
 
 document.addEventListener("click", guard(async e => {

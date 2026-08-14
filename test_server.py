@@ -1482,5 +1482,24 @@ with c.websocket_connect("/ws/sim") as ws:
     check("and Stop still works afterwards", stopped)
 
 
+print("\n39. two items never share a point")
+# Adding an item is a round trip, so two clicks in quick succession both measure the
+# same model and ask for the SAME slot. Two items at one point are ambiguous to the
+# engine's hit test, and delete, rename and wire removal all resolve by position -- so
+# from then on those act on whichever of the two the engine happens to pick.
+c.post("/api/clear")
+for n in range(10):
+    c.post("/api/item", json={"kind":"parameter","name":f"p{n}","value":1,"at":[300,300]})
+pts = [(round(i["x"]), round(i["y"])) for i in c.get("/api/state").json()["items"]]
+check("ten items asked to the same point all land apart",
+      len(set(pts)) == len(pts) == 10, f"{len(set(pts))} distinct of {len(pts)}")
+# and an explicit position IS honoured when it is free
+c.post("/api/clear")
+c.post("/api/item", json={"kind":"parameter","name":"here","value":1,"at":[420,260]})
+it = c.get("/api/state").json()["items"][0]
+check("a free position is used exactly as asked",
+      (round(it["x"]), round(it["y"])) == (420, 260), f"{it['x']},{it['y']}")
+
+
 print(f"\n{'ALL PASS' if not FAILED else 'FAILURES: ' + ', '.join(FAILED)}")
 sys.exit(1 if FAILED else 0)

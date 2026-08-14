@@ -1676,6 +1676,48 @@ if os.path.exists(EX):
           c.get("/api/state").json()["groups"][0]["title"] == "Phillips Curve",
           str(c.get("/api/state").json()["groups"][0]["title"]))
 
+    # ungrouping must not be a one-way door: without a way back, a group could only be
+    # restored by undoing the very edits it was opened for
+    def run_to(tmax, steps):
+        with c.websocket_connect("/ws/sim") as ws:
+            ws.send_json({"cmd": "run", "steps": steps, "tmax": tmax})
+            last = None
+            while True:
+                msg = ws.receive_json()
+                if "error" in msg or msg.get("done") or msg.get("stopped"):
+                    return last
+                last = msg
+
+    c.post("/api/load", params={"path": EX})
+    baseline = run_to(10.0, 3000)["values"]
+    c.post("/api/load", params={"path": EX})
+    c.post("/api/group/0/ungroup")
+    band = [i for i in c.get("/api/state").json()["items"] if 250 < i["y"] < 400]
+    box = dict(x0=min(i["x"] for i in band) - 30, x1=max(i["x"] for i in band) + 30,
+               y0=min(i["y"] for i in band) - 30, y1=max(i["y"] for i in band) + 30)
+    r = c.post("/api/group", json=box)
+    check("the freed items can be grouped again", r.status_code == 200, r.text[:70])
+    check("and it reports how many it took in", r.json()["grouped"] == 8,
+          str(r.json().get("grouped")))
+    st3 = c.get("/api/state").json()
+    check("the new group holds them", len(st3["groups"]) == 1)
+    # splitBoundaryCrossingWires replaces each crossing wire with TWO joined by a
+    # generated variable, so the tracked topology has to be re-derived, not remapped
+    check("no wire is left mis-pointed after the split",
+          not any(w.get("desync") for w in st3["wires"]),
+          str([w for w in st3["wires"] if w.get("desync")]))
+    after = run_to(10.0, 3000)["values"]
+    check("and the model computes exactly what it did before the round trip",
+          all(abs(after[k] - baseline[k]) < 1e-9 for k in baseline if k in after)
+          and len(after) >= len(baseline),
+          f"{ {k: (baseline[k], after.get(k)) for k in list(baseline)[:3]} }")
+
+    check("grouping an empty region is refused",
+          c.post("/api/group", json={"x0":5000,"y0":5000,"x1":5100,"y1":5100}
+                 ).status_code == 422)
+    check("and it left no empty group behind",
+          len(c.get("/api/state").json()["groups"]) == 1)
+
     check("ungrouping a group that is not there is refused",
           c.post("/api/group/9/ungroup").status_code == 422)
     check("so is an item reference into a group that is not there",

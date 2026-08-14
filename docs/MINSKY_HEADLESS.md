@@ -790,6 +790,15 @@ variable (`46454790144:w`), which keeps its scope. It raises the same
 "already exists with type" error on a clash — and, like the old route, leaves the change
 applied, so it still needs rolling back.
 
+**Building a group again.** `Canvas::select` takes a `LassoBox`, and pyminsky marshals
+that from a DICT -- passing four floats leaves the selection empty and `groupSelection()`
+then cheerfully creates a group with nothing in it, so the result has to be checked.
+`splitBoundaryCrossingWires()` replaces every wire crossing the new boundary with TWO,
+joined by a generated variable, so a topology record that maps refs across the operation
+is no longer correct; it has to be re-derived from the document. Verified end to end on
+GoodwinLinear02: ungroup, regroup, and the model computes bit-for-bit what it did before
+(K=305.9233, L=101.9744, emprate=0.9270 at t=10.04).
+
 **The way in is `canvas.ungroupItem()`.** Focus the group by its own coordinates and call
 it: on GoodwinLinear02, 18 top-level items and 19 top-level wires become 26 and 27, the
 group is gone, every freed item answers the hit test, and the model still resets. Undo

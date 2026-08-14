@@ -73,6 +73,8 @@ svg#board.panning{cursor:grabbing}
    address it by, so it is not offered as something to drag, rename or delete */
 .ro{cursor:not-allowed;opacity:.55;stroke-dasharray:3 2}
 .gbox{cursor:pointer;stroke-dasharray:4 3}
+.lasso{fill:color-mix(in srgb, var(--grp) 12%, transparent);stroke:var(--grp);
+  stroke-width:1;stroke-dasharray:4 3;vector-effect:non-scaling-stroke;pointer-events:none}
 .ingroup{stroke-dasharray:3 2}
 .gbox.gsel{stroke-dasharray:none}
 .ilabel.dim{opacity:.6;font-size:9px}
@@ -268,6 +270,7 @@ svg#board.panning{cursor:grabbing}
       markerHeight="5" orient="auto-start-reverse">
       <path d="M0,0 L10,5 L0,10 z" fill="var(--line-2)"/></marker></defs>
     <g id="wires"></g><g id="items"></g><path id="drag" class="dragwire"></path>
+    <rect id="lasso" class="lasso" style="display:none"></rect>
   </svg>
   <div class="zoomer">
     <button id="zout" title="Zoom out (⌘−)">−</button>
@@ -961,6 +964,17 @@ board.addEventListener("pointerdown", e => {
     board.setPointerCapture(e.pointerId);
     return;
   }
+  if (e.shiftKey) {
+    // Shift-drag draws a lasso and groups what it covers. Ungrouping is how a group's
+    // contents become editable, so without this it is a one-way door: the group could
+    // only come back by undoing the very edits it was opened for.
+    const p0 = svgPt(e);
+    selWire = null; sel = null; selGroup = null;
+    drag = {mode:"lasso", x0:p0.x, y0:p0.y, x1:p0.x, y1:p0.y};
+    board.setPointerCapture(e.pointerId);
+    render();
+    return;
+  }
   // empty canvas: start a pan. Deselect happens on pointerup only if the pointer did
   // not move, so a pan does not clear the selection.
   selWire = null; selGroup = null;
@@ -981,6 +995,16 @@ board.addEventListener("pointermove", e => {
     return;
   }
   const p = svgPt(e);
+  if (drag.mode === "lasso") {
+    drag.x1 = p.x; drag.y1 = p.y;
+    const el = $("#lasso");
+    el.setAttribute("x", Math.min(drag.x0, p.x));
+    el.setAttribute("y", Math.min(drag.y0, p.y));
+    el.setAttribute("width",  Math.abs(p.x - drag.x0));
+    el.setAttribute("height", Math.abs(p.y - drag.y0));
+    el.style.display = "";
+    return;
+  }
   if (drag.mode === "wire") {
     const dx = Math.max(30, Math.abs(p.x - drag.x0)*0.45);
     $("#drag").setAttribute("d",
@@ -996,6 +1020,16 @@ board.addEventListener("pointerup", guard(async e => {
   if (!drag) return;
   const d = drag; drag = null;
   board.classList.remove("panning");
+  if (d.mode === "lasso") {
+    $("#lasso").style.display = "none";
+    if (Math.abs(d.x1 - d.x0) < 8 || Math.abs(d.y1 - d.y0) < 8) { render(); return; }
+    const r = await api("/group", {method:"POST", body: JSON.stringify(
+      {x0:d.x0, y0:d.y0, x1:d.x1, y1:d.y1})});
+    state = r.state; clearSelection(); render();
+    toast(`Grouped ${r.grouped} items. Wires crossing the boundary were split, `
+          + `which is how Minsky stores a group.`, true);
+    return;
+  }
   if (d.mode === "pan") {
     if (!d.moved) { sel = null; render(); }   // a click, not a pan
     return;

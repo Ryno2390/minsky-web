@@ -146,6 +146,23 @@ def _remap_wires(m, before):
                  if a in remap and c in remap]
 
 
+def resync_wires():
+    """Re-derive the wire topology from the document.
+
+    `_WIRES` records which PORTS each wire joins, because the engine cannot report that.
+    Most edits leave the wires alone, so remapping the item refs is enough. Grouping does
+    not: `splitBoundaryCrossingWires()` replaces every wire crossing the new boundary
+    with TWO, joined by a generated variable, so the record stops describing the model
+    and the canvas would draw wires that are no longer there.
+
+    Writing the document and reading its topology back is exactly the route a load takes.
+    """
+    f = _hist_file()
+    settle()
+    engine().minsky.save(str(f))
+    _WIRES[:] = _topology_from_mky(str(f))
+
+
 def restructuring(fn):
     """Run a mutation that may add, remove or reorder items, and keep `_WIRES` honest."""
     m = engine().minsky
@@ -814,6 +831,13 @@ class AtSpec(BaseModel):
     at: int
 
 
+class LassoSpec(BaseModel):
+    x0: float
+    y0: float
+    x1: float
+    y1: float
+
+
 class RenameSpec(BaseModel):
     name: str
 
@@ -1435,6 +1459,40 @@ def create_app() -> FastAPI:
         # skipping the checkpoint made it the one edit undo could not reach.
         mark_dirty()
         return await call(snapshot)
+
+    @app.post("/api/group")
+    async def make_group(spec: LassoSpec):
+        """Put every item in a rectangle into a new group.
+
+        `Canvas::select` takes a LassoBox, which pyminsky marshals from a dict -- passing
+        four floats leaves the selection EMPTY, and `groupSelection()` then cheerfully
+        creates a group with nothing in it. So check that something actually moved.
+        """
+        require_idle()
+        for pt in ((spec.x0, spec.y0), (spec.x1, spec.y1)):
+            check_at(pt)
+        box = dict(x0=min(spec.x0, spec.x1), y0=min(spec.y0, spec.y1),
+                   x1=max(spec.x0, spec.x1), y1=max(spec.y0, spec.y1))
+        await call(checkpoint)
+
+        def _go():
+            m = engine().minsky
+            top, groups = len(m.model.items), len(m.model.groups)
+            m.canvas.select(box)
+            m.canvas.groupSelection()
+            moved = top - len(m.model.items)
+            if len(m.model.groups) <= groups or moved <= 0:
+                # an empty group, or none at all: put the model back rather than leave a
+                # group with nothing in it sitting on the canvas
+                rollback()
+                raise HTTPException(
+                    422, "nothing in that region to group. Drag around the items you "
+                         "want grouped.")
+            resync_wires()
+            return moved
+        moved = await call(_go)
+        mark_dirty()
+        return dict(grouped=moved, state=await call(snapshot))
 
     @app.post("/api/group/{index}/rename")
     async def rename_group(index: int, spec: RenameSpec):

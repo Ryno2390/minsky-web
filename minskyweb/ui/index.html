@@ -1,0 +1,707 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>Minsky</title>
+<style>
+:root{
+  --bg:#0E1113; --panel:#161A1D; --panel-2:#1D2327; --line:#2A3237; --line-2:#3A454B;
+  --ink:#E6EDF0; --ink-2:#9BAAB3; --ink-3:#6B7C86;
+  --accent:#4C9AFF; --accent-dim:#1E3A5C;
+  --ok:#3FB950; --warn:#D29922; --bad:#F85149;
+  --var:#4C9AFF; --par:#3FB950; --op:#D29922; --godley:#BC8CFF; --int:#FF7B72;
+  --mono:"SF Mono","JetBrains Mono",ui-monospace,Menlo,Consolas,monospace;
+}
+*{box-sizing:border-box}
+html,body{height:100%;margin:0}
+body{background:var(--bg);color:var(--ink);
+  font:14px/1.5 -apple-system,BlinkMacSystemFont,"Inter","Segoe UI",sans-serif;
+  display:grid;grid-template-columns:210px 1fr 320px;grid-template-rows:44px 1fr;
+  grid-template-areas:"top top top" "pal canvas side";overflow:hidden}
+
+/* ---------- top bar ---------- */
+.top{grid-area:top;display:flex;align-items:center;gap:10px;padding:0 14px;
+  background:var(--panel);border-bottom:1px solid var(--line)}
+.brand{font-weight:600;letter-spacing:-.01em;margin-right:6px}
+.brand span{color:var(--ink-3);font-weight:400;font-size:12px;margin-left:7px}
+.spacer{flex:1}
+button{font:inherit;font-size:13px;color:var(--ink);background:var(--panel-2);
+  border:1px solid var(--line-2);border-radius:6px;padding:5px 12px;cursor:pointer;
+  transition:background .12s,border-color .12s}
+button:hover:not(:disabled){background:#242C31;border-color:#4A575E}
+button:disabled{opacity:.4;cursor:not-allowed}
+button.primary{background:var(--accent);border-color:var(--accent);color:#06121F;font-weight:600}
+button.primary:hover:not(:disabled){background:#63A9FF}
+button.danger:hover:not(:disabled){border-color:var(--bad);color:var(--bad)}
+.tval{font-family:var(--mono);font-size:12px;color:var(--ink-2);
+  background:var(--panel-2);border:1px solid var(--line);border-radius:5px;padding:4px 9px}
+
+/* ---------- palette ---------- */
+.pal{grid-area:pal;background:var(--panel);border-right:1px solid var(--line);
+  overflow-y:auto;padding:12px 10px}
+.pal h3,.side h3{font-size:10.5px;letter-spacing:.11em;text-transform:uppercase;
+  color:var(--ink-3);margin:14px 4px 7px;font-weight:600}
+.pal h3:first-child{margin-top:2px}
+.pitem{display:flex;align-items:center;gap:9px;width:100%;padding:6px 9px;margin:2px 0;
+  border-radius:6px;border:1px solid transparent;background:none;cursor:pointer;
+  text-align:left;font-size:13px;color:var(--ink-2)}
+.pitem:hover{background:var(--panel-2);border-color:var(--line);color:var(--ink)}
+.dot{width:8px;height:8px;border-radius:2px;flex:none}
+.grid2{display:grid;grid-template-columns:1fr 1fr;gap:2px}
+
+/* ---------- canvas ---------- */
+.canvas{grid-area:canvas;position:relative;overflow:hidden;background:
+  radial-gradient(circle at 1px 1px,#1B2226 1px,transparent 0) 0 0/22px 22px,var(--bg)}
+svg#board{position:absolute;inset:0;width:100%;height:100%;touch-action:none}
+.item-body{cursor:grab}
+.item-body:active{cursor:grabbing}
+.sel .shape{stroke:var(--accent);stroke-width:2}
+.shape{stroke:var(--line-2);stroke-width:1.5;fill:var(--panel-2)}
+.ilabel{font-family:var(--mono);font-size:11px;fill:var(--ink);pointer-events:none;
+  dominant-baseline:middle;text-anchor:middle}
+.isub{font-family:var(--mono);font-size:9px;fill:var(--ink-3);pointer-events:none;
+  dominant-baseline:middle;text-anchor:middle}
+.port{r:4.5;cursor:crosshair;stroke:var(--bg);stroke-width:1.5}
+.port.output{fill:var(--accent)}
+.port.input{fill:var(--ink-3)}
+.port:hover{r:6.5}
+.port.target{fill:var(--ok);r:7}
+.wire{stroke:var(--line-2);stroke-width:2;fill:none;marker-end:url(#arrow)}
+.wire:hover{stroke:var(--accent)}
+.dragwire{stroke:var(--accent);stroke-width:2;stroke-dasharray:5 4;fill:none;pointer-events:none}
+.empty{position:absolute;inset:0;display:grid;place-content:center;text-align:center;
+  color:var(--ink-3);pointer-events:none;gap:6px}
+.empty b{color:var(--ink-2);font-weight:600;display:block;font-size:15px}
+
+/* ---------- side ---------- */
+.side{grid-area:side;background:var(--panel);border-left:1px solid var(--line);
+  overflow-y:auto;padding:12px 12px 20px}
+.plot{width:100%;height:170px;background:var(--bg);border:1px solid var(--line);
+  border-radius:7px;display:block}
+.row{display:flex;justify-content:space-between;align-items:center;gap:8px;
+  padding:4px 6px;border-radius:5px;font-family:var(--mono);font-size:12px}
+.row:nth-child(odd){background:#12171A}
+.row .k{color:var(--ink-2);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.row .v{color:var(--ink);font-variant-numeric:tabular-nums}
+.row .sw{width:9px;height:9px;border-radius:2px;flex:none;margin-right:6px}
+.row .kk{display:flex;align-items:center;min-width:0}
+.field{display:flex;align-items:center;justify-content:space-between;gap:8px;margin:5px 0}
+.field label{font-size:12px;color:var(--ink-2)}
+.field input{width:96px;font:12px var(--mono);color:var(--ink);background:var(--bg);
+  border:1px solid var(--line-2);border-radius:5px;padding:4px 7px;text-align:right}
+.field input[type=checkbox]{width:auto}
+.toast{position:fixed;left:50%;bottom:22px;transform:translateX(-50%);max-width:560px;
+  background:#2A1416;border:1px solid var(--bad);color:#FFC9C4;padding:10px 14px;
+  border-radius:7px;font-size:13px;z-index:50;box-shadow:0 8px 30px rgba(0,0,0,.5)}
+.toast.ok{background:#0F2417;border-color:var(--ok);color:#B6F0C0}
+.pill{font-size:10.5px;font-family:var(--mono);padding:2px 7px;border-radius:20px;
+  border:1px solid var(--line-2);color:var(--ink-3)}
+.pill.live{border-color:var(--ok);color:var(--ok)}
+.pill.diverged{border-color:var(--bad);color:var(--bad)}
+
+/* ---------- godley editor ---------- */
+.gwrap{position:fixed;inset:0;background:rgba(6,9,11,.72);z-index:40;
+  display:none;place-items:center;padding:30px}
+.gwrap.open{display:grid}
+.gpanel{background:var(--panel);border:1px solid var(--line-2);border-radius:10px;
+  max-width:min(1080px,96vw);max-height:92vh;overflow:auto;box-shadow:0 24px 70px rgba(0,0,0,.6)}
+.ghead{display:flex;align-items:center;gap:12px;padding:14px 18px;
+  border-bottom:1px solid var(--line);position:sticky;top:0;background:var(--panel);z-index:2}
+.ghead b{font-size:15px}
+.gtable{border-collapse:separate;border-spacing:0;margin:16px 18px;font-family:var(--mono);font-size:12px}
+.gtable th,.gtable td{border:1px solid var(--line);padding:0}
+.gtable input{background:transparent;border:0;color:var(--ink);font:inherit;
+  padding:6px 8px;width:118px;outline:none}
+.gtable input:focus{background:var(--accent-dim);box-shadow:inset 0 0 0 1px var(--accent)}
+.gtable td.lab input{width:196px;color:var(--ink-2)}
+.gtable th{background:var(--panel-2);font-weight:600;text-align:left}
+.gtable th select{background:transparent;border:0;color:var(--ink-3);font:10px var(--mono);
+  text-transform:uppercase;letter-spacing:.08em;padding:2px 6px;width:100%;cursor:pointer}
+.gtable th.asset{border-top:2px solid var(--par)}
+.gtable th.liability{border-top:2px solid var(--op)}
+.gtable th.equity{border-top:2px solid var(--godley)}
+.gtable th.noAssetClass{border-top:2px solid var(--line-2)}
+.gtable tr.ic td{background:#12181C}
+.sum{font-family:var(--mono);font-size:11.5px;padding:6px 12px;white-space:nowrap;
+  min-width:92px;text-align:right;background:#12181C}
+.sum.ok{color:var(--ok)}
+.sum.bad{color:var(--bad);font-weight:600}
+.ghint{margin:0 18px 16px;padding:10px 12px;border-radius:7px;background:#12181C;
+  border:1px solid var(--line);color:var(--ink-2);font-size:12.5px;line-height:1.55;max-width:900px}
+.ghint code{background:var(--panel-2);padding:1px 5px;border-radius:3px;font-size:11.5px}
+.gbtn{font-size:11.5px;padding:3px 9px}
+
+/* ---------- file picker ---------- */
+.fwrap{position:fixed;inset:0;background:rgba(6,9,11,.72);z-index:45;display:none;place-items:center;padding:34px}
+.fwrap.open{display:grid}
+.fpanel{background:var(--panel);border:1px solid var(--line-2);border-radius:10px;width:min(620px,94vw);
+  max-height:82vh;display:flex;flex-direction:column;box-shadow:0 24px 70px rgba(0,0,0,.6)}
+.fhead{display:flex;align-items:center;gap:10px;padding:14px 18px;border-bottom:1px solid var(--line)}
+.fsearch{flex:1;background:var(--bg);border:1px solid var(--line-2);border-radius:6px;
+  color:var(--ink);font:13px/1.4 inherit;padding:6px 10px;outline:none}
+.fsearch:focus{border-color:var(--accent)}
+.flist{overflow-y:auto;padding:8px}
+.fdir{font:10.5px var(--mono);letter-spacing:.1em;text-transform:uppercase;color:var(--ink-3);
+  padding:10px 10px 5px}
+.frow{display:flex;align-items:center;justify-content:space-between;gap:10px;width:100%;
+  padding:7px 10px;border-radius:6px;border:1px solid transparent;background:none;cursor:pointer;
+  color:var(--ink-2);font-size:13.5px;text-align:left}
+.frow:hover,.frow.on{background:var(--panel-2);border-color:var(--line);color:var(--ink)}
+.frow .sz{font:11px var(--mono);color:var(--ink-3)}
+.ffoot{display:flex;align-items:center;gap:10px;padding:12px 18px;border-top:1px solid var(--line)}
+.ffoot label{font-size:12.5px;color:var(--ink-3)}
+</style>
+
+<div class="top">
+  <div class="brand">Minsky <span>headless</span></div>
+  <button id="open">Open…</button>
+  <button id="clear">Clear</button>
+  <button id="del" class="danger" disabled>Delete</button>
+  <div class="spacer"></div>
+  <span class="pill" id="status">idle</span>
+  <span class="tval">t = <span id="tval">0</span></span>
+  <button id="stop" disabled>Stop</button>
+  <button id="run" class="primary">Run</button>
+</div>
+
+<div class="pal">
+  <h3>Variables</h3>
+  <button class="pitem" data-add="variable" data-vt="flow"><i class="dot" style="background:var(--var)"></i>Flow</button>
+  <button class="pitem" data-add="variable" data-vt="stock"><i class="dot" style="background:var(--var)"></i>Stock</button>
+  <button class="pitem" data-add="parameter"><i class="dot" style="background:var(--par)"></i>Parameter</button>
+  <h3>Operations</h3>
+  <div class="grid2" id="ops"></div>
+  <h3>Blocks</h3>
+  <button class="pitem" data-add="godley"><i class="dot" style="background:var(--godley)"></i>Godley table</button>
+</div>
+
+<div class="canvas">
+  <svg id="board">
+    <defs><marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="5"
+      markerHeight="5" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="var(--line-2)"/></marker></defs>
+    <g id="wires"></g><g id="items"></g><path id="drag" class="dragwire"></path>
+  </svg>
+  <div class="empty" id="empty">
+    <b>Empty model</b><div>Add a block from the left, then drag between ports to wire.</div>
+  </div>
+</div>
+
+<div class="fwrap" id="fwrap"><div class="fpanel">
+  <div class="fhead">
+    <b style="font-size:15px">Open model</b>
+    <input class="fsearch" id="fsearch" placeholder="Filter…" autocomplete="off">
+    <button class="gbtn" id="fclose">Close</button>
+  </div>
+  <div class="flist" id="flist"></div>
+  <div class="ffoot">
+    <label for="fupload">Or load a file from anywhere:</label>
+    <input type="file" id="fupload" accept=".mky" style="font-size:12px">
+  </div>
+</div></div>
+
+<div class="gwrap" id="gwrap"><div class="gpanel">
+  <div class="ghead">
+    <b>Godley table</b>
+    <span class="pill" id="gbalance">—</span>
+    <div class="spacer"></div>
+    <button class="gbtn" id="gaddflow">+ Flow row</button>
+    <button class="gbtn" id="gaddstock">+ Stock column</button>
+    <button class="gbtn" id="gclose">Close</button>
+  </div>
+  <div id="gbody"></div>
+  <div class="ghint">
+    Row&nbsp;0 names the <b>stocks</b>; row&nbsp;1 is <b>initial conditions</b>; later rows are
+    <b>flows</b>, whose cells name flow variables you drive from the canvas — a bare number
+    balances but moves nothing. Each row must sum to <code>0</code>:
+    assets&nbsp;−&nbsp;liabilities&nbsp;−&nbsp;equity, so a transfer between an asset and a
+    liability takes the <b>same</b> sign on both sides, while two liabilities take opposite
+    signs. An unbalanced initial-conditions row usually means a missing equity column.
+  </div>
+</div></div>
+
+<div class="side">
+  <h3>Simulation</h3>
+  <canvas class="plot" id="plot"></canvas>
+  <div id="series" style="margin-top:8px"></div>
+  <h3>Solver</h3>
+  <div class="field"><label>epsRel</label><input id="epsRel" value="1e-8"></div>
+  <div class="field"><label>epsAbs</label><input id="epsAbs" value="1e-10"></div>
+  <div class="field"><label>order</label><input id="order" value="4"></div>
+  <div class="field"><label>implicit</label><input id="implicit" type="checkbox" checked></div>
+  <div class="field"><label>tmax</label><input id="tmax" value="10"></div>
+  <div class="field"><label>max steps</label><input id="steps" value="2000"></div>
+  <h3>Selection</h3>
+  <div id="selinfo" style="color:var(--ink-3);font-size:12.5px;padding:0 4px">Nothing selected.</div>
+</div>
+
+<script>
+const OPS = ["add","subtract","multiply","divide","integrate","time","exp","ln",
+             "pow","sqrt","min","max","sin","cos"];
+const $ = s => document.querySelector(s);
+
+// Minsky stores names with its own markup and scope prefixes: "C_D" round-trips as
+// "C<sub>D</sub>", and a scoped variable reads ":w" only after "50191504896:". Show
+// something a person recognises; the raw key stays the identity used against the API.
+function pretty(name){
+  return String(name)
+    .replace(/^\d+:/, "")            // numeric scope prefix
+    .replace(/^:/, "")
+    .replace(/<sub>(.*?)<\/sub>/g, "_$1")
+    .replace(/<sup>(.*?)<\/sup>/g, "^$1")
+    .replace(/<[^>]+>/g, "")
+    .replace(/\u00a0/g, " ")
+    .trim();
+}
+const board = $("#board"), gItems = $("#items"), gWires = $("#wires");
+let state = {items:[],wires:[],values:{}}, sel = null, ws = null;
+let series = {}, tSeries = [], colors = {};
+const PALETTE = ["#4C9AFF","#3FB950","#D29922","#BC8CFF","#FF7B72","#39C5CF","#F778BA","#E3B341"];
+
+/* ---------- api ---------- */
+async function api(path, opts={}) {
+  const r = await fetch("/api" + path, {
+    headers:{"content-type":"application/json"}, ...opts});
+  const txt = await r.text();
+  let body; try { body = txt ? JSON.parse(txt) : null; } catch { body = {error:txt}; }
+  if (!r.ok) throw new Error(body?.error || body?.detail || `HTTP ${r.status}`);
+  return body;
+}
+function toast(msg, ok=false) {
+  document.querySelectorAll(".toast").forEach(t=>t.remove());
+  const d = document.createElement("div");
+  d.className = "toast" + (ok ? " ok" : ""); d.textContent = msg;
+  document.body.appendChild(d);
+  setTimeout(()=>d.remove(), ok ? 2200 : 6000);
+}
+const guard = fn => async (...a) => { try { await fn(...a); } catch(e){ toast(e.message); } };
+
+/* ---------- render ---------- */
+function kindOf(ct){
+  if (ct.startsWith("Variable:parameter")) return ["par","param"];
+  if (ct.startsWith("Variable:integral"))  return ["int","integral"];
+  if (ct.startsWith("Variable"))           return ["var", ct.split(":")[1]||"var"];
+  if (ct === "IntOp")                      return ["int","∫"];
+  if (ct.startsWith("Operation"))          return ["op", ct.split(":")[1]||"op"];
+  if (ct.startsWith("Godley"))             return ["godley","godley"];
+  return ["op", ct];
+}
+function render() {
+  $("#empty").style.display = state.items.length ? "none" : "grid";
+  gItems.innerHTML = ""; gWires.innerHTML = "";
+  const byIdx = new Map(state.items.map(i => [i.index, i]));
+
+  for (const w of state.wires) {
+    const c = w.coords;
+    if (!c || c.length < 4) continue;
+    const p = document.createElementNS("http://www.w3.org/2000/svg","path");
+    const [x1,y1] = [c[0],c[1]], [x2,y2] = [c[c.length-2],c[c.length-1]];
+    const dx = Math.max(30, Math.abs(x2-x1)*0.45);
+    p.setAttribute("d", `M${x1},${y1} C${x1+dx},${y1} ${x2-dx},${y2} ${x2},${y2}`);
+    p.setAttribute("class","wire");
+    gWires.appendChild(p);
+  }
+
+  for (const it of state.items) {
+    const [cls, label] = kindOf(it.classType);
+    const g = document.createElementNS("http://www.w3.org/2000/svg","g");
+    g.setAttribute("class","item" + (sel === it.index ? " sel" : ""));
+    const name = pretty(it.name || label);
+    // Engine items are SMALL -- half-widths of 12 to 24px -- while a label like
+    // "multiply" needs ~60. They cannot share a box: sizing to the label puts ports
+    // inside the text, sizing to the ports truncates every name, and sizing to the
+    // furthest port lets the IntOp (whose output sits 78px out) swallow its neighbour.
+    // So the node is drawn at the ENGINE's own extent with the label beneath it, which
+    // is the usual dataflow-graph convention and cannot collide with a port.
+    let hw = 18, hh = 13;
+    for (const p of it.ports) {
+      hw = Math.max(hw, Math.min(30, Math.abs(p.x - it.x)));
+      hh = Math.max(hh, Math.abs(p.y - it.y) + 5);
+    }
+    const L = it.x - hw, R = it.x + hw, T = it.y - hh, B = it.y + hh;
+    for (const p of it.ports) {
+      if (p.x >= L-1 && p.x <= R+1 && p.y >= T-1 && p.y <= B+1) continue;
+      const ax = Math.max(L, Math.min(R, p.x)), ay = Math.max(T, Math.min(B, p.y));
+      const stub = document.createElementNS("http://www.w3.org/2000/svg","line");
+      stub.setAttribute("x1",ax); stub.setAttribute("y1",ay);
+      stub.setAttribute("x2",p.x); stub.setAttribute("y2",p.y);
+      stub.setAttribute("stroke","var(--line-2)"); stub.setAttribute("stroke-width","1.5");
+      g.appendChild(stub);
+    }
+    const shape = document.createElementNS("http://www.w3.org/2000/svg","rect");
+    shape.setAttribute("x", L); shape.setAttribute("y", T);
+    shape.setAttribute("width", hw*2); shape.setAttribute("height", hh*2);
+    shape.setAttribute("rx", cls === "var" || cls === "par" ? 4 : hh);
+    shape.setAttribute("class","shape item-body");
+    shape.style.fill = `color-mix(in srgb, var(--${cls}) 18%, var(--panel-2))`;
+    shape.style.stroke = `var(--${cls})`;
+    shape.dataset.idx = it.index;
+    g.appendChild(shape);
+
+    const glyph = {multiply:"×", add:"+", subtract:"−", divide:"÷", integrate:"∫",
+                   time:"t", exp:"eˣ", ln:"ln", sqrt:"√", pow:"xʸ"}[label] ||
+                  (it.classType === "IntOp" ? "∫" : "");   // the variable is not the operator
+    if (glyph) {
+      const gt = document.createElementNS("http://www.w3.org/2000/svg","text");
+      gt.setAttribute("x", it.x); gt.setAttribute("y", it.y);
+      gt.setAttribute("class","ilabel"); gt.textContent = glyph;
+      g.appendChild(gt);
+    }
+    const t = document.createElementNS("http://www.w3.org/2000/svg","text");
+    t.setAttribute("x", it.x); t.setAttribute("y", B + 13);
+    t.setAttribute("class", glyph ? "isub" : "ilabel");
+    t.textContent = name;
+    g.appendChild(t);
+    for (const p of it.ports) {
+      const c = document.createElementNS("http://www.w3.org/2000/svg","circle");
+      c.setAttribute("cx", p.x); c.setAttribute("cy", p.y);
+      c.setAttribute("class", "port " + p.role);
+      c.dataset.idx = it.index; c.dataset.port = p.index; c.dataset.role = p.role;
+      g.appendChild(c);
+    }
+    gItems.appendChild(g);
+  }
+  const vals = Object.entries(state.values || {}).filter(([k])=>!k.includes(":0"));
+  $("#series").innerHTML = vals.length ? vals.map(([k,v]) => {
+    if (!colors[k]) colors[k] = PALETTE[Object.keys(colors).length % PALETTE.length];
+    const shown = v === null ? "—" : (Math.abs(v) > 1e5 || (v && Math.abs(v) < 1e-3)
+      ? v.toExponential(3) : v.toFixed(4));
+    return `<div class="row"><span class="kk"><i class="sw" style="background:${colors[k]}"></i>
+      <span class="k" title="${k}">${pretty(k)}</span></span><span class="v">${shown}</span></div>`;
+  }).join("") : `<div style="color:var(--ink-3);font-size:12.5px;padding:4px">No variables yet.</div>`;
+  $("#tval").textContent = (state.t ?? 0).toFixed(3);
+  const st = $("#status");
+  if (state.diverged) { st.textContent = "diverged"; st.className = "pill diverged"; }
+  else if (state.running) { st.textContent = "running"; st.className = "pill live"; }
+  else { st.textContent = "idle"; st.className = "pill"; }
+  $("#del").disabled = sel === null;
+  $("#selinfo").textContent = sel === null ? "Nothing selected."
+    : `#${sel} · ${byIdx.get(sel)?.classType ?? "?"}`;
+}
+async function refresh(){ state = await api("/state"); render(); }
+
+/* ---------- palette ---------- */
+$("#ops").innerHTML = OPS.map(o =>
+  `<button class="pitem" data-add="operation" data-op="${o}">
+     <i class="dot" style="background:var(--op)"></i>${o}</button>`).join("");
+
+document.addEventListener("click", guard(async e => {
+  const b = e.target.closest("[data-add]"); if (!b) return;
+  const kind = b.dataset.add;
+  const body = {kind};
+  if (kind === "operation") body.op = b.dataset.op;
+  if (kind === "variable") {
+    body.var_type = b.dataset.vt;
+    const n = prompt(`Name for the ${b.dataset.vt} variable:`); if (!n) return;
+    body.name = n;
+  }
+  if (kind === "parameter") {
+    const n = prompt("Parameter name:"); if (!n) return;
+    const v = prompt(`Value for ${n}:`, "1.0"); if (v === null) return;
+    body.name = n; body.value = parseFloat(v);
+  }
+  const r = await api("/item", {method:"POST", body:JSON.stringify(body)});
+  state = r.state; sel = r.index; render();
+}));
+
+$("#clear").onclick = guard(async () => {
+  state = await api("/clear", {method:"POST"});
+  sel = null; series = {}; tSeries = []; colors = {}; drawPlot(); render();
+});
+$("#del").onclick = guard(async () => {
+  if (sel === null) return;
+  state = await api(`/item/${sel}`, {method:"DELETE"}); sel = null; render();
+});
+
+/* ---------- drag: move items, and wire between ports ---------- */
+let drag = null;
+function svgPt(e){
+  // fitView() sets a viewBox on load, so screen pixels are no longer model units.
+  // Going through the SVG's own inverse CTM keeps drag and wiring correct at any zoom.
+  const pt = board.createSVGPoint();
+  pt.x = e.clientX; pt.y = e.clientY;
+  const m = board.getScreenCTM();
+  if (!m) { const r = board.getBoundingClientRect();
+            return {x: e.clientX - r.left, y: e.clientY - r.top}; }
+  const q = pt.matrixTransform(m.inverse());
+  return {x: q.x, y: q.y};
+}
+board.addEventListener("pointerdown", e => {
+  const port = e.target.closest(".port");
+  if (port) {
+    if (port.dataset.role !== "output") {
+      toast("Wires start at an output port (blue) and end at an input (grey).");
+      return;
+    }
+    drag = {mode:"wire", from:+port.dataset.idx,
+            x0:+port.getAttribute("cx"), y0:+port.getAttribute("cy")};
+    document.querySelectorAll(".port.input").forEach(p=>p.classList.add("target"));
+    board.setPointerCapture(e.pointerId);
+    return;
+  }
+  const body = e.target.closest(".item-body");
+  if (body) {
+    const idx = +body.dataset.idx;
+    if (e.detail >= 2) {
+      const it = state.items.find(i => i.index === idx);
+      if (it && it.classType.includes("Godley")) { openGodley(idx); return; }
+    }
+    sel = idx; render();
+    const it = state.items.find(i => i.index === idx);
+    const p = svgPt(e);
+    drag = {mode:"move", idx, dx: it.x - p.x, dy: it.y - p.y};
+    board.setPointerCapture(e.pointerId);
+    return;
+  }
+  sel = null; render();
+});
+board.addEventListener("pointermove", e => {
+  if (!drag) return;
+  const p = svgPt(e);
+  if (drag.mode === "wire") {
+    const dx = Math.max(30, Math.abs(p.x - drag.x0)*0.45);
+    $("#drag").setAttribute("d",
+      `M${drag.x0},${drag.y0} C${drag.x0+dx},${drag.y0} ${p.x-dx},${p.y} ${p.x},${p.y}`);
+  } else {
+    const g = gItems.children[state.items.findIndex(i=>i.index===drag.idx)];
+    if (g) g.setAttribute("transform",
+      `translate(${p.x + drag.dx - state.items.find(i=>i.index===drag.idx).x},
+                 ${p.y + drag.dy - state.items.find(i=>i.index===drag.idx).y})`);
+  }
+});
+board.addEventListener("pointerup", guard(async e => {
+  if (!drag) return;
+  const d = drag; drag = null;
+  $("#drag").removeAttribute("d");
+  document.querySelectorAll(".port").forEach(p=>p.classList.remove("target"));
+  if (d.mode === "wire") {
+    const tgt = document.elementFromPoint(e.clientX, e.clientY)?.closest(".port");
+    if (!tgt || tgt.dataset.role !== "input") { render(); return; }
+    state = await api("/wire", {method:"POST", body: JSON.stringify(
+      {src:d.from, dst:+tgt.dataset.idx, port:+tgt.dataset.port})});
+    render();
+  } else {
+    const p = svgPt(e);
+    state = await api(`/item/${d.idx}/move`, {method:"POST",
+      body: JSON.stringify({x: p.x + d.dx, y: p.y + d.dy})});
+    render();
+  }
+}));
+
+/* ---------- plot ---------- */
+function drawPlot(){
+  const cv = $("#plot"), dpr = devicePixelRatio || 1;
+  const w = cv.clientWidth, h = cv.clientHeight;
+  cv.width = w*dpr; cv.height = h*dpr;
+  const g = cv.getContext("2d"); g.scale(dpr,dpr); g.clearRect(0,0,w,h);
+  const keys = Object.keys(series).filter(k => series[k].some(v => v !== null));
+  if (!keys.length || tSeries.length < 2){
+    g.fillStyle = "#6B7C86"; g.font = "12px -apple-system,sans-serif";
+    g.textAlign = "center"; g.fillText("Run the model to plot", w/2, h/2); return;
+  }
+  let lo = Infinity, hi = -Infinity;
+  for (const k of keys) for (const v of series[k])
+    if (v !== null && isFinite(v)) { lo = Math.min(lo,v); hi = Math.max(hi,v); }
+  if (!isFinite(lo)) return;
+  if (hi - lo < 1e-12) { hi = lo + 1; lo -= 1; }
+  const pad = (hi-lo)*0.08; lo -= pad; hi += pad;
+  const t0 = tSeries[0], t1 = tSeries[tSeries.length-1] || t0+1;
+  const X = t => 34 + (t-t0)/((t1-t0)||1) * (w-44);
+  const Y = v => h-20 - (v-lo)/(hi-lo) * (h-30);
+  g.strokeStyle = "#2A3237"; g.lineWidth = 1;
+  for (let i=0;i<=3;i++){ const y = 10 + i*(h-30)/3;
+    g.beginPath(); g.moveTo(34,y); g.lineTo(w-10,y); g.stroke(); }
+  g.fillStyle = "#6B7C86"; g.font = "9px ui-monospace,monospace"; g.textAlign = "right";
+  g.fillText(hi.toPrecision(3), 30, 13); g.fillText(lo.toPrecision(3), 30, h-18);
+  for (const k of keys){
+    g.strokeStyle = colors[k] || "#4C9AFF"; g.lineWidth = 1.6;
+    g.beginPath(); let started = false;
+    series[k].forEach((v,i) => {
+      if (v === null || !isFinite(v)) { started = false; return; }
+      const x = X(tSeries[i]), y = Y(v);
+      started ? g.lineTo(x,y) : g.moveTo(x,y); started = true;
+    });
+    g.stroke();
+  }
+}
+addEventListener("resize", drawPlot);
+
+/* ---------- run ---------- */
+$("#run").onclick = guard(async () => {
+  await api("/solver", {method:"POST", body: JSON.stringify({
+    epsRel: parseFloat($("#epsRel").value), epsAbs: parseFloat($("#epsAbs").value),
+    order: parseInt($("#order").value), implicit: $("#implicit").checked})});
+  series = {}; tSeries = []; drawPlot();
+  const proto = location.protocol === "https:" ? "wss" : "ws";
+  ws = new WebSocket(`${proto}://${location.host}/ws/sim`);
+  ws.onopen = () => {
+    $("#run").disabled = true; $("#stop").disabled = false;
+    $("#status").textContent = "running"; $("#status").className = "pill live";
+    ws.send(JSON.stringify({cmd:"run", steps: parseInt($("#steps").value),
+                            tmax: parseFloat($("#tmax").value)}));
+  };
+  ws.onmessage = ev => {
+    const m = JSON.parse(ev.data);
+    if (m.error) { toast(m.error); finish(); return; }
+    if (m.done || m.stopped) {
+      finish();
+      if (m.reason === "diverged") toast("Diverged: " + (m.variables||[]).join(", "));
+      else if (m.done) toast(`Finished (${m.reason})`, true);
+      refresh(); return;
+    }
+    tSeries.push(m.t);
+    for (const [k,v] of Object.entries(m.values || {})) {
+      if (k.includes(":0")) continue;
+      if (!colors[k]) colors[k] = PALETTE[Object.keys(colors).length % PALETTE.length];
+      (series[k] ||= Array(tSeries.length-1).fill(null)).push(v);
+    }
+    for (const k of Object.keys(series))
+      while (series[k].length < tSeries.length) series[k].push(null);
+    $("#tval").textContent = m.t.toFixed(3);
+    if (tSeries.length % 3 === 0) drawPlot();
+  };
+  ws.onclose = finish;
+});
+function finish(){
+  $("#run").disabled = false; $("#stop").disabled = true;
+  const st = $("#status");
+  if (st.textContent === "running") { st.textContent = "idle"; st.className = "pill"; }
+  drawPlot();
+}
+$("#stop").onclick = () => { try { ws?.send(JSON.stringify({cmd:"stop"})); } catch {} };
+addEventListener("keydown", e => {
+  if ((e.key === "Delete" || e.key === "Backspace") && sel !== null
+      && !/INPUT/.test(document.activeElement.tagName)) { e.preventDefault(); $("#del").click(); }
+});
+
+/* ---------- godley editor ---------- */
+let gIdx = null;
+const CLASSES = ["noAssetClass","asset","liability","equity"];
+
+async function openGodley(i){
+  gIdx = i;
+  $("#gwrap").classList.add("open");
+  await drawGodley(await api(`/godley/${i}`));
+}
+function closeGodley(){ $("#gwrap").classList.remove("open"); gIdx = null; refresh(); }
+$("#gclose").onclick = closeGodley;
+$("#gwrap").addEventListener("click", e => { if (e.target.id === "gwrap") closeGodley(); });
+
+async function drawGodley(g){
+  const bad = g.rowSums.map((v,i) => i>0 && v!==null && v.trim()!=="0" ? i : -1)
+                       .filter(i => i>=0);
+  const pill = $("#gbalance");
+  pill.textContent = bad.length ? `${bad.length} row${bad.length>1?"s":""} unbalanced` : "balanced";
+  pill.className = "pill " + (bad.length ? "diverged" : "live");
+
+  let h = `<table class="gtable"><thead><tr>`;
+  h += `<th></th>`;
+  for (let c = 1; c < g.cols; c++) {
+    h += `<th class="${g.classes[c]}"><select data-col="${c}">` +
+      CLASSES.map(k => `<option value="${k}"${k===g.classes[c]?" selected":""}>${
+        k==="noAssetClass"?"unclassified":k}</option>`).join("") + `</select></th>`;
+  }
+  h += `<th style="border-top:0"></th></tr></thead><tbody>`;
+  for (let r = 0; r < g.rows; r++) {
+    h += `<tr class="${g.icRow[r] ? "ic" : ""}">`;
+    for (let c = 0; c < g.cols; c++) {
+      h += `<td class="${c===0?"lab":""}"><input data-r="${r}" data-c="${c}" value="${
+        (g.cells[r][c]||"").replace(/"/g,"&quot;")}"></td>`;
+    }
+    const v = g.rowSums[r];
+    h += r === 0 ? `<td class="sum"></td>`
+       : `<td class="sum ${v && v.trim()==="0" ? "ok":"bad"}">${
+            v === null ? "" : (v.trim()==="0" ? "✓ 0" : "≠ " + v)}</td>`;
+    h += `</tr>`;
+  }
+  $("#gbody").innerHTML = h + `</tbody></table>`;
+
+  $("#gbody").querySelectorAll("input").forEach(inp => {
+    inp.onchange = guard(async () => {
+      const g2 = await api(`/godley/${gIdx}/cell`, {method:"POST", body: JSON.stringify(
+        {row:+inp.dataset.r, col:+inp.dataset.c, value: inp.value})});
+      await drawGodley(g2);
+    });
+  });
+  $("#gbody").querySelectorAll("select").forEach(sel => {
+    sel.onchange = guard(async () => {
+      await drawGodley(await api(`/godley/${gIdx}/class`, {method:"POST",
+        body: JSON.stringify({col:+sel.dataset.col, cls: sel.value})}));
+    });
+  });
+}
+$("#gaddflow").onclick = guard(async () => {
+  const g = await api(`/godley/${gIdx}`);
+  await drawGodley(await api(`/godley/${gIdx}/row/insert`, {method:"POST",
+    body: JSON.stringify({at: g.rows})}));
+});
+$("#gaddstock").onclick = guard(async () => {
+  const g = await api(`/godley/${gIdx}`);
+  await drawGodley(await api(`/godley/${gIdx}/col/insert`, {method:"POST",
+    body: JSON.stringify({at: g.cols})}));
+});
+
+/* ---------- file picker ---------- */
+let fileRoots = [];
+$("#open").onclick = guard(async () => {
+  fileRoots = (await api("/files")).roots;
+  $("#fwrap").classList.add("open");
+  $("#fsearch").value = ""; drawFiles(); $("#fsearch").focus();
+});
+const closeFiles = () => $("#fwrap").classList.remove("open");
+$("#fclose").onclick = closeFiles;
+$("#fwrap").addEventListener("click", e => { if (e.target.id === "fwrap") closeFiles(); });
+$("#fsearch").oninput = drawFiles;
+
+function drawFiles(){
+  const q = $("#fsearch").value.trim().toLowerCase();
+  let h = "", n = 0;
+  for (const r of fileRoots) {
+    const hits = r.files.filter(f => !q || f.name.toLowerCase().includes(q));
+    if (!hits.length) continue;
+    h += `<div class="fdir">${r.dir}</div>`;
+    for (const f of hits) {
+      n++;
+      h += `<button class="frow" data-path="${f.path.replace(/"/g,"&quot;")}">
+        <span>${f.name}</span><span class="sz">${(f.bytes/1024).toFixed(0)} kB</span></button>`;
+    }
+  }
+  $("#flist").innerHTML = n ? h
+    : `<div style="padding:22px;text-align:center;color:var(--ink-3);font-size:13px">
+         No models match. Use the file input below to load one from anywhere.</div>`;
+  $("#flist").querySelectorAll(".frow").forEach(b => {
+    b.onclick = guard(async () => {
+      state = await api(`/load?path=${encodeURIComponent(b.dataset.path)}`, {method:"POST"});
+      afterLoad(b.textContent.trim().split("\n")[0]);
+    });
+  });
+}
+$("#fupload").onchange = guard(async () => {
+  const f = $("#fupload").files[0]; if (!f) return;
+  const fd = new FormData(); fd.append("file", f);
+  const r = await fetch("/api/upload", {method:"POST", body: fd});
+  const body = await r.json();
+  if (!r.ok) throw new Error(body.error || body.detail || `HTTP ${r.status}`);
+  state = body.state; afterLoad(f.name);
+});
+function afterLoad(name){
+  closeFiles(); sel = null; series = {}; tSeries = []; colors = {}; drawPlot();
+  fitView(); render();
+  const d = state.wires.find(w => w.desync);
+  if (d) toast(`Loaded ${name}, but ${d.engine - d.tracked} of ${d.engine} wires could `
+             + `not be traced and are not drawn.`);
+  else toast(`Loaded ${name}: ${state.items.length} items, ${state.wires.length} wires`, true);
+}
+
+// loaded models use the whole canvas; fit them into view
+function fitView(){
+  const xs = state.items.flatMap(i => [i.x, ...i.ports.map(p=>p.x)]);
+  const ys = state.items.flatMap(i => [i.y, ...i.ports.map(p=>p.y)]);
+  if (!xs.length) { board.removeAttribute("viewBox"); return; }
+  const pad = 60;
+  const x0 = Math.min(...xs)-pad, y0 = Math.min(...ys)-pad;
+  const w = Math.max(...xs)-x0+pad, h = Math.max(...ys)-y0+pad;
+  board.setAttribute("viewBox", `${x0} ${y0} ${w} ${h}`);
+  board.setAttribute("preserveAspectRatio", "xMidYMid meet");
+}
+
+refresh().then(drawPlot).catch(e => toast(e.message));
+</script>

@@ -62,24 +62,42 @@ _RUNNING = threading.Event()
 _WIRES: list[tuple[int, int, int, int]] = []
 
 
+def _iter_groups(m):
+    """Every group at every depth, as (ref, raw, parent_ref).
+
+    A group can contain groups: grouping a selection that includes one nests it. Refs are
+    "g0" for a top-level group and "g0.1" for group 1 inside group 0.
+    """
+    def walk(container, path, parent):
+        for gi in range(len(container.groups)):
+            grp = container.groups[gi]
+            ref = f"g{'.'.join(path + [str(gi)])}"
+            yield ref, grp, parent
+            yield from walk(grp, path + [str(gi)], ref)
+    yield from walk(m.model, [], None)
+
+
 def _iter_items(m):
-    """Every item, top level and inside groups, as (ref, raw).
+    """Every item, at every depth, as (ref, raw).
 
     Group members live at `groups[g].items[i]`, NOT in `model.items`, so a model with a
     group renders incomplete unless they are walked -- GoodwinLinear02 shows 18 of its
     26 items otherwise. Their coordinates are ABSOLUTE (verified: group contents sit at
     x 169-331 inside a top-level range of 33-441), so no transform is needed.
 
-    Refs are "3" for a top-level item and "g0:5" for a group member. Group members are
-    read-only here: `Item` addresses `model.items[i]`, so moving or deleting one would
-    need a different path. Rendering them correctly matters more than editing them.
+    Groups NEST, so this recurses. Walking only one level meant the contents of a nested
+    group were absent from the canvas entirely, with nothing to say so -- and a nested
+    group is one lasso away, since grouping a selection that contains a group puts it
+    inside the new one.
+
+    Refs are "3" for a top-level item, "g0:5" for member 5 of group 0, and "g0.1:5" for
+    member 5 of group 1 inside group 0.
     """
     for i in range(len(m.model.items)):
         yield str(i), m.model.items[i]
-    for gi in range(len(m.model.groups)):
-        grp = m.model.groups[gi]
+    for gref, grp, _parent in _iter_groups(m):
         for i in range(len(grp.items)):
-            yield f"g{gi}:{i}", grp.items[i]
+            yield f"{gref}:{i}", grp.items[i]
 
 
 def _identity_list(m):
@@ -173,28 +191,49 @@ def restructuring(fn):
         _remap_wires(m, before)
 
 
+def _group_at(m, path: str):
+    """The group named by a dotted path: "0" is groups[0], "0.1" is its group 1."""
+    node = m.model
+    for part in path.split("."):
+        node = node.groups[int(part)]
+    return node
+
+
 def _resolve(m, ref: str):
     if ":" in ref:
-        g, i = ref[1:].split(":")
-        return m.model.groups[int(g)].items[int(i)]
+        head, _, i = ref.partition(":")
+        return _group_at(m, head[1:]).items[int(i)]
     return m.model.items[int(ref)]
 
 
+def check_group_ref(ref: str):
+    """Validate a group reference ("g0", or "g0.1" for a group inside a group)."""
+    m = engine().minsky
+    if not ref.startswith("g") or not ref[1:]:
+        raise HTTPException(422, f"{ref!r} is not a group reference")
+    node = m.model
+    for part in ref[1:].split("."):
+        if not part.isdigit():
+            raise HTTPException(422, f"{ref!r} is not a group reference")
+        n = len(node.groups)
+        if not 0 <= int(part) < n:
+            raise HTTPException(422, f"there is no group {ref!r} in this model"
+                                     + (f"; it has {n} at that level" if n else ""))
+        node = node.groups[int(part)]
+    return node
+
+
 def check_ref(ref: str) -> str:
-    """Validate an item reference, top level ("3") or inside a group ("g0:5")."""
+    """Validate an item reference: "3", "g0:5", or "g0.1:5" for a nested group."""
     m = engine().minsky
     if ":" in ref:
         head, _, tail = ref.partition(":")
-        if not head.startswith("g") or not head[1:].isdigit() or not tail.isdigit():
+        if not tail.isdigit():
             raise HTTPException(422, f"{ref!r} is not an item reference")
-        gi, ii = int(head[1:]), int(tail)
-        ng = len(m.model.groups)
-        if not 0 <= gi < ng:
-            raise HTTPException(422, f"there is no group {gi} in this model"
-                                     + (f" (0..{ng - 1})" if ng else ""))
-        ni = len(m.model.groups[gi].items)
-        if not 0 <= ii < ni:
-            raise HTTPException(422, f"group {gi} has items 0..{ni - 1}, not {ii}")
+        grp = check_group_ref(head)
+        ni = len(grp.items)
+        if not 0 <= int(tail) < ni:
+            raise HTTPException(422, f"group {head} has items 0..{ni - 1}, not {tail}")
         return ref
     if not ref.lstrip("-").isdigit():
         raise HTTPException(422, f"{ref!r} is not an item reference")
@@ -209,10 +248,10 @@ def refuse_in_group(ref: str, what: str):
     the model the canvas is pointed at and never descends into a group. Acting anyway
     would focus the GROUP and {what} the whole thing."""
     if ":" in ref:
-        gi = int(ref.partition(":")[0][1:])
         title = ""
         try:
-            title = (engine().minsky.model.groups[gi].title() or "").strip()
+            title = (_group_at(engine().minsky,
+                               ref.partition(":")[0][1:]).title() or "").strip()
         except Exception:
             pass
         raise HTTPException(
@@ -891,7 +930,7 @@ def snapshot() -> dict[str, Any]:
                      # canvas what is at a point. Delete and wiring cannot: both find
                      # their target through the canvas hit test, which searches only the
                      # model the canvas is pointed at and never descends into a group.
-                     inGroup=(int(ref.partition(":")[0][1:]) if nested else None),
+                     inGroup=(ref.partition(":")[0] if nested else None),
                      can=dict(move=True, rename=True,
                               delete=not nested, wire=not nested))
         try:
@@ -916,13 +955,14 @@ def snapshot() -> dict[str, Any]:
                 live_ids.add(":" + entry["name"])
         items.append(entry)
     groups = []
-    for gi in range(len(m.model.groups)):
-        grp = m.model.groups[gi]
+    for gref, grp, parent in _iter_groups(m):
         try:
-            groups.append(dict(index=gi, title=(grp.title() or f"group {gi}"),
+            groups.append(dict(ref=gref, parent=parent,
+                               index=(int(gref[1:]) if "." not in gref else None),
+                               title=(grp.title() or f"group {gref[1:]}"),
                                x=grp.x(), y=grp.y(),
                                displayContents=bool(grp.displayContents()),
-                               size=len(grp.items)))
+                               size=len(grp.items), groups=len(grp.groups)))
         except Exception:
             pass
     wires = []
@@ -1477,45 +1517,46 @@ def create_app() -> FastAPI:
 
         def _go():
             m = engine().minsky
-            top, groups = len(m.model.items), len(m.model.groups)
+            # Count TOP-LEVEL ENTITIES, not top-level groups. Grouping a selection that
+            # includes a group puts that group inside the new one, so the top-level group
+            # count is unchanged -- and checking it rolled a perfectly good grouping back
+            # while reporting that nothing had been grouped, which was the opposite of
+            # what had happened. Every real grouping moves at least two things off the top
+            # level and adds one group there, so the total always falls.
+            before = len(m.model.items) + len(m.model.groups)
             m.canvas.select(box)
             m.canvas.groupSelection()
-            moved = top - len(m.model.items)
-            if len(m.model.groups) <= groups or moved <= 0:
-                # an empty group, or none at all: put the model back rather than leave a
-                # group with nothing in it sitting on the canvas
+            after = len(m.model.items) + len(m.model.groups)
+            if after >= before:
+                # nothing moved: groupSelection() still made a group, with nothing in it
                 rollback()
                 raise HTTPException(
-                    422, "nothing in that region to group. Drag around the items you "
-                         "want grouped.")
+                    422, "nothing in that region to group. Drag a box around two or more "
+                         "items -- one on its own has nothing to be grouped with.")
             resync_wires()
-            return moved
+            return before - after + 1
         moved = await call(_go)
         mark_dirty()
         return dict(grouped=moved, state=await call(snapshot))
 
-    @app.post("/api/group/{index}/rename")
-    async def rename_group(index: int, spec: RenameSpec):
+    @app.post("/api/group/{ref}/rename")
+    async def rename_group(ref: str, spec: RenameSpec):
         require_idle()
 
         def _go():
-            m = engine().minsky
-            n = len(m.model.groups)
-            if not 0 <= index < n:
-                raise HTTPException(422, f"there is no group {index} in this model"
-                                         + (f" (0..{n - 1})" if n else ""))
+            grp = check_group_ref(ref)
             want = spec.name.strip()
             if not want:
                 raise HTTPException(422, "a name is required")
-            m.model.groups[index].title(want)
-            return m.model.groups[index].title()
+            grp.title(want)
+            return grp.title()
         await call(checkpoint)
         title = await call(_go)
         mark_dirty()
         return dict(name=title, state=await call(snapshot))
 
-    @app.post("/api/group/{index}/ungroup")
-    async def ungroup(index: int):
+    @app.post("/api/group/{ref}/ungroup")
+    async def ungroup(ref: str):
         """Dissolve a group so its contents become ordinary, editable items.
 
         The canvas hit test -- how delete and wiring find their target -- searches only
@@ -1525,12 +1566,13 @@ def create_app() -> FastAPI:
         take the group apart. Undo puts it back.
         """
         require_idle()
+        await call(check_group_ref, ref)
         await call(checkpoint)
 
         def _go():
             m = engine()
             try:
-                return restructuring(lambda: m.ungroup(index))
+                return restructuring(lambda: m.ungroup(ref))
             except IndexError as ex:
                 raise HTTPException(422, str(ex))
             except RuntimeError as ex:

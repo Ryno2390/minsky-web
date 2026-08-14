@@ -62,8 +62,13 @@ class Item:
     def _raw(self):
         r = self.ref if self.ref is not None else str(self.index)
         if ":" in r:
-            g, i = r[1:].split(":")
-            return self.model.minsky.model.groups[int(g)].items[int(i)]
+            # groups nest, so the group part is a dotted PATH: "g0:5" is member 5 of
+            # group 0, "g0.1:5" is member 5 of group 1 inside group 0
+            head, _, i = r.partition(":")
+            node = self.model.minsky.model
+            for part in head[1:].split("."):
+                node = node.groups[int(part)]
+            return node.items[int(i)]
         return self.model.minsky.model.items[int(r)]
 
     @property
@@ -552,7 +557,7 @@ class Model:
     def move(self, item: Item, x: float, y: float) -> None:
         item.move_to(x, y)
 
-    def ungroup(self, gi: int) -> int:
+    def ungroup(self, gref) -> int:
         """Dissolve group `gi`, leaving its contents as ordinary top-level items.
 
         This is how a group's contents become editable. The canvas hit test -- which is
@@ -565,12 +570,17 @@ class Model:
         and 27, the group is gone, every freed item answers the canvas hit test, and the
         model still resets. Undo puts the group back.
         """
-        n = len(self.minsky.model.groups)
-        if not 0 <= gi < n:
-            raise IndexError(f"group {gi} out of range (0..{n - 1})" if n
-                             else "this model has no groups")
-        g = self.minsky.model.groups[gi]
+        node = self.minsky.model
+        path = str(gref)[1:] if str(gref).startswith("g") else str(gref)
+        for part in path.split("."):
+            n = len(node.groups)
+            if not part.isdigit() or not 0 <= int(part) < n:
+                raise IndexError(f"group {gref} out of range" if n
+                                 else "this model has no groups")
+            node = node.groups[int(part)]
+        g = node
         inner = len(g.items)
+        before_groups = self._count_groups()
         if not self.minsky.canvas.getItemAt(g.x(), g.y()):
             raise RuntimeError(
                 f"no item found at the group's own coordinates "
@@ -578,27 +588,41 @@ class Model:
         before = len(self.minsky.model.items)
         self.minsky.canvas.ungroupItem()
         gained = len(self.minsky.model.items) - before
-        if len(self.minsky.model.groups) >= n:
+        if self._count_groups() >= before_groups:
             raise RuntimeError(
                 "ungrouping left the group in place. The canvas hit test may have "
                 "focused a different item that overlaps it.")
         return gained if gained > 0 else inner
+
+    def _count_groups(self) -> int:
+        """Groups at every depth -- a nested one does not change the top-level count."""
+        def walk(node):
+            return len(node.groups) + sum(walk(node.groups[i])
+                                          for i in range(len(node.groups)))
+        return walk(self.minsky.model)
 
     #: Item classes that carry a user-visible name worth renaming. An operation accepts
     #: a rename call and does nothing with it, so offering one would be a lie.
     RENAMEABLE = ("Variable:", "GodleyIcon")
 
     def all_raw(self):
-        """Every item in the model, top level and inside groups, as (ref, raw).
+        """Every item in the model, at every depth, as (ref, raw).
 
-        Group members live at `groups[g].items[i]`, not in `model.items`.
+        Group members live at `groups[g].items[i]`, not in `model.items`, and groups
+        nest -- so this recurses, or a rename would miss the icons in a nested group and
+        split the variable it was trying to rename.
         """
         for i in range(len(self.minsky.model.items)):
             yield str(i), self.minsky.model.items[i]
-        for g in range(len(self.minsky.model.groups)):
-            grp = self.minsky.model.groups[g]
-            for i in range(len(grp.items)):
-                yield f"g{g}:{i}", grp.items[i]
+
+        def walk(node, path):
+            for gi in range(len(node.groups)):
+                grp = node.groups[gi]
+                ref = "g" + ".".join(path + [str(gi)])
+                for i in range(len(grp.items)):
+                    yield f"{ref}:{i}", grp.items[i]
+                yield from walk(grp, path + [str(gi)])
+        yield from walk(self.minsky.model, [])
 
     def icons_of(self, vid: str):
         """Every icon that refers to the variable `vid`, wherever it lives."""

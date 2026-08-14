@@ -1641,7 +1641,7 @@ if os.path.exists(EX):
     # ungroup is the way in
     st = load_grouped()
     n_items, n_wires = len(st["items"]), len(st["wires"])
-    r = c.post("/api/group/0/ungroup")
+    r = c.post("/api/group/g0/ungroup")
     check("a group can be dissolved", r.status_code == 200, r.text[:70])
     check("and it reports how many items it freed", r.json()["freed"] == 8,
           str(r.json().get("freed")))
@@ -1668,7 +1668,7 @@ if os.path.exists(EX):
           f"{len(back['groups'])} groups, {len(back['items'])} items")
 
     # a group has a name of its own
-    r = c.post("/api/group/0/rename", json={"name": "Wage Dynamics"})
+    r = c.post("/api/group/g0/rename", json={"name": "Wage Dynamics"})
     check("a group can be renamed", r.status_code == 200 and r.json()["name"] == "Wage Dynamics",
           r.text[:70])
     c.post("/api/undo")
@@ -1691,7 +1691,7 @@ if os.path.exists(EX):
     c.post("/api/load", params={"path": EX})
     baseline = run_to(10.0, 3000)["values"]
     c.post("/api/load", params={"path": EX})
-    c.post("/api/group/0/ungroup")
+    c.post("/api/group/g0/ungroup")
     band = [i for i in c.get("/api/state").json()["items"] if 250 < i["y"] < 400]
     box = dict(x0=min(i["x"] for i in band) - 30, x1=max(i["x"] for i in band) + 30,
                y0=min(i["y"] for i in band) - 30, y1=max(i["y"] for i in band) + 30)
@@ -1719,11 +1719,62 @@ if os.path.exists(EX):
           len(c.get("/api/state").json()["groups"]) == 1)
 
     check("ungrouping a group that is not there is refused",
-          c.post("/api/group/9/ungroup").status_code == 422)
+          c.post("/api/group/g9/ungroup").status_code == 422)
     check("so is an item reference into a group that is not there",
           c.post("/api/item/g9:0/move", json={"x":1,"y":1}).status_code == 422)
     check("and a malformed reference",
           c.post("/api/item/nonsense/move", json={"x":1,"y":1}).status_code == 422)
+
+
+print("\n44. groups inside groups")
+# Grouping a selection that contains a group puts that group INSIDE the new one, so a
+# nested group is one lasso away. Walking only one level meant its contents were absent
+# from the canvas entirely, with nothing to say so.
+c.post("/api/clear")
+for n in range(1, 7):
+    c.post("/api/item", json={"kind":"parameter","name":f"p{n}","value":n,
+                              "at":[n*130+100, 320]})
+r = c.post("/api/group", json={"x0":200,"y0":280,"x1":420,"y1":360})
+check("an inner group is made", r.status_code == 200, r.text[:70])
+# the top-level GROUP count does not change when a group is nested, so checking it
+# rolled a perfectly good grouping back and reported that nothing had been grouped
+r = c.post("/api/group", json={"x0":150,"y0":260,"x1":700,"y1":380})
+check("grouping a region containing a group succeeds", r.status_code == 200, r.text[:80])
+st = c.get("/api/state").json()
+refs = sorted(i["ref"] for i in st["items"])
+check("every item is still reported, at every depth", len(refs) == 6, str(refs))
+check("nested refs carry the path",
+      any(r.startswith("g0.0:") for r in refs), str(refs))
+grefs = {g["ref"]: g["parent"] for g in st["groups"]}
+check("and the nested group names its parent",
+      grefs.get("g0.0") == "g0" and grefs.get("g0") is None, str(grefs))
+
+# every item operation must reach the deepest level
+deep = next(r for r in refs if r.startswith("g0.0:"))
+check("a doubly-nested item can be moved",
+      c.post(f"/api/item/{deep}/move", json={"x":700,"y":700}).status_code == 200)
+check("and renamed",
+      c.post(f"/api/item/{deep}/rename", json={"name":"deep"}).status_code == 200)
+check("the rename reached the model",
+      any(i.get("name") == "deep" for i in c.get("/api/state").json()["items"]))
+check("the model still resets", c.post("/api/reset").status_code == 200)
+
+# groups are addressed by ref, so a nested one can be named and dissolved
+check("a nested group can be renamed",
+      c.post("/api/group/g0.0/rename", json={"name":"Inner"}).status_code == 200)
+check("and dissolved on its own",
+      c.post("/api/group/g0.0/ungroup").status_code == 200)
+st = c.get("/api/state").json()
+check("leaving the outer group holding everything",
+      len(st["groups"]) == 1 and len(st["items"]) == 6, f"{len(st['groups'])} groups")
+c.post("/api/undo")
+check("undo restores the nesting",
+      len(c.get("/api/state").json()["groups"]) == 2)
+
+check("a group reference that does not exist is refused",
+      c.post("/api/group/g0.9/ungroup").status_code == 422)
+check("and a malformed group reference",
+      c.post("/api/group/nope/ungroup").status_code == 422)
 
 
 print(f"\n{'ALL PASS' if not FAILED else 'FAILURES: ' + ', '.join(FAILED)}")

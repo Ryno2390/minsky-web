@@ -507,11 +507,21 @@ function render() {
   // piled eight items into a 160x22 box with every label on top of every other. Draw the
   // group instead, as the one thing it is on screen.
   const groups = state.groups || [];
-  const boxes = new Map();                       // group index -> {x,y,w,h}
-  const hidden = new Set();                      // refs not to draw individually
+  const boxes = new Map();                       // group ref -> box on screen
+  const hidden = new Set();                      // item refs not to draw individually
+
+  // "g0.1" names group 1 inside group 0, so anything inside a group starts with its ref
+  // followed by ":" (an item) or "." (a nested group).
+  const isInside = (ref, gref) =>
+    ref.startsWith(gref + ":") || ref.startsWith(gref + ".");
+
+  // Groups arrive outermost-first. A group inside a collapsed group gets no box of its
+  // own -- the box already drawn for its parent stands for it, and for everything at
+  // every depth below.
   for (const grp of groups) {
     if (grp.displayContents) continue;
-    const inside = state.items.filter(i => i.ref && i.ref.startsWith(`g${grp.index}:`));
+    if ([...boxes.keys()].some(k => isInside(grp.ref, k))) continue;
+    const inside = state.items.filter(i => i.ref && isInside(i.ref, grp.ref));
     if (!inside.length) continue;
     inside.forEach(i => hidden.add(i.ref));
     const xs = inside.map(i => i.x), ys = inside.map(i => i.y);
@@ -519,11 +529,13 @@ function render() {
     const cy = (Math.min(...ys) + Math.max(...ys)) / 2;
     const w = Math.max(120, Math.max(...xs) - Math.min(...xs) + 40);
     const h = Math.max(52, Math.max(...ys) - Math.min(...ys) + 40);
-    boxes.set(grp.index, {x: cx - w/2, y: cy - h/2, w, h, cx, cy, grp, count: inside.length});
+    boxes.set(grp.ref, {x: cx - w/2, y: cy - h/2, w, h, cx, cy, grp,
+                        count: inside.length});
   }
   const groupOf = ref => {
-    const m = /^g(\d+):/.exec(String(ref || ""));
-    return m && boxes.has(+m[1]) ? boxes.get(+m[1]) : null;
+    const r = String(ref || "");
+    for (const [gref, box] of boxes) if (isInside(r, gref)) return box;
+    return null;
   };
 
   for (const grp of boxes.values()) {
@@ -533,12 +545,12 @@ function render() {
     r.setAttribute("x",grp.x); r.setAttribute("y",grp.y);
     r.setAttribute("width",grp.w); r.setAttribute("height",grp.h);
     r.setAttribute("rx",8);
-    const gsel = selGroup === grp.grp.index;
+    const gsel = selGroup === grp.grp.ref;
     r.setAttribute("class", "shape gbox" + (gsel ? " gsel" : ""));
     r.style.fill = "color-mix(in srgb, var(--grp) 14%, var(--panel-2))";
     r.style.stroke = gsel ? "var(--accent)" : "var(--grp)";
     if (gsel) r.style.strokeWidth = "2.5";
-    r.dataset.group = grp.grp.index;
+    r.dataset.group = grp.grp.ref;
     g.appendChild(r);
     const t = document.createElementNS("http://www.w3.org/2000/svg","text");
     t.setAttribute("x",grp.cx); t.setAttribute("y",grp.cy + 4);
@@ -550,7 +562,7 @@ function render() {
     n.setAttribute("x",grp.cx); n.setAttribute("y",grp.y + grp.h + 13);
     n.setAttribute("text-anchor","middle");
     n.setAttribute("class","ilabel dim");
-    n.textContent = `${grp.count} items`;
+    n.textContent = `${grp.count} item${grp.count === 1 ? "" : "s"}`;
     g.appendChild(n);
     gItems.appendChild(g);
   }
@@ -723,10 +735,20 @@ function render() {
   $("#undo").disabled = !state.canUndo;
   $("#redo").disabled = !state.canRedo;
   const selGrp = selGroup === null ? null
-    : (state.groups || []).find(g => g.index === selGroup);
+    : (state.groups || []).find(g => g.ref === selGroup);
   $("#selinfo").textContent =
     selWire !== null ? `wire #${selWire} — press Delete to remove it`
-    : selGrp ? `group · ${selGrp.size} items`
+    : selGrp ? (() => {
+        // count everything the box on screen stands for, at every depth -- the group's
+        // own `size` is its DIRECT children only, so a nested group's contents were
+        // missing from a count sitting next to a box that included them
+        const n = state.items.filter(
+          i => i.ref.startsWith(selGrp.ref + ":") || i.ref.startsWith(selGrp.ref + ".")
+        ).length;
+        const subs = (state.groups || []).filter(g => g.parent === selGrp.ref).length;
+        return `group · ${n} item${n === 1 ? "" : "s"}`
+             + (subs ? `, ${subs} sub-group${subs === 1 ? "" : "s"}` : "");
+      })()
     : sel === null ? "Nothing selected."
     : `${sel} · ${byRef.get(sel)?.classType ?? "?"}`;
   $("#groupwrap").style.display = selGrp ? "" : "none";
@@ -935,7 +957,7 @@ board.addEventListener("pointerdown", e => {
   }
   const gbox = e.target.closest("[data-group]");
   if (gbox) {
-    selWire = null; sel = null; selGroup = +gbox.dataset.group;
+    selWire = null; sel = null; selGroup = gbox.dataset.group;
     render();
     return;
   }

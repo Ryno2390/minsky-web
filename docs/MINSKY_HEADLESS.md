@@ -799,6 +799,14 @@ is no longer correct; it has to be re-derived from the document. Verified end to
 GoodwinLinear02: ungroup, regroup, and the model computes bit-for-bit what it did before
 (K=305.9233, L=101.9744, emprate=0.9270 at t=10.04).
 
+**Groups nest.** `groupSelection()` takes `selection.groups` as well as `selection.items`,
+so grouping a region that contains a group puts that group INSIDE the new one — a nested
+group is one lasso away. Two consequences. Anything walking the model has to recurse, or
+the contents of a nested group are absent with nothing to say so. And the top-level GROUP
+count does not rise when a group is nested (the new one replaces the old at the top
+level), so it cannot be used to tell whether a grouping worked: count top-level ENTITIES
+(items + groups) instead, which always falls.
+
 **The way in is `canvas.ungroupItem()`.** Focus the group by its own coordinates and call
 it: on GoodwinLinear02, 18 top-level items and 19 top-level wires become 26 and 27, the
 group is gone, every freed item answers the hit test, and the model still resets. Undo

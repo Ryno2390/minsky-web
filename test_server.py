@@ -2117,5 +2117,84 @@ r = c.post(f"/api/godley/{_g2}/cell", json={"row":1,"col":1,"value":"250"})
 check("but two different numbers still are", bool(r.json().get("conflicts")))
 
 
+print("\n50. operations that used to succeed while changing nothing (or the wrong thing)")
+# Grouping a Godley table re-scopes its stock variables into the group while the table's
+# own references stay outside, so reset fails with "Invalid valueId" -- answered 200 with
+# a full snapshot, on 9 of the 37 shipped examples.
+EXD = "/Users/ryneschultz/minsky/examples"
+_ex = os.path.join(EXD, "LoanableFunds.mky")
+if os.path.exists(_ex):
+    c.post("/api/load", params={"path": _ex})
+    check("the model resets to begin with", c.post("/api/reset").status_code == 200)
+    _st = c.get("/api/state").json()
+    _xs = [i["x"] for i in _st["items"]]; _ys = [i["y"] for i in _st["items"]]
+    r = c.post("/api/group", json={"x0":min(_xs)-50,"y0":min(_ys)-50,
+                                   "x1":max(_xs)+50,"y1":max(_ys)+50})
+    check("grouping a Godley table with everything else is refused",
+          r.status_code == 409, f"{r.status_code}")
+    check("and the model still runs", c.post("/api/reset").status_code == 200)
+    check("with nothing grouped", not c.get("/api/state").json()["groups"])
+
+# set_cell writes "" and icon.update() repopulates the cell from the variable's own init,
+# so clearing an initial condition put the old number straight back
+c.post("/api/clear")
+_g = c.post("/api/item", json={"kind":"godley"}).json()["index"]
+c.post(f"/api/godley/{_g}/cell", json={"row":0,"col":1,"value":"Res"})
+c.post(f"/api/godley/{_g}/cell", json={"row":1,"col":1,"value":"100"})
+r = c.post(f"/api/godley/{_g}/cell", json={"row":1,"col":1,"value":""})
+check("clearing an initial condition does not put the old value back",
+      r.json()["cells"][1][1] != "100", str(r.json()["cells"][1]))
+check("and the engine agrees with the cell",
+      c.get("/api/state").json()["inits"].get(":Res") in ("0", 0),
+      str(c.get("/api/state").json()["inits"]))
+
+# a Godley table owns its stocks' initial conditions and rewrites them at every reset
+r = c.post("/api/init", json={"name": "Res", "value": 777})
+check("setting a table stock's value through /api/init is refused",
+      r.status_code == 409, f"{r.status_code}")
+check("and it says where the value lives", "table" in r.json().get("detail", ""),
+      r.text[:80])
+
+# value_id searched only the top level, so a grouped variable whose name needs mangling
+# resolved to a key nothing uses -- the write reported success and changed nothing
+c.post("/api/clear")
+c.post("/api/item", json={"kind":"parameter","name":"C_D","value":7,"at":[200,300]})
+c.post("/api/item", json={"kind":"parameter","name":"other","value":1,"at":[330,300]})
+c.post("/api/group", json={"x0":150,"y0":260,"x1":400,"y1":340})
+r = c.post("/api/init", json={"name": "C_D", "value": 42})
+check("a value can be set on a variable inside a group", r.status_code == 200,
+      f"{r.status_code}")
+_inits = c.get("/api/state").json()["inits"]
+check("and it reached the real variable, mangled name and all",
+      any(k.startswith(":C") and float(v) == 42.0 for k, v in _inits.items()),
+      str(_inits))
+r = c.post("/api/init", json={"name": "nosuchvariable", "value": 1})
+check("a name no variable has is refused rather than written to a phantom key",
+      r.status_code == 422, f"{r.status_code}")
+
+# deleting a wire is geometric. The straight-chord fallback swept the whole diagram when
+# the tracked wire was not in the engine, and deleted whatever it first crossed.
+_ex2 = os.path.join(EXD, "GoodwinLinear02.mky")
+if os.path.exists(_ex2):
+    _st = c.post("/api/load", params={"path": _ex2}).json()
+    _live = [w for w in _st["wires"] if not w.get("desync")]
+    _wrong = 0
+    for _i in range(len(_live)):
+        _s0 = c.post("/api/load", params={"path": _ex2}).json()
+        _l = [w for w in _s0["wires"] if not w.get("desync")]
+        _b = {(w["src"], w["src_port"], w["dst"], w["dst_port"]) for w in _l}
+        _t = _l[_i]
+        _k = (_t["src"], _t["src_port"], _t["dst"], _t["dst_port"])
+        _r = c.delete(f"/api/wire/{_t['index']}")
+        if _r.status_code != 200:
+            continue                      # refusing is safe; deleting the wrong one is not
+        _a = {(w["src"], w["src_port"], w["dst"], w["dst_port"])
+              for w in _r.json()["wires"] if not w.get("desync")}
+        if _b - _a != {_k}: _wrong += 1
+    check("deleting any wire removes that wire and no other",
+          _wrong == 0, f"{_wrong} of {len(_live)} removed something else")
+check("the chord sweep is gone", "chord, from the destination end back" not in src)
+
+
 print(f"\n{'ALL PASS' if not FAILED else 'FAILURES: ' + ', '.join(FAILED)}")
 sys.exit(1 if FAILED else 0)

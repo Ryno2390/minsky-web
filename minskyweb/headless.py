@@ -187,6 +187,14 @@ class Godley:
         t = self._t
         if not (0 <= r < t.rows() and 0 <= c < t.cols()):
             raise IndexError(f"cell ({r},{c}) outside {t.rows()}x{t.cols()}")
+        # An EMPTIED initial-condition cell is written straight back. set_cell writes ""
+        # into the table, then `icon.update()` takes its `start==npos` branch and
+        # repopulates the cell from the variable's own init -- so clearing the field
+        # succeeded, the old number reappeared, and nothing said why. The engine's own
+        # GodleyIcon::setCell stores a zero for this, so do the same: "no initial
+        # condition" and "an initial condition of zero" are the same thing here.
+        if not text.strip() and t.initialConditionRow(r) and c > 0:
+            text = self.IC_CLEARED
         t.setCell(r, c, text)
         self._commit()
 
@@ -212,6 +220,8 @@ class Godley:
         if at == 0:
             raise ValueError("row 0 holds the stock names; insert below it")
         self._t.insertRow(at); self._commit()
+
+    IC_CLEARED = "0"
 
     def delete_row(self, at: int):
         self._bounds(r=at)
@@ -477,8 +487,10 @@ class Model:
         Every parameter whose name contained an underscore, a caret or a space silently
         had no value, which is most of them in an economic model (`C_D`, `I_D`, `w_s`).
         """
-        for i in range(len(self.minsky.model.items)):
-            it = self.minsky.model.items[i]
+        # Every item at every depth. This walked only model.items, so a variable inside
+        # a GROUP never matched and the fallback wrote to ":name" -- a key no variable
+        # uses. Setting the value reported success and changed nothing.
+        for _ref, it in self.all_raw():
             if not it.classType().startswith("Variable:"):
                 continue
             try:
@@ -486,7 +498,9 @@ class Model:
                     return it.valueId()
             except Exception:
                 continue
-        return f":{name}"
+        raise ValueError(
+            f"no variable called {name!r} in this model. Its value cannot be set, and "
+            f"writing to a name nothing uses would look like it had worked.")
 
     def set_init(self, name: str, value) -> None:
         """Initial value / parameter value. Minsky wants this as a STRING expression."""

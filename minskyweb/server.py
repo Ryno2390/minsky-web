@@ -322,17 +322,23 @@ def _wire_probes(x1, y1, x2, y2):
     tracked topology desynced. Probing near the DESTINATION cannot: an input port accepts
     exactly one wire, so whatever is found within a few pixels of it is the target.
 
-    So probe outward from the destination only, then fall back to the chord and a bezier
-    for long or oddly routed wires.
+    So probe outward from the destination, then fall back to a bezier approximating the
+    drawn curve for long or oddly routed wires.
+
+    There used to be a third fallback that walked the straight CHORD between the ports.
+    It is the one that made a stale tracked wire dangerous: when the wire does not exist
+    in the engine at all, the sweep crosses the whole diagram and `getWireAt` focuses
+    whatever unrelated wire it first meets, which was then deleted and reported as
+    success. Measured against every wire in GoodwinLinear02 (27) and LoanableFunds (83),
+    deleting each in turn from a fresh load: removing the chord sweep changed nothing --
+    the same 2 and 12 were refused with it and without it, and neither ever deleted the
+    wrong wire. It bought no accuracy and carried the whole risk.
     """
     L = math.hypot(x2 - x1, y2 - y1) or 1.0
     ux, uy = (x2 - x1) / L, (y2 - y1) / L
     for d in (4, 6, 8, 11, 14, 18, 23, 28, 35, 45):
         if d < L:
             yield x2 - ux * d, y2 - uy * d
-    for k in range(1, 21):                       # chord, from the destination end back
-        t = 1 - k / 21
-        yield x1 + (x2 - x1) * t, y1 + (y2 - y1) * t
     dx = max(30.0, abs(x2 - x1) * 0.45)
     for k in range(1, 21):
         t = 1 - k / 21; u = 1 - t
@@ -1585,8 +1591,37 @@ def create_app() -> FastAPI:
             # the engine takes the value, stores it as the string "inf", and only then
             # fails -- leaving an initial condition no reset can ever accept
             raise HTTPException(422, "an initial value must be a finite number")
+        # A Godley table owns the initial condition of the stocks it generates: it is
+        # stored in the table's initial-conditions row and rewritten from there at every
+        # reset. Setting it here was accepted, echoed back, shown in the panel -- and
+        # thrown away by the next run.
+        def _owner(name: str):
+            m = engine().minsky
+            for i in range(len(m.model.items)):
+                it = m.model.items[i]
+                if "Godley" not in it.classType():
+                    continue
+                t = it.table
+                for c in range(1, t.cols()):
+                    if (t.getCell(0, c) or "").strip() == name.strip():
+                        return i, (t.title() or "").strip(), c
+            return None
+        owner = await call(_owner, spec.name)
+        if owner:
+            i, title, col = owner
+            raise HTTPException(
+                409, f"{spec.name!r} is a stock of "
+                     f"{('the table ' + repr(title)) if title else f'Godley table {i}'}, "
+                     f"which holds its initial condition in the table's initial-conditions "
+                     f"row. Set it there (column {col}) -- a value set here is rewritten "
+                     f"from the table at the next reset.")
+
         await call(checkpoint)
-        await call(lambda: engine().set_init(spec.name, spec.value))
+        try:
+            await call(lambda: engine().set_init(spec.name, spec.value))
+        except ValueError as ex:
+            rollback()
+            raise HTTPException(422, str(ex))
         mark_dirty()
         return await call(snapshot)
 
@@ -1666,6 +1701,19 @@ def create_app() -> FastAPI:
 
         def _go():
             m = engine().minsky
+            # Does the model reset NOW? If it does and it does not afterwards, the
+            # grouping broke it, and grouping a Godley table does exactly that: the
+            # table's stock variables are re-scoped into the group while the table's own
+            # references are not, so reset fails with "Invalid valueId". That answered
+            # 200 with a full snapshot and left the model unable to run, silently -- on
+            # 9 of the 37 shipped examples.
+            def resets():
+                try:
+                    m.requestReset(); m.reset()
+                    return True
+                except Exception:
+                    return False
+            was_runnable = resets()
             # Count TOP-LEVEL ENTITIES, not top-level groups. Grouping a selection that
             # includes a group puts that group inside the new one, so the top-level group
             # count is unchanged -- and checking it rolled a perfectly good grouping back
@@ -1682,6 +1730,14 @@ def create_app() -> FastAPI:
                 raise HTTPException(
                     422, "nothing in that region to group. Drag a box around two or more "
                          "items -- one on its own has nothing to be grouped with.")
+            if was_runnable and not resets():
+                rollback()
+                raise HTTPException(
+                    409, "grouping those items leaves the model unable to run: the "
+                         "engine re-scopes a Godley table's stock variables into the "
+                         "group while the table's own references stay outside it. "
+                         "Leave the table out of the selection, or group it on its own "
+                         "with everything that refers to it.")
             resync_wires()
             return before - after + 1
         moved = await call(_go)

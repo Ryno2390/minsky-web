@@ -279,7 +279,8 @@ svg#board.panning{cursor:grabbing}
     <button id="zfit" title="Fit model (⌘0)">⤢</button>
   </div>
   <div class="empty" id="empty">
-    <b>Empty model</b><div>Add a block from the left, then drag between ports to wire.</div>
+    <b>Empty model</b><div>Add a block from the left, then drag between ports to wire.<br>
+      Shift-drag a box around several items to group them.</div>
   </div>
 </div>
 
@@ -733,8 +734,8 @@ function render() {
     if (document.activeElement !== $("#gname")) $("#gname").value = pretty(selGrp.title || "");
     $("#gnote").textContent =
       "Delete and wiring find their target through the canvas, which never reaches "
-      + "inside a group. Ungrouping leaves the contents as ordinary items; undo puts "
-      + "the group back.";
+      + "inside a group. Ungrouping leaves the contents as ordinary items. To group "
+      + "them again, shift-drag a box around them.";
   }
 
   // Rename is offered only where there is a name to change. An operation accepts a

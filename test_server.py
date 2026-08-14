@@ -331,5 +331,30 @@ c.post(f"/api/load?path={os.path.expanduser('~/minsky/examples/1Free.mky')}")
 check("loading starts a fresh timeline",
       c.get("/api/state").json()["canUndo"] is False)
 
+print("\n11. a saved model CONTAINING a Godley table reopens exactly")
+# A Godley table's stock and flow variables are regenerated on load rather than stored,
+# so the file has fewer items than the engine materialises. Requiring equal counts made
+# the whole wire trace bail out and report zero wires -- found by using the app.
+c.post("/api/clear")
+p1 = c.post("/api/item", json={"kind":"parameter","name":"c","value":2.5}).json()["index"]
+ig = c.post("/api/item", json={"kind":"operation","op":"integrate"}).json()["index"]
+c.post("/api/wire", json={"src":p1,"dst":ig,"port":1})
+gi = c.post("/api/item", json={"kind":"godley"}).json()["index"]
+c.post(f"/api/godley/{gi}/resize", json={"rows":3,"cols":3})
+for r,cc,v in ((0,1,"Reserves"),(0,2,"Deposits"),(1,0,"Initial Conditions"),
+               (1,1,"100"),(1,2,"100"),(2,0,"Lending"),(2,1,"Lend"),(2,2,"Lend")):
+    c.post(f"/api/godley/{gi}/cell", json={"row":r,"col":cc,"value":v})
+saved = c.post("/api/save", json={"name":"godley-roundtrip"}).json()["saved"]
+n_wires = len([w for w in c.get("/api/state").json()["wires"] if not w.get("desync")])
+c.post("/api/clear")
+back = c.post(f"/api/load?path={saved}").json()
+check("godley model reopens with exact topology",
+      not any(w.get("desync") for w in back["wires"]),
+      f"{len(back['items'])} items, {len(back['wires'])} wires (saved with {n_wires})")
+check("its wires survived", len(back["wires"]) == n_wires,
+      f"{len(back['wires'])} vs {n_wires}")
+g = c.get(f"/api/godley/{gi if gi < len(back['items']) else 0}").json()
+check("its godley table survived", "Reserves" in str(g["cells"]), str(g["cells"][0])[:60])
+
 print(f"\n{'ALL PASS' if not FAILED else 'FAILURES: ' + ', '.join(FAILED)}")
 sys.exit(1 if FAILED else 0)

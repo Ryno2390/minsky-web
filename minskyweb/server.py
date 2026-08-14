@@ -121,6 +121,7 @@ def _topology_from_mky(path: str):
         return []
 
     port_of: dict[str, tuple[str, int]] = {}
+    ftype: dict[str, str] = {}     # file item id -> its declared type
     order: list[str] = []          # file item ids, in file order
     group_members: set[str] = set()
     wires_el = None
@@ -135,6 +136,7 @@ def _topology_from_mky(path: str):
                 port_of[pe.text] = (iid, k)
         if collect_order and "type" in d:
             order.append(iid)
+            ftype[iid] = d["type"].text
 
     for ch in root:
         tag = strip(ch.tag)
@@ -160,10 +162,20 @@ def _topology_from_mky(path: str):
     # (verified 26/26 on GoodwinLinear02).
     ordered = ([i for i in order if i not in group_members]
                + [i for i in order if i in group_members])
-    refs = [ref for ref, _ in _iter_items(engine().minsky)]
-    if len(ordered) != len(refs):
-        return []                       # shapes disagree; report nothing over guessing
-    ref_of = dict(zip(ordered, refs))
+    live = [(ref, it) for ref, it in _iter_items(engine().minsky)]
+
+    # The file's items align with a PREFIX of the engine's, not necessarily all of it.
+    # A Godley table's stock and flow variables are regenerated on load rather than
+    # stored, so a model saved with one has fewer items in the file than in the engine
+    # (5 vs 8 in the case that found this) and they are appended at the end. Requiring
+    # equal lengths made the whole trace bail out and report zero wires.
+    if len(ordered) > len(live):
+        return []
+    for iid, (ref, it) in zip(ordered, live):
+        ty = ftype.get(iid)
+        if ty is not None and ty != it.classType():
+            return []                   # the prefix does not correspond; do not guess
+    ref_of = {iid: ref for iid, (ref, _) in zip(ordered, live)}
 
     topo = []
     for w in wires_el:

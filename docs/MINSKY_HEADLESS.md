@@ -491,3 +491,37 @@ is set on any undo rather than compared against the saved point.
 `test_server.py` section 10 covers it, including that a model still **integrates
 correctly** after undo→redo — a wire record disagreeing with the engine would otherwise
 draw right and compute wrong.
+
+## Findings from actually using it
+
+Four defects that only appear when a person builds a model by hand. None were caught by
+the API-driven tests, because those never render.
+
+**Ports had no radius on a fresh model, so nothing could be wired.** Adding zoom moved
+port radius out of CSS into `applyView()`, which early-returns when no view exists — and
+a view was only established by *opening a file*. Starting from an empty canvas therefore
+gave every port `r=0`: invisible, and a drop landed on the node body instead. The CSS now
+carries a radius as the floor and a view is established before the first paint.
+
+**Clicking an item to select it dirtied the document.** Pointer-down began a move and
+pointer-up POSTed it regardless of distance, so selecting something marked the file
+unsaved, added an undo checkpoint, and made "discard unsaved changes?" appear after the
+user had only looked. A move under half a model unit is now treated as a selection —
+the same distinction already used to separate a pan from a deselect.
+
+**A saved model containing a Godley table reopened with no wires.** A Godley table's stock
+and flow variables are regenerated on load rather than stored, so the file listed 5 items
+where the engine materialised 8. The trace required equal counts and bailed out entirely.
+The file's items in fact align with a *prefix* of the engine's, with the generated ones
+appended, so the alignment now maps the prefix and verifies types rather than demanding
+equality. All 37 shipped examples still load exactly.
+
+**A new Godley table has no flow row.** It opens as 2 rows — headers and initial
+conditions — so a user must press *+ Flow row* before entering anything, while the hint
+text talks about flows. Discoverable, not fixed.
+
+Also noted, not fixed: adding a variable or parameter fires **two chained native
+`prompt()` dialogs**, which block the page, cannot be validated, and cannot be answered
+independently by an automated client. Entering a non-numeric value gets the message
+"parameter needs name and value", which is wrong — a name *was* given; only the value was
+unparseable.

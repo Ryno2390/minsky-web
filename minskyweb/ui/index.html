@@ -62,7 +62,7 @@ svg#board.panning{cursor:grabbing}
   dominant-baseline:middle;text-anchor:middle}
 .isub{font-family:var(--mono);font-size:9px;fill:var(--ink-3);pointer-events:none;
   dominant-baseline:middle;text-anchor:middle}
-.port{cursor:crosshair;stroke:var(--bg);stroke-width:1.5;
+.port{r:4.5;cursor:crosshair;stroke:var(--bg);stroke-width:1.5;
   vector-effect:non-scaling-stroke}
 .port.output{fill:var(--accent)}
 .port.input{fill:var(--ink-3)}
@@ -403,6 +403,10 @@ function render() {
     return `<div class="row"><span class="kk"><i class="sw" style="background:${colors[k]}"></i>
       <span class="k" title="${k}">${pretty(k)}</span></span><span class="v">${shown}</span></div>`;
   }).join("") : `<div style="color:var(--ink-3);font-size:12.5px;padding:4px">No variables yet.</div>`;
+  // A view must exist before the first paint. applyView() early-returns without one,
+  // which left every port with NO r attribute -- radius 0, invisible, undroppable -- on
+  // a fresh model, because only opening a file used to establish the view.
+  if (!view) fitView();
   applyView();          // render() rebuilt the ports; restore their zoom-corrected size
   $("#tval").textContent = (state.t ?? 0).toFixed(3);
   const st = $("#status");
@@ -492,7 +496,7 @@ board.addEventListener("pointerdown", e => {
     sel = idx; render();
     const it = state.items.find(i => i.index === idx);
     const p = svgPt(e);
-    drag = {mode:"move", idx, dx: it.x - p.x, dy: it.y - p.y};
+    drag = {mode:"move", idx, dx: it.x - p.x, dy: it.y - p.y, x0: it.x, y0: it.y};
     board.setPointerCapture(e.pointerId);
     return;
   }
@@ -544,8 +548,13 @@ board.addEventListener("pointerup", guard(async e => {
     render();
   } else {
     const p = svgPt(e);
+    const nx = p.x + d.dx, ny = p.y + d.dy;
+    // Selecting is not editing. Without this, a plain click POSTs a zero-distance move,
+    // which marks the document dirty, adds an undo checkpoint, and makes "discard
+    // unsaved changes?" appear after the user has only looked at something.
+    if (Math.abs(nx - d.x0) < 0.5 && Math.abs(ny - d.y0) < 0.5) { render(); return; }
     state = await api(`/item/${d.idx}/move`, {method:"POST",
-      body: JSON.stringify({x: p.x + d.dx, y: p.y + d.dy})});
+      body: JSON.stringify({x: nx, y: ny})});
     render();
   }
 }));
@@ -904,5 +913,5 @@ addEventListener("keydown", e => {
 });
 addEventListener("resize", () => { if (view) applyView(); });
 
-refresh().then(drawPlot).catch(e => toast(e.message));
+refresh().then(() => { fitView(); drawPlot(); }).catch(e => toast(e.message));
 </script>

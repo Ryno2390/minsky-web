@@ -306,6 +306,15 @@ const OPS = ["add","subtract","multiply","divide","integrate","time","exp","ln",
              "pow","sqrt","min","max","sin","cos"];
 const $ = s => document.querySelector(s);
 
+// Everything that reaches innerHTML goes through this. Model data is NOT trustworthy:
+// Minsky accepts a variable named `<img src=x onerror=...>`, and a .mky file can be given
+// any filename at all, so the file picker rendered attacker-controlled text straight into
+// the page -- verified executing. Minsky's own name mangling escapes some characters,
+// which made variable names look safe by accident; filenames bypass it entirely.
+const esc = v => String(v ?? "")
+  .replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;")
+  .replace(/"/g, "&quot;").replace(/'/g, "&#39;");
+
 // Minsky stores names with its own markup and scope prefixes: "C_D" round-trips as
 // "C<sub>D</sub>", and a scoped variable reads ":w" only after "50191504896:". Show
 // something a person recognises; the raw key stays the identity used against the API.
@@ -325,7 +334,15 @@ function pretty(name){
     .replace(/<sup>(.*?)<\/sup>/g, "^$1")
     .replace(/<[^>]+>/g, "")
     .replace(/\\([A-Za-z]+)/g, (m, w) => GREEK[w] || m)
-    .replace(/\u00a0/g, " ")
+    // Minsky renders a space as U+2423 OPEN BOX in value ids, and U+00A0 elsewhere
+    .replace(/[\u00a0\u2423]/g, " ")
+    // Minsky stores names already entity-encoded, so a name the user typed as <b> comes
+    // back as &lt;b&gt;. Decode for DISPLAY -- esc() re-escapes on the way into the DOM,
+    // so this is for legibility, not a hole. Without it a name shows its own entities.
+    .replace(/&#(\d+);/g, (m, d) => String.fromCharCode(+d))
+    .replace(/&lt;/g, "<").replace(/&gt;/g, ">")
+    .replace(/&quot;/g, '"').replace(/&#39;/g, "'")
+    .replace(/&amp;/g, "&")
     .trim();
 }
 const board = $("#board"), gItems = $("#items"), gWires = $("#wires");
@@ -449,7 +466,8 @@ function render() {
     const shown = v === null ? "—" : (Math.abs(v) > 1e5 || (v && Math.abs(v) < 1e-3)
       ? v.toExponential(3) : v.toFixed(4));
     return `<div class="row"><span class="kk"><i class="sw" style="background:${colors[k]}"></i>
-      <span class="k" title="${k}">${pretty(k)}</span></span><span class="v">${shown}</span></div>`;
+      <span class="k" title="${esc(k)}">${esc(pretty(k))}</span></span>
+      <span class="v">${esc(shown)}</span></div>`;
   }).join("") : `<div style="color:var(--ink-3);font-size:12.5px;padding:4px">No variables yet.</div>`;
   // A view must exist before the first paint. applyView() early-returns without one,
   // which left every port with NO r attribute -- radius 0, invisible, undroppable -- on
@@ -841,8 +859,8 @@ async function drawGodley(g){
     h += `<th class="${g.classes[c]}">` +
       (g.cols > 2 ? `<button class="rm" data-delcol="${c}" title="Remove this stock column">×</button>` : "") +
       `<select data-col="${c}">` +
-      CLASSES.map(k => `<option value="${k}"${k===g.classes[c]?" selected":""}>${
-        k==="noAssetClass"?"unclassified":k}</option>`).join("") + `</select></th>`;
+      CLASSES.map(k => `<option value="${esc(k)}"${k===g.classes[c]?" selected":""}>${
+        esc(k==="noAssetClass"?"unclassified":k)}</option>`).join("") + `</select></th>`;
   }
   h += `<th style="border-top:0"></th><th style="border-top:0"></th></tr></thead><tbody>`;
   // Each cell says what belongs in it. The table's three row kinds mean three different
@@ -862,13 +880,12 @@ async function drawGodley(g){
     h += `<tr class="${g.icRow[r] ? "ic" : ""}">`;
     for (let c = 0; c < g.cols; c++) {
       h += `<td class="${c===0?"lab":""}"><input data-r="${r}" data-c="${c}" ` +
-           `placeholder="${hint(r,c)}" value="${
-        (g.cells[r][c]||"").replace(/"/g,"&quot;")}"></td>`;
+           `placeholder="${esc(hint(r,c))}" value="${esc(g.cells[r][c] || "")}"></td>`;
     }
     const v = g.rowSums[r];
     h += r === 0 ? `<td class="sum"></td>`
        : `<td class="sum ${v && v.trim()==="0" ? "ok":"bad"}">${
-            v === null ? "" : (v.trim()==="0" ? "✓ 0" : "≠ " + v)}</td>`;
+            v === null ? "" : (v.trim()==="0" ? "✓ 0" : "≠ " + esc(v))}</td>`;
     // row 0 names the stocks and the initial-conditions row is structural; neither can go
     const removable = r > 0 && !g.icRow[r];
     h += `<td style="border:0;padding:0 2px">${removable
@@ -1010,11 +1027,12 @@ function drawFiles(){
   for (const r of fileRoots) {
     const hits = r.files.filter(f => !q || f.name.toLowerCase().includes(q));
     if (!hits.length) continue;
-    h += `<div class="fdir">${r.dir}</div>`;
+    h += `<div class="fdir">${esc(r.dir)}</div>`;
     for (const f of hits) {
       n++;
-      h += `<button class="frow" data-path="${f.path.replace(/"/g,"&quot;")}">
-        <span>${f.name}</span><span class="sz">${(f.bytes/1024).toFixed(0)} kB</span></button>`;
+      h += `<button class="frow" data-path="${esc(f.path)}">
+        <span>${esc(f.name)}</span>` +
+        `<span class="sz">${(f.bytes/1024).toFixed(0)} kB</span></button>`;
     }
   }
   $("#flist").innerHTML = n ? h

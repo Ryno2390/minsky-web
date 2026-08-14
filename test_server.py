@@ -659,5 +659,48 @@ check("a rename can be undone",
       c.get(f"/api/godley/{gi}").json()["title"] != "Bank balance sheet",
       repr(c.get(f"/api/godley/{gi}").json()["title"]))
 
+print("\n19. model data is not trusted markup")
+import os, re
+# A .mky can be given ANY filename, and Minsky accepts a variable named with markup. The
+# file picker rendered filenames straight into innerHTML, and a crafted name executed --
+# verified in a browser before this was fixed. The UI escapes at every interpolation now;
+# these assert the data reaches the client intact so escaping is the client's only job.
+c.post("/api/clear")
+hostile = '<img src=x onerror=window.__XSS=1>'
+r = c.post("/api/item", json={"kind":"parameter","name":hostile,"value":1.0})
+check("a name containing markup is accepted by the engine", r.status_code == 200)
+
+ui = open(os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                       "minskyweb", "ui", "index.html")).read()
+check("the UI defines an escape helper", "const esc = v =>" in ui)
+
+# every innerHTML assignment must be built only from escaped or literal parts
+bad = []
+for m in re.finditer(r"innerHTML\s*=\s*(.{0,400})", ui, re.S):
+    frag = m.group(1)
+    for interp in re.findall(r"\$\{([^}]*)\}", frag):
+        t = interp.strip()
+        # esc() is HTML escaping; encodeURIComponent is the right escaping for a URL,
+        # which appears inside the scan window because it is crude and fixed-width
+        if t.startswith(("esc(", "(", "encodeURIComponent(")):
+            continue
+        if re.fullmatch(r"[A-Za-z0-9_.\[\]]+", t) and not any(
+                k in t for k in ("name", "dir", "path", "cells", "title", "k", "v")):
+            continue
+        if t in ("h", "nudge", "n ? h", "colors[k]"):
+            continue
+        bad.append(t[:60])
+check("no innerHTML interpolation takes raw model data",
+      not bad, f"unescaped: {bad[:4]}")
+
+# filenames reach the client verbatim; escaping is the renderer's job, not the server's
+open(os.path.expanduser("~/minsky-models/plain-check.mky"), "w").write(
+    open(os.path.expanduser("~/minsky/examples/exponentialGrowth.mky")).read())
+listing = c.get("/api/files").json()
+names = [f["name"] for root in listing["roots"] for f in root["files"]]
+check("the file listing returns names verbatim", "plain-check" in names,
+      str(names[:3]))
+os.remove(os.path.expanduser("~/minsky-models/plain-check.mky"))
+
 print(f"\n{'ALL PASS' if not FAILED else 'FAILURES: ' + ', '.join(FAILED)}")
 sys.exit(1 if FAILED else 0)

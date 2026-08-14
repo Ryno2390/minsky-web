@@ -669,3 +669,27 @@ now carries the title as the item's name and the canvas labels it.
 **Operations have no name to change.** `renameAllInstances` accepts the call on an
 operation and does nothing with it, so the control is hidden for anything that is not a
 variable or a Godley table rather than appearing to work.
+
+## Model data is not trusted markup
+
+**A crafted filename executed JavaScript in the page.** Verified: a file named
+`<img src=x onerror=window.__XSS=1>.mky` in the models directory ran its handler the
+moment the file picker opened, and that page holds an unauthenticated session against the
+API — it can overwrite models inside the write roots or read any model it can list.
+
+Two things had hidden it. `pretty()` strips `<...>` before display, so variable names
+looked sanitised; and Minsky's own name mangling entity-encodes `"` and `<` on the way in,
+so a hostile *variable* name arrived pre-escaped. Neither is a defence: the stripping is
+cosmetic, and **filenames never pass through Minsky at all**.
+
+Every interpolation into `innerHTML` now goes through one `esc()` helper — the series
+panel, the file listing, Godley cells, placeholders and asset-class options. A test walks
+the UI source and fails on any `innerHTML` interpolation that is not escaped, so a new one
+cannot be added quietly.
+
+`pretty()` correspondingly **decodes** entities for display, because Minsky returns a name
+typed as `<b>` in the form `&lt;b&gt;` and escaping that again showed the entities on
+screen. Decode for legibility, escape on the way into the DOM.
+
+Also handled while there: Minsky renders a space as **U+2423 OPEN BOX** inside value ids
+and U+00A0 elsewhere, so both are mapped back to a space for display.

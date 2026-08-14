@@ -1055,6 +1055,25 @@ def create_app() -> FastAPI:
                 422, f"not a number: {', '.join(sorted(bad))}")
         kw = {k: v for k, v in spec.model_dump().items() if v is not None}
 
+        # The engine only dispatches orders 1, 2 and 4 (rungeKutta.cc:91); anything else
+        # throws "order N solver not supported" at reset time, long after the value was
+        # accepted, stored, reported back to the panel and written into the saved file.
+        # Refuse it here, while there is still something to say about it.
+        if "order" in kw and kw["order"] not in (1, 2, 4):
+            raise HTTPException(422, f"solver order must be 1, 2 or 4, not {kw['order']}")
+        for k in ("epsAbs", "epsRel"):
+            if k in kw and not kw[k] > 0:
+                raise HTTPException(422, f"{k} must be greater than zero")
+        for k in ("t0", "tmax"):
+            if k in kw and not math.isfinite(kw[k]):
+                raise HTTPException(422, f"{k} must be a finite number")
+        t0 = kw.get("t0", await call(lambda: engine().minsky.t0()))
+        tm = kw.get("tmax")
+        if tm is not None and tm <= t0:
+            raise HTTPException(422, f"tmax ({tm}) must be later than t0 ({t0})")
+
+        await call(checkpoint)
+
         def _cfg():
             # configure() merges with SANE_SOLVER, so a partial payload silently reset the
             # fields the caller did not send: posting {"order": 4} put epsRel back to 1e-8
@@ -1064,6 +1083,10 @@ def create_app() -> FastAPI:
                 if k in ("epsRel", "epsAbs", "order", "implicit", "t0", "tmax"):
                     getattr(m.minsky, k)(v)
         await call(_cfg)
+        # These are saved with the document, so a change here is a change to the model:
+        # leaving dirty false left the Save button greyed out over an unsaved change, and
+        # skipping the checkpoint made it the one edit undo could not reach.
+        mark_dirty()
         return await call(snapshot)
 
     @app.post("/api/reset")
@@ -1220,7 +1243,12 @@ def create_app() -> FastAPI:
                     await ws.send_json({"error": str(ex)})
                     return
                 if tmax is not None:
+                    # tmax is part of the saved document, not a transient run argument,
+                    # so a run edits the model. Announce it, or Save silently persists a
+                    # horizon the user never chose to store.
+                    await call(checkpoint)
                     await call(lambda: engine().minsky.tmax(float(tmax)))
+                    mark_dirty()
 
                 names = await call(
                     lambda: [k for k in engine().minsky.variableValues.keys()

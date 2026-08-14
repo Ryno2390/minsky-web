@@ -1136,5 +1136,36 @@ check("no desync anywhere in that sequence",
       not any(w.get("desync") for w in c.get("/api/state").json()["wires"]))
 
 
+print("\n32. the solver panel cannot set something no run can use")
+c.post("/api/clear")
+for body, why in ((({"order": 3}), "order 3"), (({"order": 0}), "order 0"),
+                  (({"epsAbs": 0}), "epsAbs 0"), (({"epsAbs": -1}), "epsAbs -1"),
+                  (({"epsRel": 0}), "epsRel 0")):
+    # the engine dispatches orders 1, 2 and 4 only, and throws at RESET time -- long
+    # after the value was accepted, echoed back to the panel and written into the file
+    r = c.post("/api/solver", json=body)
+    check(f"{why} is refused", r.status_code == 422, f"{r.status_code} {r.text[:60]}")
+for body, why in ((({"order": 1, "implicit": False}), "order 1 explicit (Euler)"),
+                  (({"order": 2, "implicit": True}), "order 2 implicit"),
+                  (({"order": 4, "epsAbs": 1e-9}), "order 4 with a tight tolerance")):
+    r = c.post("/api/solver", json=body)
+    check(f"{why} is accepted", r.status_code == 200, f"{r.status_code} {r.text[:60]}")
+    check(f"and a model set to {why} resets", c.post("/api/reset").status_code == 200)
+
+# solver settings are saved with the document, so changing them changes the model
+c.post("/api/clear")
+c.post("/api/item", json={"kind": "parameter", "name": "c", "value": 1})
+c.post("/api/save", json={"name": "solver-probe"})
+check("saving clears dirty", c.get("/api/state").json()["dirty"] is False)
+c.post("/api/solver", json={"order": 2})
+st = c.get("/api/state").json()
+check("a solver change marks the model dirty", st["dirty"] is True)
+check("and is undoable", st["canUndo"] is True)
+c.post("/api/undo")
+check("undo puts the solver back",
+      c.get("/api/state").json()["solver"]["order"] == 4,
+      str(c.get("/api/state").json()["solver"]["order"]))
+
+
 print(f"\n{'ALL PASS' if not FAILED else 'FAILURES: ' + ', '.join(FAILED)}")
 sys.exit(1 if FAILED else 0)

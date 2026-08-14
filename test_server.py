@@ -1403,5 +1403,31 @@ check("and the report names both values",
       str(r["conflicts"][0]["shown"]))
 
 
+print("\n37. what is on screen is what is in the file")
+from minskyweb.server import SAVE_DIR
+c.post("/api/clear")
+gi = c.post("/api/item", json={"kind":"godley","name":"Bank"}).json()["index"]
+c.post(f"/api/godley/{gi}/resize", json={"rows":4,"cols":5})
+for col, lab in ((1,"A"),(2,"B"),(3,"C"),(4,"D")):
+    c.post(f"/api/godley/{gi}/cell", json={"row":0,"col":col,"value":lab})
+for col, cl in ((1,"asset"),(2,"liability"),(3,"equity"),(4,"asset")):
+    c.post(f"/api/godley/{gi}/class", json={"col":col,"cls":cl})
+# writing the document groups a table's columns by asset class and appends an empty
+# column for any class it lacks, so the file did not match the screen and the user only
+# found out on reopening. Saving now reconciles the two.
+r = c.post("/api/save", json={"name": "colorder-probe"}).json()
+try:
+    on_screen = c.get(f"/api/godley/{gi}").json()["cells"][0]
+    c.post("/api/clear")
+    c.post("/api/load", params={"path": r["saved"]})
+    reopened = c.get(f"/api/godley/{gi}").json()["cells"][0]
+    check("a saved table reopens exactly as it was left",
+          on_screen == reopened, f"{on_screen} vs {reopened}")
+    check("and the columns are in the engine's stored order",
+          on_screen == ["", "A", "D", "B", "C"], str(on_screen))
+finally:
+    (SAVE_DIR / "colorder-probe.mky").unlink(missing_ok=True)
+
+
 print(f"\n{'ALL PASS' if not FAILED else 'FAILURES: ' + ', '.join(FAILED)}")
 sys.exit(1 if FAILED else 0)

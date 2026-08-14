@@ -1467,10 +1467,23 @@ def create_app() -> FastAPI:
             dest = check_save_path(_CURRENT)     # plain Save, re-validated
         else:
             raise HTTPException(422, "nothing to save to yet -- use Save As")
-        await call(lambda: engine().minsky.save(str(dest)))
+        def _write():
+            m = engine().minsky
+            settle()
+            m.save(str(dest))
+            # A Godley table is not STORED the way it is displayed: writing the document
+            # groups its columns by asset class -- assets, then liabilities, then equity
+            # -- and appends an empty column for any class the table lacks. A table
+            # edited to read A B C D came back as A D B C with an extra column, and
+            # nothing said so: the file simply did not match the screen, and the user
+            # only found out on reopening it. Read the file back, so that from the moment
+            # of saving what is on screen IS what is in the file.
+            restructuring(lambda: m.load(str(dest)))
+        await call(_write)
         _CURRENT = str(dest)
         mark_dirty(False)
-        return dict(saved=str(dest), name=dest.stem, dirty=False)
+        return dict(saved=str(dest), name=dest.stem, dirty=False,
+                    state=await call(snapshot))
 
     @app.get("/api/download")
     async def download():

@@ -1335,5 +1335,73 @@ check("a move to a nonsense coordinate is refused too",
                                     "at":[300,300]}).json()["index"]) == 422)
 
 
+print("\n36. Godley tables and the rest of the model")
+def _gwire(c):
+    """A table with two stocks, plus an unrelated wire ABOVE it in the item list."""
+    c.post("/api/clear")
+    g = c.post("/api/item", json={"kind":"godley"}).json()["index"]
+    for col, nm in ((1, "Reserves"), (2, "Deposits")):
+        c.post(f"/api/godley/{g}/cell", json={"row":0,"col":col,"value":nm})
+    p = c.post("/api/item", json={"kind":"parameter","name":"c","value":2}).json()["index"]
+    i = c.post("/api/item", json={"kind":"operation","op":"integrate"}).json()["index"]
+    c.post("/api/wire", json={"src":p,"dst":i,"port":1})
+    return g
+
+def _wire_ends(c):
+    st = c.get("/api/state").json()
+    items = {i["index"]: i["classType"] for i in st["items"]}
+    live = [w for w in st["wires"] if not w.get("desync")]
+    return [(items.get(int(w["src"]), "GONE"), items.get(int(w["dst"]), "GONE"))
+            for w in live], any(w.get("desync") for w in st["wires"])
+
+# a table generates and destroys variables as its headers are typed, and the engine
+# regenerates them at the END of model.items -- so both of these move other items
+g = _gwire(c)
+c.post(f"/api/godley/{g}/cell", json={"row":0,"col":2,"value":""})   # removes a variable
+ends, desync = _wire_ends(c)
+check("blanking a stock header leaves the wire on its own items",
+      ends == [("Variable:parameter", "IntOp")] and not desync, str(ends))
+
+g = _gwire(c)
+c.post(f"/api/godley/{g}/cell", json={"row":0,"col":1,"value":"Cash"})  # reorders items
+ends, desync = _wire_ends(c)
+check("renaming a stock header leaves the wire on its own items",
+      ends == [("Variable:parameter", "IntOp")] and not desync, str(ends))
+
+g = _gwire(c)
+c.post(f"/api/godley/{g}/row/insert", json={"at": 2})
+ends, _ = _wire_ends(c)
+check("inserting a row leaves the wire alone", ends == [("Variable:parameter", "IntOp")],
+      str(ends))
+
+# set_cell writes the cell and THEN commits it; when the commit throws the API said 400
+# while the cell was already written and the model could no longer reset
+c.post("/api/clear")
+c.post("/api/item", json={"kind":"variable","name":"Clash","var_type":"flow"})
+g = c.post("/api/item", json={"kind":"godley"}).json()["index"]
+r = c.post(f"/api/godley/{g}/cell", json={"row":0,"col":1,"value":"Clash"})
+check("a header clashing with another variable type is refused", r.status_code == 400)
+check("and the cell was not written",
+      c.get(f"/api/godley/{g}").json()["cells"][0][1] == "",
+      str(c.get(f"/api/godley/{g}").json()["cells"][0]))
+check("so the model still resets", c.post("/api/reset").status_code == 200)
+
+# two tables may name the same stock -- one account on both sides of a transaction --
+# but there is one variable behind it, so one initial condition. Each table stored and
+# showed its own, and the engine used whichever was written last.
+c.post("/api/clear")
+g1 = c.post("/api/item", json={"kind":"godley"}).json()["index"]
+g2 = c.post("/api/item", json={"kind":"godley"}).json()["index"]
+for g in (g1, g2):
+    c.post(f"/api/godley/{g}/cell", json={"row":0,"col":1,"value":"Shared"})
+c.post(f"/api/godley/{g1}/cell", json={"row":1,"col":1,"value":"100"})
+r = c.post(f"/api/godley/{g2}/cell", json={"row":1,"col":1,"value":"250"}).json()
+check("two tables disagreeing about one stock's initial value is reported",
+      bool(r.get("conflicts")), str(r.get("conflicts"))[:80])
+check("and the report names both values",
+      {v["value"] for v in r["conflicts"][0]["shown"]} == {"100", "250"},
+      str(r["conflicts"][0]["shown"]))
+
+
 print(f"\n{'ALL PASS' if not FAILED else 'FAILURES: ' + ', '.join(FAILED)}")
 sys.exit(1 if FAILED else 0)

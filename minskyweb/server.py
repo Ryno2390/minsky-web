@@ -94,33 +94,66 @@ def _identity_list(m):
             nm = it.name()
         except Exception:
             nm = ""
-        out.append((ref, it.classType(), nm))
+        out.append((ref, it.classType(), nm, round(it.x(), 1), round(it.y(), 1)))
     return out
 
 
 def _remap_wires(m, before):
-    """Rebuild `_WIRES` refs after a delete, by matching items rather than counting.
+    """Rebuild `_WIRES` refs after a mutation, by matching items rather than counting.
 
-    Deleting ONE thing can remove SEVERAL items: a Godley icon takes its generated stock
-    variables with it, and an IntOp takes its variable. The old code subtracted 1 from
-    every higher index, so deleting a Godley icon that sat below a wire left both
-    endpoints pointing at the wrong items. The wire then failed to resolve and was
-    silently skipped at render time -- and because the tracked count still matched the
-    engine's, `desync` stayed quiet. The user's wire simply disappeared from the canvas.
+    Item indices are not stable across anything structural:
 
-    A delete only removes items, it never reorders the survivors, so walking the two
-    fingerprints in step gives an exact old-to-new map: when the current new item matches,
-    the old item survived; when it does not, that old item is one of the removed ones and
-    only the old cursor advances.
+      * Deleting ONE thing can remove SEVERAL items -- a Godley icon takes every stock
+        variable it generated with it, an IntOp takes its variable. Subtracting 1 from
+        each higher ref left a wire above the table pointing at the wrong items.
+      * Godley tables generate and destroy variables as their headers are typed, and the
+        engine regenerates them at the END of model.items. Renaming a stock header moves
+        it from index 1 to index 4 and shifts everything in between.
+
+    Neither is reported. In the first case the wire failed to resolve and was silently
+    dropped from the canvas; in the second it resolved to two items that had never been
+    connected and was drawn between them. The tracked COUNT still matched the engine's
+    both times, so `desync` stayed quiet.
+
+    Matching runs in layers, strongest evidence first, because no single property
+    survives every mutation: a rename changes the name, a Godley edit changes the index,
+    and a regenerated variable changes its position. Each layer only considers items no
+    earlier layer has claimed, and both lists stay in order, so equally-good candidates
+    pair up the way they are laid out.
     """
     after = _identity_list(m)
-    remap, j = {}, 0
-    for old in before:
-        if j < len(after) and after[j][1:] == old[1:]:
-            remap[old[0]] = after[j][0]
-            j += 1
+    pending, free, remap = list(before), list(after), {}
+
+    def take(same):
+        nonlocal pending
+        rest = []
+        for b in pending:
+            hit = next((a for a in free if same(b, a)), None)
+            if hit is None:
+                rest.append(b)
+            else:
+                free.remove(hit)
+                remap[b[0]] = hit[0]
+        pending = rest
+
+    take(lambda b, a: a[0] == b[0] and a[1:3] == b[1:3])   # same slot, same identity
+    take(lambda b, a: a[1:3] == b[1:3])                    # same identity, moved slot
+    take(lambda b, a: a[0] == b[0] and a[1] == b[1])       # same slot and class: renamed
+    take(lambda b, a: a[1] == b[1] and a[3:] == b[3:])     # same class, same place
+    take(lambda b, a: a[1] == b[1])                        # same class, in order
+
     _WIRES[:] = [(remap[a], b, remap[c], d) for a, b, c, d in _WIRES
                  if a in remap and c in remap]
+
+
+def restructuring(fn):
+    """Run a mutation that may add, remove or reorder items, and keep `_WIRES` honest."""
+    m = engine().minsky
+    before = _identity_list(m)
+    try:
+        return fn()
+    finally:
+        _remap_wires(m, before)
 
 
 def _resolve(m, ref: str):
@@ -1015,7 +1048,7 @@ def create_app() -> FastAPI:
                 before = None
 
             try:
-                got = m.rename(Item(m, index, "?"), spec.name)
+                got = restructuring(lambda: m.rename(Item(m, index, "?"), spec.name))
             except ValueError as ex:
                 raise HTTPException(422, str(ex))
             except RuntimeError as ex:
@@ -1049,9 +1082,7 @@ def create_app() -> FastAPI:
             n = len(m.minsky.model.items)
             if not 0 <= index < n:
                 raise HTTPException(422, f"index {index} out of range (0..{n-1})")
-            before = _identity_list(m.minsky)
-            m.delete(Item(m, index, "?"))
-            _remap_wires(m.minsky, before)
+            restructuring(lambda: m.delete(Item(m, index, "?")))
         try:
             await call(_del)
         except RuntimeError as ex:
@@ -1085,6 +1116,56 @@ def create_app() -> FastAPI:
         except Exception as ex:
             raise HTTPException(400, str(ex))
 
+    def _godley_write(index, fn):
+        """A table mutation that must leave nothing behind if it fails.
+
+        set_cell writes the cell and THEN commits it with `icon.update()`. When the
+        commit throws -- a stock header naming a variable that already exists at another
+        type is enough -- the API answered 400 as if nothing had happened, while the cell
+        was already written and the model could no longer reset. Put it back.
+        """
+        try:
+            return restructuring(lambda: _godley_op(index, fn))
+        except HTTPException as ex:
+            # 422 is OUR OWN range and shape checking, which runs before the engine is
+            # touched, so there is nothing to put back -- and a needless restore would
+            # re-impose the engine's canonical column order on a table the user has not
+            # finished editing. 400 is the engine failing partway through a change it
+            # had already begun.
+            if ex.status_code != 422:
+                rollback()
+                sep = "" if str(ex.detail).rstrip().endswith((".", "!", "?")) else "."
+                ex.detail = f"{ex.detail}{sep} The table was left unchanged."
+            raise
+
+    def _shared_stocks():
+        """Stock names that appear as a header in more than one table, with the initial
+        condition each table shows for them.
+
+        Two tables can name the same stock -- that is how one account appears on both
+        sides of a transaction -- but there is only ONE variable behind it, so only one
+        initial condition. Each table stores and displays its own, and the engine quietly
+        uses whichever was written last: a table could show 100 for a stock the model was
+        running at 250.
+        """
+        from collections import defaultdict
+        seen = defaultdict(list)
+        m = engine().minsky
+        for i in range(len(m.model.items)):
+            it = m.model.items[i]
+            if "Godley" not in it.classType():
+                continue
+            t = it.table
+            ic = next((r for r in range(t.rows()) if t.initialConditionRow(r)), None)
+            for c in range(1, t.cols()):
+                nm = (t.getCell(0, c) or "").strip()
+                if not nm:
+                    continue
+                val = (t.getCell(ic, c) or "").strip() if ic is not None else ""
+                seen[nm].append((i, (t.title() or "").strip() or f"table {i}", val))
+        return {nm: v for nm, v in seen.items()
+                if len(v) > 1 and len({x[2] for x in v if x[2]}) > 1}
+
     @app.get("/api/godley/{index}")
     async def godley_get(index: int):
         return await call(lambda: _godley_op(index, lambda t: t.snapshot()))
@@ -1093,16 +1174,26 @@ def create_app() -> FastAPI:
     async def godley_cell(index: int, spec: CellSpec):
         require_idle()
         await call(checkpoint)
-        await call(lambda: _godley_op(
+        await call(lambda: _godley_write(
             index, lambda t: t.set_cell(spec.row, spec.col, spec.value)))
         mark_dirty()
-        return await call(lambda: _godley_op(index, lambda t: t.snapshot()))
+        out = await call(lambda: _godley_op(index, lambda t: t.snapshot()))
+        clashes = await call(_shared_stocks)
+        if clashes:
+            out["conflicts"] = [
+                {"stock": nm,
+                 "shown": [{"table": ttl, "value": v} for _i, ttl, v in where],
+                 "note": (f"{nm} is one variable in {len(where)} tables, so it has one "
+                          f"initial condition. The tables disagree, and the engine uses "
+                          f"whichever was written last.")}
+                for nm, where in clashes.items()]
+        return out
 
     @app.post("/api/godley/{index}/class")
     async def godley_class(index: int, spec: ClassSpec):
         require_idle()
         await call(checkpoint)
-        await call(lambda: _godley_op(index, lambda t: t.set_class(spec.col, spec.cls)))
+        await call(lambda: _godley_write(index, lambda t: t.set_class(spec.col, spec.cls)))
         mark_dirty()
         return await call(lambda: _godley_op(index, lambda t: t.snapshot()))
 
@@ -1110,7 +1201,7 @@ def create_app() -> FastAPI:
     async def godley_resize(index: int, spec: SizeSpec):
         require_idle()
         await call(checkpoint)
-        await call(lambda: _godley_op(index, lambda t: t.resize(spec.rows, spec.cols)))
+        await call(lambda: _godley_write(index, lambda t: t.resize(spec.rows, spec.cols)))
         mark_dirty()
         return await call(lambda: _godley_op(index, lambda t: t.snapshot()))
 
@@ -1120,7 +1211,7 @@ def create_app() -> FastAPI:
         await call(checkpoint)
         if action not in ("insert", "delete"):
             raise HTTPException(422, "action must be insert or delete")
-        await call(lambda: _godley_op(index, lambda t:
+        await call(lambda: _godley_write(index, lambda t:
             t.insert_row(spec.at) if action == "insert" else t.delete_row(spec.at)))
         mark_dirty()
         return await call(lambda: _godley_op(index, lambda t: t.snapshot()))
@@ -1131,7 +1222,7 @@ def create_app() -> FastAPI:
         await call(checkpoint)
         if action not in ("insert", "delete"):
             raise HTTPException(422, "action must be insert or delete")
-        await call(lambda: _godley_op(index, lambda t:
+        await call(lambda: _godley_write(index, lambda t:
             t.insert_col(spec.at) if action == "insert" else t.delete_col(spec.at)))
         mark_dirty()
         return await call(lambda: _godley_op(index, lambda t: t.snapshot()))

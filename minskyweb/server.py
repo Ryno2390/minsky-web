@@ -653,6 +653,30 @@ def nonfinite(vals: dict) -> list[str]:
 
 
 # --------------------------------------------------------------------------- schemas
+#: The types `canvas.addVariable` understands. Anything else creates NOTHING and raises
+#: nothing -- the call simply returns, and the next line trips over the item that was
+#: never made. Probed against the engine, not copied from the docs.
+VAR_TYPES = ("flow", "stock", "parameter", "integral", "constant", "tempFlow")
+
+#: Past this the item is on the canvas but unreachable: no amount of scrolling reaches it
+#: and no fitView will ever include it without shrinking everything else to nothing.
+COORD_LIMIT = 1e6
+
+
+def check_at(at):
+    """Refuse coordinates that would put an item where it can never be seen again."""
+    if at is None:
+        return None
+    for v in at:
+        if not math.isfinite(v):
+            raise HTTPException(422, "coordinates must be finite numbers")
+        if abs(v) > COORD_LIMIT:
+            raise HTTPException(
+                422, f"coordinate {v:g} is outside the canvas "
+                     f"(+/-{COORD_LIMIT:g}); the item would be unreachable")
+    return at
+
+
 class ItemSpec(BaseModel):
     kind: str = Field(description="'variable' | 'parameter' | 'operation' | 'godley'")
     name: str | None = None
@@ -842,6 +866,13 @@ def create_app() -> FastAPI:
     @app.post("/api/item")
     async def add_item(spec: ItemSpec):
         require_idle()
+        check_at(spec.at)
+        if spec.kind == "variable" and spec.var_type not in VAR_TYPES:
+            # addVariable() with a type it does not know creates nothing and raises
+            # nothing; the failure only surfaced later, as a bare 500 with no body
+            raise HTTPException(
+                422, f"unknown variable type {spec.var_type!r}. "
+                     f"Use one of: {', '.join(VAR_TYPES)}")
         await call(checkpoint)
 
         def _add():
@@ -857,6 +888,16 @@ def create_app() -> FastAPI:
                         422, "a parameter needs a numeric value")
                 return m.parameter(spec.name, spec.value, at=spec.at)
             if spec.kind == "variable":
+                if spec.var_type == "constant":
+                    # a constant's NAME is its value -- init("3.5") sets both -- so there
+                    # is no name to give it, and one passed here was silently dropped,
+                    # leaving a nameless item on the canvas
+                    if spec.value is None:
+                        raise HTTPException(
+                            422, "a constant needs a numeric value. Its value IS its "
+                                 "name, so 'name' does not apply -- use a parameter if "
+                                 "you want a named quantity.")
+                    return m.constant(spec.value, at=spec.at)
                 if not spec.name:
                     raise HTTPException(422, "a variable needs a name")
                 it = m.variable(spec.name, spec.var_type, at=spec.at)
@@ -868,10 +909,25 @@ def create_app() -> FastAPI:
                     raise HTTPException(422, "operation needs 'op'")
                 return m.operation(spec.op, at=spec.at)
             if spec.kind == "godley":
-                return m.godley(at=spec.at)
+                it = m.godley(at=spec.at)
+                if spec.name:
+                    # a table's name is its TITLE, and it was accepted and dropped --
+                    # the caller named a table and got one called "godley"
+                    m.rename(it, spec.name)
+                return it
             raise HTTPException(422, f"unknown kind {spec.kind!r}")
 
-        it = await call(_add)
+        try:
+            it = await call(_add)
+        except HTTPException:
+            raise
+        except (RuntimeError, ValueError) as ex:
+            # The engine explains itself here -- "Variable ':x' already exists with type
+            # stock, cannot create with type flow" is exactly what the user needs to see,
+            # and it was being thrown away in favour of a bare 500 with no body. A partly
+            # created item can also be left behind, so put the model back first.
+            await call(rollback)
+            raise HTTPException(400, str(ex))
         mark_dirty()
         return {"index": it.index, "kind": it.kind, "state": await call(snapshot)}
 
@@ -912,6 +968,7 @@ def create_app() -> FastAPI:
     @app.post("/api/item/{index}/move")
     async def move_item(index: int, spec: MoveSpec):
         require_idle()
+        check_at((spec.x, spec.y))
         await call(checkpoint)
 
         def _move():

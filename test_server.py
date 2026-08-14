@@ -1277,5 +1277,63 @@ check("and neither was renamed",
       sorted(i.get("name") for i in c.get("/api/state").json()["items"]) == ["aa","bb"])
 
 
+print("\n35. adding items")
+c.post("/api/clear")
+# addVariable() with a type it does not know creates NOTHING and raises nothing, so the
+# failure surfaced later as a bare 500 with no body at all
+r = c.post("/api/item", json={"kind":"variable","name":"vv","var_type":"nonsense"})
+check("an unknown variable type is refused", r.status_code == 422, str(r.status_code))
+check("and it names the ones that work", "flow" in r.text and "stock" in r.text)
+check("nothing was left behind", c.get("/api/state").json()["items"] == [])
+
+for t in ("flow", "stock", "parameter", "integral", "tempFlow"):
+    r = c.post("/api/item", json={"kind":"variable","name":f"v_{t}","var_type":t})
+    check(f"var_type {t} works", r.status_code == 200, f"{r.status_code} {r.text[:60]}")
+# a constant is the odd one out: the engine gives it its own class and its NAME is its
+# value, so a name passed here was silently dropped and left a nameless item
+c.post("/api/clear")
+check("a constant without a value is refused",
+      c.post("/api/item", json={"kind":"variable","var_type":"constant","name":"kk"}
+             ).status_code == 422)
+check("a constant with a value works",
+      c.post("/api/item", json={"kind":"variable","var_type":"constant","value":3.5}
+             ).status_code == 200)
+check("and it is named by its value",
+      c.get("/api/state").json()["items"][0]["name"] == "3.5",
+      str(c.get("/api/state").json()["items"][0].get("name")))
+
+# the engine explains a type clash exactly; it was being replaced by a bare 500
+c.post("/api/clear")
+c.post("/api/item", json={"kind":"variable","name":"dup","var_type":"stock"})
+r = c.post("/api/item", json={"kind":"variable","name":"dup","var_type":"flow"})
+check("a name already bound at another type is refused", r.status_code == 400)
+check("and the engine's own explanation survives",
+      "already exists" in r.json().get("detail", ""), r.text[:80])
+check("with nothing half-created left behind",
+      len(c.get("/api/state").json()["items"]) == 1)
+
+# a Godley table's name is its title -- it was accepted and dropped
+c.post("/api/clear")
+c.post("/api/item", json={"kind":"godley","name":"Bank"})
+check("a Godley table keeps the name it was given",
+      c.get("/api/state").json()["items"][0].get("name") == "Bank",
+      str(c.get("/api/state").json()["items"][0].get("name")))
+
+# an item at these coordinates is on the canvas but can never be reached again
+c.post("/api/clear")
+# sent as raw text: JSON has no inf, but "1e999" parses to one, which is exactly how a
+# real client produces it
+for at, why in (('[1e999,0]', "an infinite coordinate"),
+                ('[-9e9,-9e9]', "a coordinate far outside the canvas")):
+    r = c.post("/api/item", headers={"content-type": "application/json"},
+               content='{"kind":"parameter","name":"p","value":1,"at":%s}' % at)
+    check(f"{why} is refused", r.status_code == 422, f"{r.status_code} {r.text[:60]}")
+check("nothing was placed", c.get("/api/state").json()["items"] == [])
+check("a move to a nonsense coordinate is refused too",
+      (lambda i: c.post(f"/api/item/{i}/move", json={"x": 9e9, "y": 0}).status_code)(
+          c.post("/api/item", json={"kind":"parameter","name":"p","value":1,
+                                    "at":[300,300]}).json()["index"]) == 422)
+
+
 print(f"\n{'ALL PASS' if not FAILED else 'FAILURES: ' + ', '.join(FAILED)}")
 sys.exit(1 if FAILED else 0)

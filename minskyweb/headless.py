@@ -376,7 +376,22 @@ class Model:
 
     def variable(self, name: str, kind: str = "flow", at=None) -> Item:
         self.minsky.canvas.addVariable(name, kind)
-        return self._adopt(f"var:{kind}", name, at, expect=f"Variable:{kind}")
+        # every type reports as "Variable:<kind>" except a constant, which the engine
+        # gives its own class -- checking for "Variable:constant" rejected a variable it
+        # had just created perfectly well
+        expect = "VarConstant" if kind == "constant" else f"Variable:{kind}"
+        return self._adopt(f"var:{kind}", name, at, expect=expect)
+
+    def constant(self, value: float, at=None) -> Item:
+        """A literal constant. Its NAME is its value -- `init("3.5")` sets both.
+
+        So a constant has no name to give it, and passing one silently produced a
+        nameless item. The value has to go in through `init`, not `set_init`: the engine
+        keys constants as "constant:N", not by name.
+        """
+        it = self.variable(str(value), "constant", at)
+        self.minsky.model.items[it.index].init(repr(float(value)))
+        return it
 
     def parameter(self, name: str, value: float, at=None) -> Item:
         it = self.variable(name, "parameter", at)

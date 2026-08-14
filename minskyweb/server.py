@@ -671,14 +671,23 @@ def create_app() -> FastAPI:
             for label, i in (("src", spec.src), ("dst", spec.dst)):
                 if not 0 <= i < n:
                     raise HTTPException(422, f"{label} index {i} out of range (0..{n-1})")
-            # An input accepts one wire. Say that, rather than letting the wiring
-            # diagnostic -- which prints internal reprs and port pixel coordinates and
-            # is written for a log -- reach the user.
-            if any(w[2] == str(spec.dst) and w[3] == spec.port for w in _WIRES):
-                raise HTTPException(
-                    409, "that input is already connected; delete the existing wire first")
             from .headless import Item
-            m.wire(Item(m, spec.src, "?"), Item(m, spec.dst, "?"), spec.port)
+            from .headless import WiringError
+            # Do NOT pre-refuse a busy input. Minsky's n-ary operations (add, subtract,
+            # multiply, divide, min, max) legitimately take SEVERAL wires into one input
+            # and sum them -- a blanket "already connected" check broke that. Attempt the
+            # wire, then diagnose the failure: if the engine declined and that input
+            # already has one, it is a single-wire input and we can say so plainly
+            # instead of leaking the wiring diagnostic, which prints object reprs and
+            # pixel coordinates and is written for a log.
+            try:
+                m.wire(Item(m, spec.src, "?"), Item(m, spec.dst, "?"), spec.port)
+            except WiringError:
+                if any(w[2] == str(spec.dst) and w[3] == spec.port for w in _WIRES):
+                    raise HTTPException(
+                        409, "that input already has a wire and accepts only one; "
+                             "delete it first")
+                raise
             _WIRES.append((str(spec.src), 0, str(spec.dst), spec.port))
 
         await call(_wire)

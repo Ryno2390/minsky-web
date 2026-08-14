@@ -431,8 +431,8 @@ st = c.post("/api/wire", json={"src":a,"dst":b,"port":1}).json()
 check("wired", len(st["wires"]) == 1)
 
 dup = c.post("/api/wire", json={"src":a,"dst":b,"port":1})
-check("a busy input is refused in plain language",
-      dup.status_code == 409 and "already connected" in dup.text, dup.text[:80])
+check("a busy single-wire input is refused in plain language",
+      dup.status_code == 409 and "accepts only one" in dup.text, dup.text[:80])
 check("the refusal leaks no internals",
       "<?" not in dup.text and "expected 1" not in dup.text, dup.text[:80])
 
@@ -994,6 +994,53 @@ if last:
     v = [x for k, x in last["values"].items() if "int" in k][0]
     check("a mangled parameter actually drives the model", abs(v - 4.0*t_) < 1e-6,
           f"t={t_:.4f} int={v:.4f} expect {4.0*t_:.4f}")
+
+print("\n29. n-ary inputs take several wires; single-wire inputs say so")
+# Minsky's n-ary operations legitimately take SEVERAL wires into one input and sum them.
+# A blanket "already connected" pre-check broke that modelling pattern outright.
+c.post("/api/clear")
+a = c.post("/api/item", json={"kind":"parameter","name":"a","value":1.0}).json()["index"]
+b = c.post("/api/item", json={"kind":"parameter","name":"b","value":2.0}).json()["index"]
+for op in ("add", "multiply", "min"):
+    o = c.post("/api/item", json={"kind":"operation","op":op}).json()["index"]
+    r1 = c.post("/api/wire", json={"src":a,"dst":o,"port":1})
+    r2 = c.post("/api/wire", json={"src":b,"dst":o,"port":1})
+    check(f"{op} accepts two wires into one input",
+          r1.status_code == 200 and r2.status_code == 200,
+          f"{r1.status_code}/{r2.status_code}")
+
+v = c.post("/api/item", json={"kind":"variable","name":"y","var_type":"flow"}).json()["index"]
+check("a variable input takes the first wire",
+      c.post("/api/wire", json={"src":a,"dst":v,"port":1}).status_code == 200)
+r = c.post("/api/wire", json={"src":b,"dst":v,"port":1})
+check("and refuses the second in plain language",
+      r.status_code == 409 and "accepts only one" in r.text, r.text[:70])
+check("the refusal leaks no internals",
+      "<?" not in r.text and "expected 1" not in r.text, r.text[:70])
+check("the record never desynced through any of it",
+      not any(w.get("desync") for w in c.get("/api/state").json()["wires"]))
+
+# and a model built with an n-ary input actually computes the sum
+c.post("/api/clear")
+a = c.post("/api/item", json={"kind":"parameter","name":"a","value":1.5}).json()["index"]
+b = c.post("/api/item", json={"kind":"parameter","name":"b","value":2.5}).json()["index"]
+add = c.post("/api/item", json={"kind":"operation","op":"add"}).json()["index"]
+ig = c.post("/api/item", json={"kind":"operation","op":"integrate"}).json()["index"]
+c.post("/api/wire", json={"src":a,"dst":add,"port":1})
+c.post("/api/wire", json={"src":b,"dst":add,"port":1})
+c.post("/api/wire", json={"src":add,"dst":ig,"port":1})
+last = None
+with c.websocket_connect("/ws/sim") as ws:
+    ws.send_json({"cmd":"run","steps":600,"tmax":2.0})
+    while True:
+        m = ws.receive_json()
+        if "error" in m: check("n-ary model runs", False, m["error"]); break
+        if m.get("done") or m.get("stopped"): break
+        last = m
+if last:
+    t_ = last["t"]; v_ = [x for k, x in last["values"].items() if "int" in k][0]
+    check("two wires into one input are summed", abs(v_ - 4.0*t_) < 1e-6,
+          f"t={t_:.4f} int={v_:.4f} expect {(1.5+2.5)*t_:.4f}")
 
 print(f"\n{'ALL PASS' if not FAILED else 'FAILURES: ' + ', '.join(FAILED)}")
 sys.exit(1 if FAILED else 0)

@@ -351,9 +351,20 @@ let series = {}, tSeries = [], colors = {};
 const PALETTE = ["#4C9AFF","#3FB950","#D29922","#BC8CFF","#FF7B72","#39C5CF","#F778BA","#E3B341"];
 
 /* ---------- api ---------- */
+const UNREACHABLE = "Cannot reach the server. It may have stopped — restart it "
+                  + "with `python3 -m minskyweb.server` and reload this page.";
+
 async function api(path, opts={}) {
-  const r = await fetch("/api" + path, {
-    headers:{"content-type":"application/json"}, ...opts});
+  let r;
+  try {
+    r = await fetch("/api" + path, {
+      headers:{"content-type":"application/json"}, ...opts});
+  } catch {
+    // fetch rejects with a bare "Failed to fetch" when the server is gone, which tells
+    // a user nothing. The server holds the model, so this is the one error where they
+    // need to know exactly what to do.
+    throw new Error(UNREACHABLE);
+  }
   const txt = await r.text();
   let body; try { body = txt ? JSON.parse(txt) : null; } catch { body = {error:txt}; }
   if (!r.ok) throw new Error(body?.error || body?.detail || `HTTP ${r.status}`);
@@ -819,6 +830,7 @@ $("#run").onclick = guard(async () => {
     if (tSeries.length % 3 === 0) drawPlot();
   };
   ws.onclose = finish;
+  ws.onerror = () => { toast(UNREACHABLE); finish(); };
 });
 function finish(){
   $("#run").disabled = false; $("#stop").disabled = true;

@@ -1849,9 +1849,13 @@ src = open(os.path.join(os.path.dirname(os.path.abspath(__file__)),
 # UPLOAD_DIR is deliberately NOT private: it is a store of models the user uploaded and
 # can reopen, and it is one of the writable roots. Only the transient scratch files --
 # the history buffer and the download staging file -- must belong to one process.
-check("every transient scratch path is built from the private directory",
-      src.count("_SCRATCH /") == 2 and "minskyweb-download" not in src,
-      f'{src.count("_SCRATCH /")} uses')
+# A count would just need updating whenever another scratch file is added. The rule is
+# what matters: the only thing built from the shared temp directory is UPLOAD_DIR.
+_shared = [l.strip() for l in src.splitlines() if "gettempdir()" in l]
+check("nothing but UPLOAD_DIR is built from the shared temp directory",
+      len(_shared) == 1 and _shared[0].startswith("UPLOAD_DIR"), str(_shared))
+check("and the scratch files are all in the private directory",
+      src.count("_SCRATCH /") >= 2, f'{src.count("_SCRATCH /")} uses')
 
 
 print("\n46. a wire never moves to an item it was not on")
@@ -1885,6 +1889,74 @@ check("deleting one of the pair leaves only the other row's wires",
       len(rows) == 2 and all(x == 400 and y == 400 for x, y in rows), str(rows))
 check("and no wire was left pointing somewhere it never was", not desync)
 check("the model still resets", c.post("/api/reset").status_code == 200)
+
+
+print("\n47. inputs that used to reach the engine unchecked")
+c.post("/api/clear")
+c.post("/api/item", json={"kind":"parameter","name":"a","value":1})
+# str.isdigit() is True for characters int() will not take, and lstrip("-").isdigit()
+# accepted "-0" -- which passed the range check and was then recorded in the wire
+# topology under a ref no item has, so the wire vanished at the next remap.
+for bad in ("--5", "-0", "-1", "\u00b2", "g\u00b2:0", "g0", "1.0", ""):
+    r = c.post(f"/api/item/{bad}/move", json={"x": 10, "y": 10})
+    # 405 for the empty ref: the route simply does not match, which is a refusal too
+    check(f"item ref {bad!r} is refused", r.status_code in (404, 405, 422),
+          f"{r.status_code} {r.text[:50]}")
+for bad in ("g\u00b2", "g--1", "g1.\u00b2"):
+    r = c.post(f"/api/group/{bad}/ungroup")
+    check(f"group ref {bad!r} is refused", r.status_code in (404, 422),
+          f"{r.status_code} {r.text[:50]}")
+
+# names the filesystem cannot take reached save() and came back as a bare 500
+r = c.post("/api/save", content=_json.dumps({"name": "bad\x00name"}),
+           headers={"content-type": "application/json"})
+check("a save name with a null character is refused", r.status_code == 422,
+      f"{r.status_code}")
+r = c.post("/api/save", json={"name": "x" * 400})
+check("an over-long save name is refused", r.status_code == 422, f"{r.status_code}")
+
+# the engine stores a non-finite initial value as the string "inf" and only THEN fails,
+# leaving an initial condition no reset can accept
+c.post("/api/item", json={"kind": "operation", "op": "integrate"})
+r = c.post("/api/init", content='{"name":"int1","value":1e999}',
+           headers={"content-type": "application/json"})
+check("a non-finite initial value is refused", r.status_code == 422, f"{r.status_code}")
+check("and the model still resets", c.post("/api/reset").status_code == 200)
+
+# saving reads the file back, which resets the engine -- mid-run that restarted the
+# simulation under the client
+_p = c.post("/api/item", json={"kind":"parameter","name":"g2","value":0.3}).json()["index"]
+_st = c.get("/api/state").json()
+_io = next(i["index"] for i in _st["items"] if i["classType"] == "IntOp")
+c.post("/api/wire", json={"src": _p, "dst": _io, "port": 1})
+with c.websocket_connect("/ws/sim") as ws:
+    ws.send_json({"cmd": "run", "steps": 3000, "tmax": 100})
+    ws.receive_json()
+    check("saving during a run is refused",
+          c.post("/api/save", json={"name": "midrun"}).status_code == 409)
+    check("so is downloading", c.get("/api/download").status_code == 409)
+    # receive_json() reads message["text"], so a BINARY frame raises KeyError, not a
+    # decode error -- the socket died with no error frame at all
+    ws.send_bytes(b"\x02\x03")
+    saw = False
+    for _ in range(80):
+        m = ws.receive_json()
+        if "error" in m and "JSON" in m["error"]: saw = True; break
+    check("a binary frame mid-run is reported", saw)
+    ws.send_json({"cmd": "stop"})
+    for _ in range(400):
+        if ws.receive_json().get("stopped"): break
+with c.websocket_connect("/ws/sim") as ws:
+    ws.send_bytes(b"\x00\x01")
+    check("a binary FIRST frame gets an error frame, not a dropped socket",
+          "error" in ws.receive_json())
+with c.websocket_connect("/ws/sim") as ws:
+    # /api/solver refuses tmax <= t0; the socket accepted it, wrote it into the document
+    # and reported the run complete after one step
+    ws.send_json({"cmd": "run", "steps": 10, "tmax": 0})
+    m = ws.receive_json()
+    check("tmax at or before t0 is refused on the socket too",
+          "error" in m and "t0" in m["error"], str(m)[:70])
 
 
 print(f"\n{'ALL PASS' if not FAILED else 'FAILURES: ' + ', '.join(FAILED)}")

@@ -676,7 +676,9 @@ def _resolved(p: Path) -> Path:
     while True:
         try:
             return cur.resolve(strict=True).joinpath(*reversed(tail))
-        except OSError:
+        except (OSError, ValueError):
+            # ValueError, not just OSError: a path with an embedded NUL raises
+            # "embedded null character in path" from lstat, which escaped as a bare 500
             if cur.parent == cur:
                 return p
             tail.append(cur.name)
@@ -702,6 +704,12 @@ def check_save_path(name: str) -> Path:
     if not p.name:
         # "/" and "//" have no name to give a suffix to, and raised a bare 500
         raise HTTPException(422, f"{name!r} is not a usable file name")
+    if "\x00" in name:
+        raise HTTPException(422, "a file name cannot contain a null character")
+    if len(p.name.encode("utf8")) > 240:
+        raise HTTPException(
+            422, f"that name is {len(p.name.encode('utf8'))} bytes long; "
+                 f"the filesystem will not take more than 255")
     if p.suffix != ".mky":
         if p.suffix.lower() == ".mky":
             p = p.with_suffix(".mky")       # "x.MKY" -- normalise, or the Open picker
@@ -1501,6 +1509,10 @@ def create_app() -> FastAPI:
     @app.post("/api/init")
     async def set_init(spec: InitSpec):
         require_idle()
+        if not math.isfinite(spec.value):
+            # the engine takes the value, stores it as the string "inf", and only then
+            # fails -- leaving an initial condition no reset can ever accept
+            raise HTTPException(422, "an initial value must be a finite number")
         await call(checkpoint)
         await call(lambda: engine().set_init(spec.name, spec.value))
         mark_dirty()
@@ -1703,12 +1715,19 @@ def create_app() -> FastAPI:
             raise HTTPException(422, "only .mky files can be uploaded")
         UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
         dest = UPLOAD_DIR / name
-        with dest.open("wb") as fh:
+        # Write to a scratch file first and only then take the destination's place. The
+        # bytes used to land on `dest` before anything looked at them, so uploading a
+        # file that was then REJECTED had already overwritten the model of the same name
+        # uploaded earlier -- under a reply that said "Nothing was changed."
+        staged = _SCRATCH / f"upload-{name}"
+        with staged.open("wb") as fh:
             shutil.copyfileobj(file.file, fh)
         global _CURRENT
-        if not await call(is_minsky_document, str(dest)):
+        if not await call(is_minsky_document, str(staged)):
+            staged.unlink(missing_ok=True)
             raise HTTPException(
                 422, f"{name} is not a Minsky model. Nothing was changed.")
+        shutil.move(str(staged), str(dest))
         await call(checkpoint)
         try:
             await call(lambda: engine().minsky.load(str(dest)))
@@ -1759,6 +1778,11 @@ def create_app() -> FastAPI:
 
     @app.post("/api/save")
     async def save(spec: SaveSpec):
+        # Saving reads the file back, which resets the engine -- done mid-run that
+        # restarted the simulation under the client, with the stream's clock jumping
+        # backwards and the values returning to their initial conditions. Every other
+        # mutating endpoint is guarded; these two were not.
+        require_idle()
         global _CURRENT
         # distinguish "save to the current file" from "save as, with a blank name":
         # a blank name used to fall through and quietly overwrite the current file
@@ -1796,6 +1820,7 @@ def create_app() -> FastAPI:
     async def download():
         """Hand the model to the browser so it can be kept anywhere, without giving
         the server a write path outside its own directories."""
+        require_idle()
         tmp = _SCRATCH / "download.mky"
         await call(lambda: engine().minsky.save(str(tmp)))
         stem = Path(_CURRENT).stem if _CURRENT else "model"
@@ -1824,7 +1849,10 @@ def create_app() -> FastAPI:
                 except (WebSocketDisconnect, RuntimeError):
                     stop.set()
                     return
-                except ValueError:
+                except (ValueError, KeyError):
+                    # KeyError as well as ValueError: receive_json() reads message["text"],
+                    # so a BINARY frame raises KeyError, not a decode error -- the same
+                    # failure the ValueError arm was added to remove, by another route
                     # A frame that is not JSON used to kill this task outright, and with
                     # it the only route for "stop". For the rest of the run the Stop
                     # button did nothing, and nothing was reported either way.
@@ -1840,8 +1868,10 @@ def create_app() -> FastAPI:
         try:
             try:
                 first = await ws.receive_json()
-            except ValueError:
-                await say({"error": "frames must be JSON"})
+            except (ValueError, KeyError):
+                # a binary first frame raises KeyError from receive_json(); without this
+                # the socket died with no error frame at all
+                await say({"error": "frames must be JSON text"})
                 return
             if not isinstance(first, dict) or first.get("cmd") != "run":
                 await say({"error": "expected {'cmd':'run'}"})
@@ -1873,6 +1903,14 @@ def create_app() -> FastAPI:
                     return
                 if not math.isfinite(tmax):
                     await say({"error": "tmax must be a finite number"})
+                    return
+                # the same rule /api/solver enforces. Without it the socket accepted
+                # tmax=0, wrote it into the document, took one step and reported the run
+                # complete -- leaving a horizon no later run could use.
+                t0 = await call(lambda: engine().minsky.t0())
+                if tmax <= t0:
+                    await say({"error": f"tmax ({tmax:g}) must be later than "
+                                        f"t0 ({t0:g})"})
                     return
 
             if _RUNNING.is_set():

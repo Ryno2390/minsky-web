@@ -573,7 +573,7 @@ async function submitAddForm(){
   if (/^[0-9]/.test(name))
     return formError("A name cannot start with a digit.", "#af-name");
 
-  const body = {kind: kind === "parameter" ? "parameter" : "variable"};
+  const body = {kind: kind === "parameter" ? "parameter" : "variable", at: freeSlot()};
   body.name = name;
   if (kind !== "parameter") body.var_type = vt;
 
@@ -594,12 +594,29 @@ async function submitAddForm(){
   }
 }
 
+// Where a new item lands. The server auto-places on a fixed grid that walks off to the
+// right and down, so after thirty additions a third of them sat outside the viewBox with
+// nothing to say so. Only the client knows what is visible, so placement belongs here:
+// find a free slot inside the current view, near the top-left where the eye already is.
+function freeSlot(){
+  if (!view) fitView();
+  const DX = 190, DY = 120, PAD = 80;
+  const taken = state.items.map(i => [i.x, i.y]);
+  const clear = (x, y) => taken.every(([tx, ty]) =>
+    Math.abs(tx - x) > DX * 0.55 || Math.abs(ty - y) > DY * 0.55);
+  for (let y = view.y + PAD; y < view.y + view.h - PAD; y += DY)
+    for (let x = view.x + PAD; x < view.x + view.w - PAD; x += DX)
+      if (clear(x, y)) return [Math.round(x), Math.round(y)];
+  // everything visible is occupied: drop it in the middle and let the user move it
+  return [Math.round(view.x + view.w / 2), Math.round(view.y + view.h / 2)];
+}
+
 document.addEventListener("click", guard(async e => {
   const b = e.target.closest("[data-add]"); if (!b) return;
   const kind = b.dataset.add;
   if (kind === "variable" || kind === "parameter")
     return openAddForm(kind, b.dataset.vt);
-  const body = {kind};
+  const body = {kind, at: freeSlot()};
   if (kind === "operation") body.op = b.dataset.op;
   const r = await api("/item", {method:"POST", body:JSON.stringify(body)});
   state = r.state; sel = r.index; render();

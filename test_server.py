@@ -750,5 +750,28 @@ ui = open(os.path.join(os.path.dirname(os.path.abspath(__file__)),
 check("the editor is closed from render(), so no path can miss it",
       "if (!still) closeGodley(false)" in ui)
 
+print("\n22. new items are placed where the user can see them")
+c.post("/api/clear")
+r = c.post("/api/item", json={"kind":"operation","op":"time","at":[640,480]}).json()
+placed = [i for i in r["state"]["items"] if i["index"] == r["index"]][0]
+check("an explicit position is honoured exactly",
+      (placed["x"], placed["y"]) == (640.0, 480.0), f"({placed['x']},{placed['y']})")
+
+# without one the server falls back to a fixed grid that walks off-screen after ~25
+# additions, so the CLIENT supplies a slot inside the current view
+c.post("/api/clear")
+for _ in range(30):
+    c.post("/api/item", json={"kind":"operation","op":"time"})
+items = c.get("/api/state").json()["items"]
+xs = [i["x"] for i in items]
+check("the server-side fallback does walk off to the right",
+      max(xs) - min(xs) > 900, f"x spans {max(xs)-min(xs):.0f}")
+
+ui = open(os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                       "minskyweb", "ui", "index.html")).read()
+check("the client places new items itself", "function freeSlot()" in ui)
+check("and every add path uses it",
+      ui.count("at: freeSlot()") >= 2, f"{ui.count('at: freeSlot()')} call sites")
+
 print(f"\n{'ALL PASS' if not FAILED else 'FAILURES: ' + ', '.join(FAILED)}")
 sys.exit(1 if FAILED else 0)

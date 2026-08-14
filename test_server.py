@@ -732,5 +732,23 @@ for f in ("namecheck", "namecheck2"):
         try: os.remove(os.path.expanduser(f"~/minsky-models/{f}{suffix}"))
         except OSError: pass
 
+print("\n21. a vanished Godley table is reported in plain language")
+c.post("/api/clear")
+gi = c.post("/api/item", json={"kind":"godley"}).json()["index"]
+check("the table is there", c.get(f"/api/godley/{gi}").status_code == 200)
+c.delete(f"/api/item/{gi}")
+r = c.get(f"/api/godley/{gi}")
+# the editor holds an index; deleting the table left it open over a ghost and typing in
+# it produced "index 0 out of range (0..-1)"
+check("asking for a deleted table explains itself",
+      r.status_code == 422 and "may have been deleted" in r.text, r.text[:80])
+check("the message avoids index arithmetic",
+      "(0..-1)" not in r.text, r.text[:60])
+
+ui = open(os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                       "minskyweb", "ui", "index.html")).read()
+check("the editor is closed from render(), so no path can miss it",
+      "if (!still) closeGodley(false)" in ui)
+
 print(f"\n{'ALL PASS' if not FAILED else 'FAILURES: ' + ', '.join(FAILED)}")
 sys.exit(1 if FAILED else 0)

@@ -484,6 +484,15 @@ function render() {
   // which left every port with NO r attribute -- radius 0, invisible, undroppable -- on
   // a fresh model, because only opening a file used to establish the view.
   if (!view) fitView();
+  // The Godley editor holds an item INDEX, and indices shift or vanish when the model
+  // changes underneath it -- deleting the table left the editor open over a ghost, and
+  // typing in it produced "index 0 out of range (0..-1)". Check on every render rather
+  // than at each call site, so no future path can miss it.
+  if (gIdx !== null) {
+    const still = state.items.find(i => i.index === gIdx &&
+                                        String(i.classType).includes("Godley"));
+    if (!still) closeGodley(false);
+  }
   applyView();          // render() rebuilt the ports; restore their zoom-corrected size
   $("#tval").textContent = (state.t ?? 0).toFixed(3);
   const st = $("#status");
@@ -854,7 +863,11 @@ async function openGodley(i){
   $("#gwrap").classList.add("open");
   await drawGodley(await api(`/godley/${i}`));
 }
-function closeGodley(){ $("#gwrap").classList.remove("open"); gIdx = null; refresh(); }
+function closeGodley(reload = true){
+  $("#gwrap").classList.remove("open");
+  gIdx = null;
+  if (reload) refresh();          // called from render() with false, to avoid recursing
+}
 $("#gclose").onclick = closeGodley;
 $("#gwrap").addEventListener("click", e => { if (e.target.id === "gwrap") closeGodley(); });
 

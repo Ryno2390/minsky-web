@@ -728,7 +728,9 @@ def create_app() -> FastAPI:
         m = engine()
         n = len(m.minsky.model.items)
         if not 0 <= index < n:
-            raise HTTPException(422, f"index {index} out of range (0..{n-1})")
+            raise HTTPException(
+                422, f"there is no item {index} in this model — the Godley table may "
+                     f"have been deleted or undone")
         try:
             return m.table(index)
         except TypeError as ex:

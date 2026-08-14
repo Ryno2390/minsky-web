@@ -1429,5 +1429,58 @@ finally:
     (SAVE_DIR / "colorder-probe.mky").unlink(missing_ok=True)
 
 
+print("\n38. the simulation socket")
+c.post("/api/clear")
+_r = c.post("/api/item", json={"kind":"parameter","name":"g","value":0.3}).json()["index"]
+_i = c.post("/api/item", json={"kind":"operation","op":"integrate"}).json()["index"]
+c.post("/api/wire", json={"src":_r,"dst":_i,"port":1})
+c.post("/api/init", json={"name":"int1","value":1.0})
+
+# these were read straight into int()/float() where nothing was catching the failure:
+# the socket dropped with no error frame and the UI waited for a run that never reported
+for body, why in (({"cmd":"run","steps":"lots"}, "steps='lots'"),
+                  ({"cmd":"run","steps":10,"tmax":"soon"}, "tmax='soon'"),
+                  ({"cmd":"run","steps":0}, "steps=0"),
+                  ({"cmd":"run","steps":-5}, "steps=-5")):
+    with c.websocket_connect("/ws/sim") as ws:
+        ws.send_json(body)
+        msg = ws.receive_json()
+        check(f"{why} is answered with an error", "error" in msg, str(msg)[:70])
+
+# steps<=0 skipped the loop body, so its else-clause reported a completed run -- after
+# reset() had already discarded the state of the run before it
+with c.websocket_connect("/ws/sim") as ws:
+    ws.send_json({"cmd":"run","steps":40,"tmax":5.0})
+    while True:
+        m = ws.receive_json()
+        if m.get("done") or m.get("stopped") or "error" in m: break
+t_ran = c.get("/api/state").json()["t"]
+check("a real run advances t", t_ran > 0, str(t_ran))
+with c.websocket_connect("/ws/sim") as ws:
+    ws.send_json({"cmd":"run","steps":0})
+    ws.receive_json()
+check("a refused run does not discard the state of the last one",
+      c.get("/api/state").json()["t"] == t_ran, str(c.get("/api/state").json()["t"]))
+
+# a frame that is not JSON killed the reader task outright, and with it the only route
+# for "stop": for the rest of the run the Stop button did nothing, silently
+with c.websocket_connect("/ws/sim") as ws:
+    ws.send_json({"cmd":"run","steps":4000,"tmax":1e9})
+    ws.receive_json()
+    ws.send_text("this is not json")
+    saw = False
+    for _ in range(80):
+        m = ws.receive_json()
+        if "error" in m and "JSON" in m["error"]: saw = True; break
+    check("a non-JSON frame is reported", saw)
+    ws.send_json({"cmd":"stop"})
+    stopped = False
+    for _ in range(2000):
+        m = ws.receive_json()
+        if m.get("stopped"): stopped = True; break
+        if m.get("done"): break
+    check("and Stop still works afterwards", stopped)
+
+
 print(f"\n{'ALL PASS' if not FAILED else 'FAILURES: ' + ', '.join(FAILED)}")
 sys.exit(1 if FAILED else 0)

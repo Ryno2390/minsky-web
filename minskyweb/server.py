@@ -1501,85 +1501,139 @@ def create_app() -> FastAPI:
         {"cmd":"stop"}. Server emits one frame per solver step."""
         await ws.accept()
         stop = asyncio.Event()
+        mine = False            # did THIS connection take the run lock?
+
+        async def say(payload):
+            try:
+                await ws.send_json(payload)
+                return True
+            except Exception:
+                return False
 
         async def reader():
-            try:
-                while True:
+            while True:
+                try:
                     msg = await ws.receive_json()
-                    if msg.get("cmd") == "stop":
+                except (WebSocketDisconnect, RuntimeError):
+                    stop.set()
+                    return
+                except ValueError:
+                    # A frame that is not JSON used to kill this task outright, and with
+                    # it the only route for "stop". For the rest of the run the Stop
+                    # button did nothing, and nothing was reported either way.
+                    if not await say({"error": "frames must be JSON"}):
                         stop.set()
                         return
-            except (WebSocketDisconnect, RuntimeError):
-                stop.set()
+                    continue
+                if isinstance(msg, dict) and msg.get("cmd") == "stop":
+                    stop.set()
+                    return
 
+        task = None
         try:
-            first = await ws.receive_json()
-            if first.get("cmd") != "run":
-                await ws.send_json({"error": "expected {'cmd':'run'}"})
+            try:
+                first = await ws.receive_json()
+            except ValueError:
+                await say({"error": "frames must be JSON"})
                 return
-            steps = int(first.get("steps", 200))
+            if not isinstance(first, dict) or first.get("cmd") != "run":
+                await say({"error": "expected {'cmd':'run'}"})
+                return
+
+            # These were read straight into int()/float() inside the request handler, so
+            # a malformed value raised where nothing was catching it: the socket simply
+            # dropped, with no error frame at all, and the UI sat waiting for a run that
+            # was never going to report anything.
+            try:
+                steps = int(first.get("steps", 200))
+            except (TypeError, ValueError):
+                await say({"error": f"steps must be a whole number, not "
+                                    f"{first.get('steps')!r}"})
+                return
+            if steps < 1:
+                # the loop body never ran, so its else-clause fired and the run reported
+                # itself complete -- after reset() had already thrown away the state of
+                # the run before it
+                await say({"error": f"steps must be at least 1, not {steps}"})
+                return
             tmax = first.get("tmax")
+            if tmax is not None:
+                try:
+                    tmax = float(tmax)
+                except (TypeError, ValueError):
+                    await say({"error": f"tmax must be a number, not "
+                                        f"{first.get('tmax')!r}"})
+                    return
+                if not math.isfinite(tmax):
+                    await say({"error": "tmax must be a finite number"})
+                    return
 
             if _RUNNING.is_set():
-                await ws.send_json({"error": "a simulation is already streaming"})
+                await say({"error": "a simulation is already streaming"})
                 return
             _RUNNING.set()
+            mine = True
             task = asyncio.create_task(reader())
+
             try:
+                # NO configure() here. It applied SANE_SOLVER on every run, so the solver
+                # the caller had just set was thrown away and the run used the defaults --
+                # the solver panel had no effect unless its values happened to match.
+                # Sane defaults belong to a NEW model, not to every run, and a loaded
+                # file's own solver block must be respected.
+                await call(lambda: engine().reset())
+            except RuntimeError as ex:
+                await say({"error": str(ex)})
+                return
+            if tmax is not None:
+                # tmax is part of the saved document, not a transient run argument, so a
+                # run edits the model. Announce it, or Save silently persists a horizon
+                # the user never chose to store.
+                await call(checkpoint)
+                await call(lambda: engine().minsky.tmax(tmax))
+                mark_dirty()
+
+            names = await call(
+                lambda: [k for k in engine().minsky.variableValues.keys()
+                         if not k.startswith("constant:")])
+            for i in range(steps):
+                if stop.is_set():
+                    await say({"stopped": True, "step": i})
+                    break
+
+                def _one():
+                    m = engine().minsky
+                    m.step()
+                    return m.t(), {k: m.variableValues[k].value() for k in names}
+
                 try:
-                    # NO configure() here. It applied SANE_SOLVER on every run, so the
-                    # solver the caller had just set was thrown away and the run used the
-                    # defaults -- the solver panel had no effect unless its values
-                    # happened to match. Sane defaults belong to a NEW model, not to
-                    # every run, and a loaded file's own solver block must be respected.
-                    await call(lambda: engine().reset())
-                except RuntimeError as ex:
-                    await ws.send_json({"error": str(ex)})
-                    return
-                if tmax is not None:
-                    # tmax is part of the saved document, not a transient run argument,
-                    # so a run edits the model. Announce it, or Save silently persists a
-                    # horizon the user never chose to store.
-                    await call(checkpoint)
-                    await call(lambda: engine().minsky.tmax(float(tmax)))
-                    mark_dirty()
-
-                names = await call(
-                    lambda: [k for k in engine().minsky.variableValues.keys()
-                             if not k.startswith("constant:")])
-                for i in range(steps):
-                    if stop.is_set():
-                        await ws.send_json({"stopped": True, "step": i})
-                        break
-
-                    def _one():
-                        m = engine().minsky
-                        m.step()
-                        return m.t(), {k: m.variableValues[k].value() for k in names}
-
-                    try:
-                        t, vals = await call(_one)
-                    except Exception as ex:
-                        await ws.send_json({"error": f"step {i} failed: {ex}"})
-                        break
-                    bad = nonfinite(vals)
-                    await ws.send_json(jsonable(
-                        {"step": i, "t": t, "values": vals, "diverged": bad or None}))
-                    if bad:
-                        # keep going past this and every later frame is noise
-                        await ws.send_json({"done": True, "reason": "diverged",
-                                            "variables": bad})
-                        break
-                    if tmax is not None and t >= float(tmax):
-                        await ws.send_json({"done": True, "reason": "tmax", "t": t})
-                        break
-                else:
-                    await ws.send_json({"done": True, "reason": "steps"})
-            finally:
-                _RUNNING.clear()
-                task.cancel()
+                    t, vals = await call(_one)
+                except Exception as ex:
+                    await say({"error": f"step {i} failed: {ex}"})
+                    break
+                bad = nonfinite(vals)
+                if not await say(jsonable(
+                        {"step": i, "t": t, "values": vals, "diverged": bad or None})):
+                    break
+                if bad:
+                    # keep going past this and every later frame is noise
+                    await say({"done": True, "reason": "diverged", "variables": bad})
+                    break
+                if tmax is not None and t >= tmax:
+                    await say({"done": True, "reason": "tmax", "t": t})
+                    break
+            else:
+                await say({"done": True, "reason": "steps"})
         except WebSocketDisconnect:
-            _RUNNING.clear()
+            pass
+        finally:
+            # Only the connection that TOOK the lock may release it. A second socket that
+            # opened and closed without sending anything used to clear the flag belonging
+            # to a run already in progress, which unlocked editing in the middle of it.
+            if mine:
+                _RUNNING.clear()
+            if task is not None:
+                task.cancel()
 
     ui = Path(__file__).parent / "ui"
     if ui.is_dir():

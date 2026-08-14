@@ -702,5 +702,35 @@ check("the file listing returns names verbatim", "plain-check" in names,
       str(names[:3]))
 os.remove(os.path.expanduser("~/minsky-models/plain-check.mky"))
 
+print("\n20. save names are validated, not silently reinterpreted")
+c.post("/api/clear")
+c.post("/api/item", json={"kind":"parameter","name":"z","value":1.0})
+c.post("/api/save", json={"name":"namecheck"})
+
+# a blank name used to fall through to "save to the current file", quietly overwriting it
+for blank in ("", "   "):
+    r = c.post("/api/save", json={"name": blank})
+    check(f"a blank name ({blank!r}) is refused",
+          r.status_code == 422 and "name is required" in r.text, r.text[:60])
+
+# taking the basename neutralised traversal but told the user nothing: "a/b/c" became
+# c.mky and "../escape" became escape.mky, both silently
+for pathish in ("a/b/c", "../escape"):
+    r = c.post("/api/save", json={"name": pathish})
+    check(f"a path-like name ({pathish!r}) is refused with guidance",
+          r.status_code == 422 and "looks like a path" in r.text, r.text[:60])
+
+check("a plain name still saves",
+      c.post("/api/save", json={"name":"namecheck2"}).status_code == 200)
+r = c.post("/api/save", json={})
+check("omitting the name still means save-to-current",
+      r.status_code == 200 and r.json()["name"] == "namecheck2", r.text[:70])
+
+import os
+for f in ("namecheck", "namecheck2"):
+    for suffix in (".mky", ".mky;1"):
+        try: os.remove(os.path.expanduser(f"~/minsky-models/{f}{suffix}"))
+        except OSError: pass
+
 print(f"\n{'ALL PASS' if not FAILED else 'FAILURES: ' + ', '.join(FAILED)}")
 sys.exit(1 if FAILED else 0)

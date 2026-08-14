@@ -349,7 +349,15 @@ def check_save_path(name: str) -> Path:
     A bare name goes to SAVE_DIR. A full path must land inside a WRITABLE root --
     notably NOT ~/minsky/examples, which is readable but must stay pristine.
     """
+    if not name.strip():
+        raise HTTPException(422, "a name is required")
     raw = Path(name).expanduser()
+    if not raw.is_absolute() and (len(raw.parts) > 1 or "\\" in name):
+        # taking the basename silently turned "a/b/c" into c.mky and "../escape" into
+        # escape.mky -- neutralised, but the user was not told where their file went
+        raise HTTPException(
+            422, f"{name!r} looks like a path. Give a bare name, which is saved into "
+                 f"{SAVE_DIR}, or a full path inside a writable directory.")
     p = raw if raw.is_absolute() else SAVE_DIR / raw.name
     if p.suffix.lower() != ".mky":
         p = p.with_suffix(".mky")
@@ -956,7 +964,9 @@ def create_app() -> FastAPI:
     @app.post("/api/save")
     async def save(spec: SaveSpec):
         global _CURRENT
-        if spec.name:
+        # distinguish "save to the current file" from "save as, with a blank name":
+        # a blank name used to fall through and quietly overwrite the current file
+        if "name" in spec.model_fields_set and spec.name is not None:
             dest = check_save_path(spec.name)
         elif _CURRENT:
             dest = check_save_path(_CURRENT)     # plain Save, re-validated

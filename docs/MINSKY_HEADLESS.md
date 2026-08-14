@@ -262,11 +262,11 @@ to `null` — without that the WebSocket frame itself fails to serialise.
 
 ### Not yet built
 
-Godley table editing (the block can be created but not filled from the UI), zoom/pan,
-undo, multi-select, renaming an existing item, and loading a file from a picker rather
-than a path. Godley editing is the significant one — it is the feature that makes Minsky
-worth keeping, and the engine already supports it headlessly (`resize`, `setCell`,
-`getCell`, `assetClass`).
+Multi-select. Shift-drag lassoes a region to GROUP it, but there is no way to select
+several items and move or delete them together.
+
+Everything else once listed here has since been built: Godley table editing, zoom and
+pan, undo and redo, renaming, the file picker, group editing, and value editing.
 
 ## Godley tables — semantics, measured
 

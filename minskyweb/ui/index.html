@@ -1530,16 +1530,29 @@ $("#zout").onclick = () => zoomBy(1/1.25, null, null);
 $("#zfit").onclick = () => fitView();
 $("#zpct").onclick = () => zoomTo100();
 
+// A wheel event's delta is not always in pixels: deltaMode 1 counts LINES and 2 counts
+// PAGES, and treating either as pixels made a mouse wheel behave completely differently
+// from a trackpad.
+function wheelPx(e, v){
+  return e.deltaMode === 1 ? v * 16 : e.deltaMode === 2 ? v * 400 : v;
+}
+
 board.addEventListener("wheel", e => {
   if (!view) fitView();
   e.preventDefault();
   if (e.ctrlKey || e.metaKey) {
-    // trackpad pinch arrives as a wheel event with ctrlKey set
-    zoomBy(Math.exp(-e.deltaY * 0.01), e.clientX, e.clientY);
+    // trackpad pinch arrives as a wheel event with ctrlKey set, in deltas of a few
+    // pixels. A mouse wheel with ctrl held sends 100 or more per notch, and the same
+    // exponential then zoomed 20x in a single event -- one notch took the diagram from
+    // 100% to the 1200% ceiling. Cap what any ONE event may do; a pinch is a stream of
+    // small events and still feels continuous.
+    const f = Math.exp(-wheelPx(e, e.deltaY) * 0.01);
+    zoomBy(Math.min(1.5, Math.max(1/1.5, f)), e.clientX, e.clientY);
   } else {
     // plain two-finger scroll pans, which is the platform convention
     const z = zoomLevel();
-    view = {...view, x: view.x + e.deltaX/z, y: view.y + e.deltaY/z};
+    view = {...view, x: view.x + wheelPx(e, e.deltaX)/z,
+                     y: view.y + wheelPx(e, e.deltaY)/z};
     applyView();
   }
 }, {passive:false});

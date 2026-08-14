@@ -1786,5 +1786,28 @@ check("and a malformed group reference",
       c.post("/api/group/nope/ungroup").status_code == 422)
 
 
+print("\n45. one process's scratch files are its own")
+import re as _re, subprocess, sys as _sys, time as _time, json as _json
+import urllib.request, urllib.error
+# These files were at fixed paths under the system temp directory, shared by every
+# minskyweb process on the machine. Two instances then read each other's models back: an
+# undo answered 200 having replaced its own document with the other's items, and a
+# download served the other's model. A second instance is not exotic -- a stale server, a
+# second checkout, or this very suite running while a server is up.
+from minskyweb.server import _SCRATCH, _hist_file
+check("the scratch directory is private to this process",
+      str(os.getpid()) in str(_SCRATCH), str(_SCRATCH))
+check("and the history file lives inside it",
+      str(_hist_file()).startswith(str(_SCRATCH)), str(_hist_file()))
+src = open(os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                        "minskyweb", "server.py")).read()
+# UPLOAD_DIR is deliberately NOT private: it is a store of models the user uploaded and
+# can reopen, and it is one of the writable roots. Only the transient scratch files --
+# the history buffer and the download staging file -- must belong to one process.
+check("every transient scratch path is built from the private directory",
+      src.count("_SCRATCH /") == 2 and "minskyweb-download" not in src,
+      f'{src.count("_SCRATCH /")} uses')
+
+
 print(f"\n{'ALL PASS' if not FAILED else 'FAILURES: ' + ', '.join(FAILED)}")
 sys.exit(1 if FAILED else 0)

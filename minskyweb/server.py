@@ -30,6 +30,7 @@ simulation that is already stepping it.
 from __future__ import annotations
 
 import asyncio
+import atexit
 import math
 import os
 import shutil
@@ -465,10 +466,23 @@ def history_ptr() -> int:
     return _PTR + 1
 
 
+#: A scratch directory private to THIS process.
+#:
+#: These files were at fixed paths under the system temp directory, shared by every
+#: minskyweb process on the machine. Two instances -- a stale server, a second checkout,
+#: the test suite running while a server is up -- then wrote to the same file and read
+#: each other's models back. Measured: an undo answered 200 having replaced its own
+#: document with the OTHER instance's items; a download served the other instance's
+#: model; and because `Minsky::save()` renames the existing file out of the way before
+#: rewriting it, one process's save deleted the file another was mid-read of, producing a
+#: 500 from an ordinary edit -- or, on the restore path, a 500 with the canvas already
+#: wiped, since `Minsky::load()` clears before it parses.
+_SCRATCH = Path(tempfile.mkdtemp(prefix=f"minskyweb-{os.getpid()}-"))
+atexit.register(lambda: shutil.rmtree(_SCRATCH, ignore_errors=True))
+
+
 def _hist_file() -> Path:
-    d = Path(tempfile.gettempdir()) / "minskyweb"
-    d.mkdir(parents=True, exist_ok=True)
-    return d / "history.mky"
+    return _SCRATCH / "history.mky"
 
 
 def settle():
@@ -1739,7 +1753,7 @@ def create_app() -> FastAPI:
     async def download():
         """Hand the model to the browser so it can be kept anywhere, without giving
         the server a write path outside its own directories."""
-        tmp = Path(tempfile.gettempdir()) / "minskyweb-download.mky"
+        tmp = _SCRATCH / "download.mky"
         await call(lambda: engine().minsky.save(str(tmp)))
         stem = Path(_CURRENT).stem if _CURRENT else "model"
         return FileResponse(str(tmp), media_type="application/xml",

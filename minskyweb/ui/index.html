@@ -542,10 +542,17 @@ function render() {
     // furthest port lets the IntOp (whose output sits 78px out) swallow its neighbour.
     // So the node is drawn at the ENGINE's own extent with the label beneath it, which
     // is the usual dataflow-graph convention and cannot collide with a port.
-    let hw = 18, hh = 13;
+    // The engine places a Godley table's generated stocks 26px apart, so a box wider
+    // than that overlapped its neighbour and the two captions printed over each other.
+    // The caption sits BELOW the box, so the box never has to be wide enough for text.
+    let hw = 12, hh = 13;
     for (const p of it.ports) {
       hw = Math.max(hw, Math.min(30, Math.abs(p.x - it.x)));
-      hh = Math.max(hh, Math.abs(p.y - it.y) + 5);
+      // Cap the height the same way the width is capped. A Godley-generated stock has
+      // ports 45px above and below its centre, so an uncapped box came out 90px tall,
+      // and the engine places those stocks 26px apart -- so they overlapped, and their
+      // captions printed over each other. Ports outside the box already get a stub.
+      hh = Math.max(hh, Math.min(22, Math.abs(p.y - it.y) + 5));
     }
     const L = it.x - hw, R = it.x + hw, T = it.y - hh, B = it.y + hh;
     for (const p of it.ports) {
@@ -563,7 +570,10 @@ function render() {
     // rx = hh makes a small operation a stadium, which is what it should look like --
     // but a plot is over 100px tall, and the same rule turned it into a huge ellipse
     // that swallowed its neighbours. Cap the corner so tall items stay rectangles.
-    shape.setAttribute("rx", cls === "var" || cls === "par" ? 4 : Math.min(hh, 14));
+    // a table is a table: a rounded rectangle, not the stadium an operation gets
+    shape.setAttribute("rx",
+      cls === "var" || cls === "par" || cls === "godley" || cls === "plot"
+        ? 4 : Math.min(hh, 14));
     // The server marks group members readOnly with a null index: there is no index to
     // address them by, so nothing can move, rename or delete one. They were still drawn
     // as ordinary interactive items, and `dataset.idx = null` stringifies to "null",
@@ -1135,38 +1145,52 @@ async function drawGodley(g){
 
   $("#gbody").querySelectorAll("input").forEach(inp => {
     inp.onchange = guard(async () => {
-      const g2 = await api(`/godley/${gIdx}/cell`, {method:"POST", body: JSON.stringify(
-        {row:+inp.dataset.r, col:+inp.dataset.c, value: inp.value})});
-      await drawGodley(g2);
+      await afterGodley(await api(`/godley/${gIdx}/cell`, {method:"POST",
+        body: JSON.stringify(
+          {row:+inp.dataset.r, col:+inp.dataset.c, value: inp.value})}));
     });
   });
   $("#gbody").querySelectorAll("[data-delrow]").forEach(b => {
     b.onclick = guard(async () => {
-      await drawGodley(await api(`/godley/${gIdx}/row/delete`, {method:"POST",
+      await afterGodley(await api(`/godley/${gIdx}/row/delete`, {method:"POST",
         body: JSON.stringify({at: +b.dataset.delrow})}));
     });
   });
   $("#gbody").querySelectorAll("[data-delcol]").forEach(b => {
     b.onclick = guard(async () => {
-      await drawGodley(await api(`/godley/${gIdx}/col/delete`, {method:"POST",
+      await afterGodley(await api(`/godley/${gIdx}/col/delete`, {method:"POST",
         body: JSON.stringify({at: +b.dataset.delcol})}));
     });
   });
   $("#gbody").querySelectorAll("select").forEach(sel => {
     sel.onchange = guard(async () => {
-      await drawGodley(await api(`/godley/${gIdx}/class`, {method:"POST",
+      await afterGodley(await api(`/godley/${gIdx}/class`, {method:"POST",
         body: JSON.stringify({col:+sel.dataset.col, cls: sel.value})}));
     });
   });
 }
+
+// Typing a stock name into a table CREATES a variable on the canvas; clearing it deletes
+// one. Every table edit redrew the table and nothing else, so the canvas kept showing a
+// model that no longer existed -- the generated variables never appeared, the values
+// panel stayed empty, and Save and Undo stayed greyed out over real changes.
+async function afterGodley(g2){
+  await drawGodley(g2);
+  if (g2 && g2.conflicts) g2.conflicts.forEach(c => toast(c.note));
+  state = await api("/state");
+  const still = state.items.find(
+    i => i.index === gIdx && (i.classType || "").includes("Godley"));
+  render();
+  if (!still) closeGodley();       // the table this editor was open on is gone
+}
 $("#gaddflow").onclick = guard(async () => {
   const g = await api(`/godley/${gIdx}`);
-  await drawGodley(await api(`/godley/${gIdx}/row/insert`, {method:"POST",
+  await afterGodley(await api(`/godley/${gIdx}/row/insert`, {method:"POST",
     body: JSON.stringify({at: g.rows})}));
 });
 $("#gaddstock").onclick = guard(async () => {
   const g = await api(`/godley/${gIdx}`);
-  await drawGodley(await api(`/godley/${gIdx}/col/insert`, {method:"POST",
+  await afterGodley(await api(`/godley/${gIdx}/col/insert`, {method:"POST",
     body: JSON.stringify({at: g.cols})}));
 });
 

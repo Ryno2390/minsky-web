@@ -777,6 +777,7 @@ def snapshot() -> dict[str, Any]:
     """Everything a client needs to draw the model."""
     m = engine().minsky
     items = []
+    live_ids: set[str] = set()
     for ref, it in _iter_items(m):
         it.updateBoundingBox()          # port coords are stale until this runs
         # Port 0 is the output for operations and variables, whatever their rotation --
@@ -805,6 +806,13 @@ def snapshot() -> dict[str, Any]:
                     entry["name"] = t
             except Exception:
                 pass
+        try:
+            vid = it.valueId()
+            if vid:
+                live_ids.add(vid)
+        except Exception:
+            if entry.get("name"):
+                live_ids.add(":" + entry["name"])
         items.append(entry)
     groups = []
     for gi in range(len(m.model.groups)):
@@ -836,9 +844,13 @@ def snapshot() -> dict[str, Any]:
     # new initial condition at the next reset -- so a caller who set a parameter to 0.9
     # read 0.4 straight back. `init()` is the initial condition itself, and is true the
     # moment it is written.
+    # `variableValues` keeps an entry after the last icon referring to it is gone, until
+    # the next reset. Typing a flow name into a Godley cell and then changing it left the
+    # abandoned name in the values panel, listed with a value, next to variables that
+    # really exist -- a variable the model does not have. Report what is on the canvas.
     vals, inits = {}, {}
     for k in m.variableValues.keys():
-        if k.startswith("constant:"):
+        if k.startswith("constant:") or k not in live_ids:
             continue
         try:
             vals[k] = m.variableValues[k].value()

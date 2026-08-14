@@ -1522,5 +1522,27 @@ check("and a reset brings them into line",
       vals[":alpha"] == 0.9 and vals[":int1"] == 1.5, str(vals))
 
 
+print("\n41. the values panel lists only variables that exist")
+c.post("/api/clear")
+g = c.post("/api/item", json={"kind":"godley"}).json()["index"]
+for row, col, v in ((0,1,"Reserves"), (0,2,"Deposits"), (2,0,"lending"), (2,1,"L"), (2,2,"L")):
+    c.post(f"/api/godley/{g}/cell", json={"row":row,"col":col,"value":v})
+check("a balanced table reports its three variables",
+      set(c.get("/api/state").json()["values"]) == {":Reserves", ":Deposits", ":L"},
+      str(set(c.get("/api/state").json()["values"])))
+# variableValues keeps an entry after the last icon referring to it is gone, until the
+# next reset -- so a mistyped flow name sat in the values panel with a value next to
+# variables that really exist
+c.post(f"/api/godley/{g}/cell", json={"row":2,"col":2,"value":"M"})
+c.post(f"/api/godley/{g}/cell", json={"row":2,"col":2,"value":"L"})
+st = c.get("/api/state").json()
+check("a name typed and then changed leaves nothing behind",
+      ":M" not in st["values"], str(set(st["values"])))
+check("and the canvas agrees with the values panel",
+      {i["name"] for i in st["items"] if i.get("name")} ==
+      {k.lstrip(":") for k in st["values"]},
+      f"{[i.get('name') for i in st['items']]} vs {list(st['values'])}")
+
+
 print(f"\n{'ALL PASS' if not FAILED else 'FAILURES: ' + ', '.join(FAILED)}")
 sys.exit(1 if FAILED else 0)

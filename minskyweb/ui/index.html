@@ -290,6 +290,15 @@ svg#board.panning{cursor:grabbing}
   </div>
 </div></div>
 
+<div class="fwrap" id="cfwrap"><div class="fpanel" style="max-width:440px">
+  <div class="fhead"><b style="font-size:15px" id="cf-title">Are you sure?</b></div>
+  <div style="padding:16px" id="cf-body"></div>
+  <div class="ffoot" style="justify-content:flex-end;gap:8px">
+    <button class="gbtn" id="cf-no">Cancel</button>
+    <button class="gbtn" id="cf-yes" style="font-weight:600">Discard</button>
+  </div>
+</div></div>
+
 <div class="fwrap" id="sawrap"><div class="fpanel" style="max-width:520px">
   <div class="fhead"><b style="font-size:15px">Save model as</b>
     <div class="spacer"></div><button class="gbtn" id="sa-cancel">Cancel</button></div>
@@ -836,7 +845,10 @@ $("#addform").addEventListener("keydown", e => {
 });
 
 $("#clear").onclick = guard(async () => {
-  if (state.dirty && !confirm("Discard unsaved changes?")) return;
+  if (state.dirty && !await askConfirm(
+        "Discard unsaved changes?",
+        `${state.currentFile || "This model"} has changes that have not been saved. `
+        + "Clearing the canvas throws them away.")) return;
   state = await api("/clear", {method:"POST"});
   clearSelection(); series = {}; tSeries = []; colors = {}; drawPlot(); render();
 });
@@ -1294,6 +1306,30 @@ $("#save").onclick = guard(async () => {
   if (!state.currentFile) return $("#saveas").click();
   await doSave(null);
 });
+// confirm(), like prompt(), is a modal the page cannot style and which blocks everything
+// -- including the very rendering that would show the user what they are about to lose.
+let cfResolve = null;
+function askConfirm(title, body, yes = "Discard"){
+  $("#cf-title").textContent = title;
+  $("#cf-body").textContent = body;
+  $("#cf-yes").textContent = yes;
+  $("#cfwrap").classList.add("open");
+  $("#cf-no").focus();
+  return new Promise(res => { cfResolve = res; });
+}
+function endConfirm(v){
+  $("#cfwrap").classList.remove("open");
+  const r = cfResolve; cfResolve = null;
+  if (r) r(v);
+}
+$("#cf-yes").onclick = () => endConfirm(true);
+$("#cf-no").onclick  = () => endConfirm(false);
+addEventListener("keydown", e => {
+  if (!cfResolve) return;
+  if (e.key === "Escape") { e.preventDefault(); endConfirm(false); }
+  if (e.key === "Enter")  { e.preventDefault(); endConfirm(true); }
+});
+
 // Save As used a native prompt(), which is a modal the page cannot style, validate or
 // explain -- the only feedback for a name the server refuses was a toast after the
 // dialog had already gone. Same inline form treatment as adding an item.
@@ -1343,7 +1379,10 @@ addEventListener("beforeunload", e => {
 /* ---------- file picker ---------- */
 let fileRoots = [];
 $("#open").onclick = guard(async () => {
-  if (state.dirty && !confirm("Discard unsaved changes and open another model?")) return;
+  if (state.dirty && !await askConfirm(
+        "Discard unsaved changes?",
+        `${state.currentFile || "This model"} has changes that have not been saved. `
+        + "Opening another model throws them away.")) return;
   fileRoots = (await api("/files")).roots;
   $("#fwrap").classList.add("open");
   $("#fsearch").value = ""; drawFiles(); $("#fsearch").focus();

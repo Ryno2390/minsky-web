@@ -558,28 +558,43 @@ class Model:
         item.move_to(x, y)
 
     def ungroup(self, gref) -> int:
-        """Dissolve group `gi`, leaving its contents as ordinary top-level items.
+        """Dissolve a TOP-LEVEL group, leaving its contents as ordinary items.
 
-        This is how a group's contents become editable. The canvas hit test -- which is
-        how delete and wiring find their target -- searches only the model the canvas is
-        pointed at, and never descends into a group. Minsky's own client re-points the
-        canvas at the group (`Canvas::openGroupInCanvas`), but that takes an ItemPtr and
-        pyminsky cannot marshal one, so from here the way in is to take the group apart.
+        Only a top-level one. `canvas.getItemAt` searches the model the canvas is pointed
+        at and never descends into a group, so asking it to focus a NESTED group silently
+        focused the enclosing one and `ungroupItem()` dissolved that instead -- answering
+        200, reporting a count, and leaving the group the caller named still a group.
+        The guard did not catch it because the total group count fell either way.
 
-        Verified on GoodwinLinear02: 18 top-level items and 19 top-level wires become 26
-        and 27, the group is gone, every freed item answers the canvas hit test, and the
-        model still resets. Undo puts the group back.
+        There is a way in, and it is to peel from the outside: dissolving the outer group
+        re-roots the inner one at the top level, where it can be dissolved in turn.
         """
-        node = self.minsky.model
         path = str(gref)[1:] if str(gref).startswith("g") else str(gref)
+        node = self.minsky.model
         for part in path.split("."):
             n = len(node.groups)
             if not part.isdigit() or not 0 <= int(part) < n:
                 raise IndexError(f"group {gref} out of range" if n
                                  else "this model has no groups")
             node = node.groups[int(part)]
+        if "." in path:
+            outer = "g" + path.rsplit(".", 1)[0]
+            title = ""
+            try:
+                title = (self._group_at(path.rsplit(".", 1)[0]).title() or "").strip()
+            except Exception:
+                pass
+            raise ValueError(
+                f"{gref} is inside another group, and only a top-level group can be "
+                f"dissolved -- the canvas cannot focus one that is nested. Ungroup "
+                f"{(repr(title) + ' (' + outer + ')') if title else outer} first; that "
+                f"leaves {gref} at the top level, where it can be dissolved in turn.")
+
         g = node
         inner = len(g.items)
+        # Count groups at EVERY depth. Dissolving a group re-roots any sub-groups it
+        # held, so the top-level count does not fall -- but the model holds exactly one
+        # group fewer, wherever the survivors end up.
         before_groups = self._count_groups()
         if not self.minsky.canvas.getItemAt(g.x(), g.y()):
             raise RuntimeError(
@@ -588,11 +603,17 @@ class Model:
         before = len(self.minsky.model.items)
         self.minsky.canvas.ungroupItem()
         gained = len(self.minsky.model.items) - before
-        if self._count_groups() >= before_groups:
+        if self._count_groups() != before_groups - 1:
             raise RuntimeError(
-                "ungrouping left the group in place. The canvas hit test may have "
-                "focused a different item that overlaps it.")
+                "ungrouping did not remove exactly the group asked for. The canvas hit "
+                "test may have focused a different item that overlaps it.")
         return gained if gained > 0 else inner
+
+    def _group_at(self, path: str):
+        node = self.minsky.model
+        for part in path.split("."):
+            node = node.groups[int(part)]
+        return node
 
     def _count_groups(self) -> int:
         """Groups at every depth -- a nested one does not change the top-level count."""

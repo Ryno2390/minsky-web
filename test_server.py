@@ -1768,17 +1768,62 @@ check("the rename reached the model",
       any(i.get("name") == "deep" for i in c.get("/api/state").json()["items"]))
 check("the model still resets", c.post("/api/reset").status_code == 200)
 
-# groups are addressed by ref, so a nested one can be named and dissolved
+# groups are addressed by ref, so a nested one can be named
 check("a nested group can be renamed",
       c.post("/api/group/g0.0/rename", json={"name":"Inner"}).status_code == 200)
-check("and dissolved on its own",
-      c.post("/api/group/g0.0/ungroup").status_code == 200)
+c.post("/api/group/g0/rename", json={"name": "Outer"})
+
+# getItemAt can only focus a TOP-LEVEL group, so asking to dissolve a nested one used to
+# focus the ENCLOSING group and dissolve that instead -- answering 200 with a count. The
+# old assertions here checked only that one group and six items remained, which is just
+# as true when the WRONG group goes, so the suite stayed green over it. Assert WHICH
+# group survived.
+r = c.post("/api/group/g0.0/ungroup")
+check("dissolving a nested group is refused", r.status_code == 409, str(r.status_code))
+check("and the refusal names the group to ungroup first",
+      "Outer" in r.text and "g0" in r.text, r.text[:110])
 st = c.get("/api/state").json()
-check("leaving the outer group holding everything",
-      len(st["groups"]) == 1 and len(st["items"]) == 6, f"{len(st['groups'])} groups")
-c.post("/api/undo")
+check("nothing was dissolved",
+      [g["title"] for g in st["groups"]] == ["Outer", "Inner"],
+      str([g["title"] for g in st["groups"]]))
+
+# peeling from the outside works: the inner group is re-rooted and can then be dissolved
+check("the outer group can be dissolved",
+      c.post("/api/group/g0/ungroup").status_code == 200)
+st = c.get("/api/state").json()
+check("and it is the OUTER one that went",
+      [g["title"] for g in st["groups"]] == ["Inner"],
+      str([g["title"] for g in st["groups"]]))
+check("the inner group is now top level and can be dissolved",
+      c.post("/api/group/g0/ungroup").status_code == 200)
+check("leaving every item at the top level",
+      not c.get("/api/state").json()["groups"]
+      and all(i["index"] is not None for i in c.get("/api/state").json()["items"]))
+c.post("/api/undo"); c.post("/api/undo")
 check("undo restores the nesting",
-      len(c.get("/api/state").json()["groups"]) == 2)
+      [g["title"] for g in c.get("/api/state").json()["groups"]] == ["Outer", "Inner"],
+      str([g["title"] for g in c.get("/api/state").json()["groups"]]))
+
+# The engine wire count summed ONE level, so once a group held a group the wires inside
+# it were never counted: the engine total came out below the tracked total and the UI
+# reported a permanent desync of "-N wires could not be traced" over a correct model.
+c.post("/api/clear")
+_p = c.post("/api/item", json={"kind":"parameter","name":"c","value":2,
+                               "at":[200,300]}).json()["index"]
+_i = c.post("/api/item", json={"kind":"operation","op":"integrate",
+                               "at":[340,300]}).json()["index"]
+c.post("/api/wire", json={"src":_p,"dst":_i,"port":1})
+c.post("/api/item", json={"kind":"parameter","name":"far","value":9,"at":[700,300]})
+c.post("/api/group", json={"x0":150,"y0":250,"x1":420,"y1":350})   # wire goes inside
+c.post("/api/group", json={"x0":100,"y0":230,"x1":800,"y1":370})   # and that group nests
+st = c.get("/api/state").json()
+check("a wire two groups deep is still counted",
+      not any(w.get("desync") for w in st["wires"]),
+      str([w for w in st["wires"] if w.get("desync")]))
+check("and it is still drawn",
+      len([w for w in st["wires"] if not w.get("desync")]) == 1)
+check("only one place counts engine wires",
+      "sum(len(m.model.groups[g].wires)" not in src)
 
 check("a group reference that does not exist is refused",
       c.post("/api/group/g0.9/ungroup").status_code == 422)

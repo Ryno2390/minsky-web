@@ -263,8 +263,17 @@ def refuse_in_group(ref: str, what: str):
 
 
 def _engine_wire_count(m) -> int:
-    return len(m.model.wires) + sum(len(m.model.groups[g].wires)
-                                    for g in range(len(m.model.groups)))
+    """Every wire the engine holds, at every depth.
+
+    Groups nest, and this summed one level only -- so once a group held a group, the
+    wires inside it were never counted. The engine total then came out BELOW the tracked
+    total, and snapshot() reported a permanent desync with a negative difference, which
+    the UI showed as "-8 wires could not be traced". Nothing was actually wrong.
+    """
+    def walk(node):
+        return len(node.wires) + sum(walk(node.groups[i])
+                                     for i in range(len(node.groups)))
+    return walk(m.model)
 
 
 def _wire_probes(x1, y1, x2, y2):
@@ -988,8 +997,7 @@ def snapshot() -> dict[str, Any]:
                               src=si, src_port=sp, dst=di, dst_port=dp))
         except Exception:
             continue
-    n_engine = len(m.model.wires) + sum(len(m.model.groups[g].wires)
-                                        for g in range(len(m.model.groups)))
+    n_engine = _engine_wire_count(m)
     if len(_WIRES) != n_engine:
         # our record and the engine disagree -- say so rather than draw a wrong picture
         wires.append(dict(index=-1, desync=True,
@@ -1589,6 +1597,9 @@ def create_app() -> FastAPI:
                 return restructuring(lambda: m.ungroup(ref))
             except IndexError as ex:
                 raise HTTPException(422, str(ex))
+            except ValueError as ex:
+                # a nested group: refused before anything is touched, so nothing to undo
+                raise HTTPException(409, str(ex))
             except RuntimeError as ex:
                 rollback()
                 raise HTTPException(400, f"{ex} The model was left unchanged.")

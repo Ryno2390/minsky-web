@@ -1167,5 +1167,68 @@ check("undo puts the solver back",
       str(c.get("/api/state").json()["solver"]["order"]))
 
 
+print("\n33. opening and saving files")
+import os, tempfile, shutil as _sh
+from minskyweb.server import SAVE_DIR, WRITE_ROOTS
+
+# containment is decided on RESOLVED paths: normpath collapses "..", but cannot see a
+# symlink, and a link inside a writable directory let the write follow it straight out
+esc = tempfile.mkdtemp()
+link = SAVE_DIR / "escape-probe"
+try:
+    SAVE_DIR.mkdir(parents=True, exist_ok=True)
+    if link.is_symlink() or link.exists():
+        link.unlink()
+    link.symlink_to(esc)
+    r = c.post("/api/save", json={"name": str(link / "pwned.mky")})
+    check("a save through a symlink out of the root is refused",
+          r.status_code == 403, f"{r.status_code}")
+    check("and nothing was written outside it",
+          not os.path.exists(os.path.join(esc, "pwned.mky")))
+finally:
+    if link.is_symlink(): link.unlink()
+    _sh.rmtree(esc, ignore_errors=True)
+
+# the extension is normalised, or the Open picker never lists what was just saved
+c.post("/api/clear")
+c.post("/api/item", json={"kind": "parameter", "name": "c", "value": 1})
+r = c.post("/api/save", json={"name": "CaseProbe.MKY"}).json()
+check("Save As x.MKY writes x.mky", r["saved"].endswith("CaseProbe.mky"), r["saved"])
+files = c.get("/api/files").json()
+check("and the Open picker lists it",
+      any(f["name"] == "CaseProbe" for rt in files["roots"] for f in rt["files"]))
+# a name with a dot in it keeps all of it
+r2 = c.post("/api/save", json={"name": "my.model"}).json()
+check("Save As my.model writes my.model.mky",
+      r2["saved"].endswith("my.model.mky"), r2["saved"])
+
+# load() reports success on any well-formed XML and yields an EMPTY model, so a damaged
+# file replaced the open model with nothing, answered 200, and left its own name in the
+# title bar for the next Save to write over
+EX = "/Users/ryneschultz/minsky/examples/GoodwinLinear02.mky"
+if os.path.exists(EX):
+    c.post("/api/load", params={"path": EX})
+    n = len(c.get("/api/state").json()["items"])
+    bad = SAVE_DIR / "corrupt-probe.mky"
+    bad.write_text("<Minsky><items><Item><type>parameter</type></Item></items>"
+                   "<wires><Wire/></wires></Minsky>")
+    trunc = SAVE_DIR / "truncated-probe.mky"
+    trunc.write_bytes(open(EX, "rb").read(4000))
+    try:
+        for f, why in ((bad, "a file the engine reads nothing from"),
+                       (trunc, "a truncated file")):
+            r = c.post("/api/load", params={"path": str(f)})
+            check(f"{why} is refused", r.status_code == 422, f"{r.status_code}")
+            st = c.get("/api/state").json()
+            check(f"and the open model survives {why}",
+                  len(st["items"]) == n and st["currentFile"] == "GoodwinLinear02",
+                  f"{len(st['items'])} items, file={st['currentFile']}")
+    finally:
+        bad.unlink(missing_ok=True); trunc.unlink(missing_ok=True)
+
+for junk in ("CaseProbe.mky", "my.model.mky"):
+    (SAVE_DIR / junk).unlink(missing_ok=True)
+
+
 print(f"\n{'ALL PASS' if not FAILED else 'FAILURES: ' + ', '.join(FAILED)}")
 sys.exit(1 if FAILED else 0)

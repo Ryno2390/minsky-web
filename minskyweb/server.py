@@ -417,6 +417,20 @@ def capture_tip():
     _snap()
 
 
+def rollback():
+    """Put the last recorded state back. Returns False if there is nothing to go back to.
+
+    `Minsky::load()` clears the model BEFORE parsing, so a file that fails half way
+    through leaves the canvas wiped -- and `_CURRENT` still naming the file that was open
+    a moment ago, so the next Save wrote the wreckage over it. Since we keep whole
+    documents, the previous one can simply be put back.
+    """
+    if not (0 <= _PTR < len(_HIST)):
+        return False
+    _restore(_HIST[_PTR])
+    return True
+
+
 def reset_history():
     """Start a fresh timeline, with the current model as its baseline."""
     global _PTR
@@ -457,6 +471,26 @@ def _roots() -> list[Path]:
     return [r for r in MODEL_ROOTS if r.is_dir()]
 
 
+def _resolved(p: Path) -> Path:
+    """Resolve symlinks in a path that need not exist yet.
+
+    `Path.resolve()` handles a missing leaf fine but we want the deepest EXISTING
+    ancestor resolved even when several trailing components are missing, so containment
+    is judged on real locations rather than on the names someone typed.
+    """
+    p = Path(os.path.normpath(str(p.expanduser())))
+    tail = []
+    cur = p
+    while True:
+        try:
+            return cur.resolve(strict=True).joinpath(*reversed(tail))
+        except OSError:
+            if cur.parent == cur:
+                return p
+            tail.append(cur.name)
+            cur = cur.parent
+
+
 def check_save_path(name: str) -> Path:
     """Resolve a save target, or refuse it.
 
@@ -473,16 +507,24 @@ def check_save_path(name: str) -> Path:
             422, f"{name!r} looks like a path. Give a bare name, which is saved into "
                  f"{SAVE_DIR}, or a full path inside a writable directory.")
     p = raw if raw.is_absolute() else SAVE_DIR / raw.name
-    if p.suffix.lower() != ".mky":
-        try:
-            p = p.with_suffix(".mky")
-        except ValueError:
-            # "/" and "//" have no name to give a suffix to, and raised a bare 500
-            raise HTTPException(422, f"{name!r} is not a usable file name")
-    p = Path(os.path.normpath(str(p)))
+    if not p.name:
+        # "/" and "//" have no name to give a suffix to, and raised a bare 500
+        raise HTTPException(422, f"{name!r} is not a usable file name")
+    if p.suffix != ".mky":
+        if p.suffix.lower() == ".mky":
+            p = p.with_suffix(".mky")       # "x.MKY" -- normalise, or the Open picker
+        else:                               # never lists the file that was just saved
+            p = p.with_name(p.name + ".mky")   # append; do not eat "my.model"
+    # Containment must be decided on RESOLVED paths, both sides. normpath() collapses
+    # "..", but it cannot see a symlink: a link inside the save directory pointing
+    # anywhere at all passed this check and the write followed it straight out. And
+    # comparing an unresolved target against a resolved root failed the other way --
+    # a plain Save after an Upload was refused 403 listing the very directory it was
+    # refusing, because the upload directory's own path contains a symlink.
+    p = _resolved(p)
     for r in WRITE_ROOTS:
         try:
-            p.relative_to(r.resolve() if r.exists() else r)
+            p.relative_to(_resolved(r))
             p.parent.mkdir(parents=True, exist_ok=True)
             return p
         except ValueError:
@@ -506,6 +548,34 @@ def is_minsky_document(path) -> bool:
     except Exception:
         return False
     return root.tag.split("}")[-1] == "Minsky"
+
+
+def load_complaint(path) -> str | None:
+    """Did the engine actually read the file? Returns something to say, or None.
+
+    Checking the root tag before loading catches a foreign document, but not a Minsky
+    file that is truncated, or written by a schema this build cannot read. `load()`
+    reports success for those too and leaves an EMPTY model -- so opening a damaged file
+    silently replaced the open model with nothing, answered 200, and left the damaged
+    file's name in the title bar for the next Save to overwrite.
+
+    Nothing in the engine reports this, so compare what the file declares against what
+    the engine produced.
+    """
+    import xml.etree.ElementTree as ET
+    try:
+        root = ET.parse(str(path)).getroot()
+    except Exception as ex:
+        return f"the XML could not be parsed ({ex})"
+    n_items = len(root.findall(".//{*}Item")) + len(root.findall(".//{*}Group"))
+    n_wires = len(root.findall(".//{*}Wire"))
+    if not (n_items or n_wires):
+        return None                      # a genuinely empty model is a legitimate file
+    m = engine().minsky
+    if len(m.model.items) or len(m.model.groups):
+        return None
+    return (f"it declares {n_items} items and {n_wires} wires, but the engine read "
+            f"none of them")
 
 
 def check_model_path(path: str) -> Path:
@@ -1132,7 +1202,7 @@ def create_app() -> FastAPI:
         out = []
         for r in _roots():
             entries = []
-            for f in sorted(r.glob("*.mky")):
+            for f in sorted(x for x in r.iterdir() if x.suffix.lower() == ".mky"):
                 try:
                     st = f.stat()
                 except OSError:
@@ -1153,7 +1223,23 @@ def create_app() -> FastAPI:
         with dest.open("wb") as fh:
             shutil.copyfileobj(file.file, fh)
         global _CURRENT
-        await call(lambda: engine().minsky.load(str(dest)))
+        if not await call(is_minsky_document, str(dest)):
+            raise HTTPException(
+                422, f"{name} is not a Minsky model. Nothing was changed.")
+        await call(checkpoint)
+        try:
+            await call(lambda: engine().minsky.load(str(dest)))
+        except Exception as ex:
+            kept = await call(rollback)
+            raise HTTPException(422, f"{name} could not be read: {ex}. " +
+                                ("The model you had open was kept." if kept else
+                                 "The canvas has been cleared."))
+        complaint = await call(load_complaint, str(dest))
+        if complaint:
+            kept = await call(rollback)
+            raise HTTPException(422, f"{name} could not be read: {complaint}. " +
+                                ("The model you had open was kept." if kept else
+                                 "The canvas has been cleared."))
         _WIRES.clear()
         _WIRES.extend(await call(_topology_from_mky, str(dest)))
         _CURRENT = str(dest); mark_dirty(False)
@@ -1168,7 +1254,20 @@ def create_app() -> FastAPI:
         if not await call(is_minsky_document, path):
             raise HTTPException(
                 422, f"{Path(path).name} is not a Minsky model. Nothing was changed.")
-        await call(lambda: engine().minsky.load(path))
+        await call(checkpoint)
+        try:
+            await call(lambda: engine().minsky.load(path))
+        except Exception as ex:
+            kept = await call(rollback)
+            raise HTTPException(422, f"{Path(path).name} could not be read: {ex}. " +
+                                ("The model you had open was kept." if kept else
+                                 "The canvas has been cleared."))
+        complaint = await call(load_complaint, path)
+        if complaint:
+            kept = await call(rollback)
+            raise HTTPException(422, f"{Path(path).name} could not be read: {complaint}. " +
+                                ("The model you had open was kept." if kept else
+                                 "The canvas has been cleared."))
         _WIRES.clear()
         _WIRES.extend(await call(_topology_from_mky, path))
         _CURRENT = path; mark_dirty(False)

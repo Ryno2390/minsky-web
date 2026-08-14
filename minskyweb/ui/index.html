@@ -163,6 +163,22 @@ svg#board.panning{cursor:grabbing}
 .zoomer button:hover{background:var(--panel-2)}
 .zoomer .pct{font:11.5px var(--mono);color:var(--ink-2);padding:0 9px;min-width:56px;
   text-align:center;cursor:pointer;user-select:none}
+
+/* ---------- inline add form ---------- */
+.addform{display:none;margin:4px 0 8px;padding:9px 10px;border-radius:7px;
+  background:var(--panel-2);border:1px solid var(--line-2)}
+.addform.open{display:block}
+.addform .lbl{font:10px var(--mono);letter-spacing:.1em;text-transform:uppercase;
+  color:var(--ink-3);display:block;margin:0 0 5px}
+.addform input{width:100%;font:12.5px var(--mono);color:var(--ink);background:var(--bg);
+  border:1px solid var(--line-2);border-radius:5px;padding:5px 8px;outline:none}
+.addform input:focus{border-color:var(--accent)}
+.addform input.bad{border-color:var(--bad)}
+.addform .val{margin-top:7px}
+.addform .err{color:var(--bad);font-size:11.5px;margin-top:6px;display:none}
+.addform .err.show{display:block}
+.addform .btns{display:flex;gap:6px;margin-top:8px}
+.addform .btns button{flex:1;font-size:12px;padding:4px 0}
 </style>
 
 <div class="top">
@@ -192,6 +208,15 @@ svg#board.panning{cursor:grabbing}
   <div class="grid2" id="ops"></div>
   <h3>Blocks</h3>
   <button class="pitem" data-add="godley"><i class="dot" style="background:var(--godley)"></i>Godley table</button>
+
+  <div class="addform" id="addform">
+    <span class="lbl" id="af-title">New variable</span>
+    <input id="af-name" placeholder="name" autocomplete="off" spellcheck="false">
+    <div class="val" id="af-valwrap"><input id="af-value" placeholder="value" autocomplete="off"></div>
+    <div class="err" id="af-err"></div>
+    <div class="btns"><button id="af-cancel">Cancel</button>
+      <button id="af-ok" class="primary">Add</button></div>
+  </div>
 </div>
 
 <div class="canvas">
@@ -431,24 +456,82 @@ $("#ops").innerHTML = OPS.map(o =>
   `<button class="pitem" data-add="operation" data-op="${o}">
      <i class="dot" style="background:var(--op)"></i>${o}</button>`).join("");
 
+// Adding a named item used to fire two chained native prompt() dialogs. They block the
+// page, cannot be validated before a round trip, and cannot be answered independently.
+// This is an inline form instead: it validates locally, reports errors in place rather
+// than as a toast, and keeps the keyboard.
+let pending = null;
+
+function openAddForm(kind, vt){
+  pending = {kind, vt};
+  const f = $("#addform");
+  const isParam = kind === "parameter";
+  $("#af-title").textContent = isParam ? "New parameter"
+                                       : `New ${vt} variable`;
+  // a parameter needs a value; a stock takes an optional initial one; a flow is driven
+  // by whatever is wired into it, so it has neither
+  $("#af-valwrap").style.display = (isParam || vt === "stock") ? "" : "none";
+  $("#af-value").placeholder = isParam ? "value (required)" : "initial value (optional)";
+  $("#af-name").value = ""; $("#af-value").value = isParam ? "1.0" : "";
+  $("#af-name").classList.remove("bad"); $("#af-value").classList.remove("bad");
+  $("#af-err").classList.remove("show");
+  f.classList.add("open");
+  $("#af-name").focus();
+}
+function closeAddForm(){ $("#addform").classList.remove("open"); pending = null; }
+function formError(msg, which){
+  $("#af-err").textContent = msg; $("#af-err").classList.add("show");
+  if (which) { $(which).classList.add("bad"); $(which).focus(); $(which).select?.(); }
+}
+
+async function submitAddForm(){
+  if (!pending) return;
+  const {kind, vt} = pending;
+  const name = $("#af-name").value.trim();
+  $("#af-name").classList.remove("bad"); $("#af-value").classList.remove("bad");
+  $("#af-err").classList.remove("show");
+  if (!name) return formError("A name is required.", "#af-name");
+  if (/^[0-9]/.test(name))
+    return formError("A name cannot start with a digit.", "#af-name");
+
+  const body = {kind: kind === "parameter" ? "parameter" : "variable"};
+  body.name = name;
+  if (kind !== "parameter") body.var_type = vt;
+
+  const raw = $("#af-value").value.trim();
+  const needsValue = kind === "parameter";
+  if (needsValue || raw) {
+    const v = Number(raw);
+    if (raw === "" || !isFinite(v))
+      return formError(`"${raw}" is not a number.`, "#af-value");
+    body.value = v;
+  }
+  try {
+    const r = await api("/item", {method:"POST", body: JSON.stringify(body)});
+    state = r.state; sel = r.index;
+    closeAddForm(); render();
+  } catch (err) {
+    formError(err.message, "#af-name");     // e.g. a name already used at another type
+  }
+}
+
 document.addEventListener("click", guard(async e => {
   const b = e.target.closest("[data-add]"); if (!b) return;
   const kind = b.dataset.add;
+  if (kind === "variable" || kind === "parameter")
+    return openAddForm(kind, b.dataset.vt);
   const body = {kind};
   if (kind === "operation") body.op = b.dataset.op;
-  if (kind === "variable") {
-    body.var_type = b.dataset.vt;
-    const n = prompt(`Name for the ${b.dataset.vt} variable:`); if (!n) return;
-    body.name = n;
-  }
-  if (kind === "parameter") {
-    const n = prompt("Parameter name:"); if (!n) return;
-    const v = prompt(`Value for ${n}:`, "1.0"); if (v === null) return;
-    body.name = n; body.value = parseFloat(v);
-  }
   const r = await api("/item", {method:"POST", body:JSON.stringify(body)});
   state = r.state; sel = r.index; render();
 }));
+
+$("#af-ok").onclick = guard(submitAddForm);
+$("#af-cancel").onclick = closeAddForm;
+$("#addform").addEventListener("keydown", e => {
+  if (e.key === "Enter") { e.preventDefault(); $("#af-ok").click(); }
+  if (e.key === "Escape") { e.preventDefault(); closeAddForm(); }
+});
 
 $("#clear").onclick = guard(async () => {
   if (state.dirty && !confirm("Discard unsaved changes?")) return;

@@ -545,13 +545,22 @@ def create_app() -> FastAPI:
         def _add():
             m = engine()
             if spec.kind == "parameter":
-                if spec.name is None or spec.value is None:
-                    raise HTTPException(422, "parameter needs name and value")
+                if not spec.name:
+                    raise HTTPException(422, "a parameter needs a name")
+                if spec.value is None:
+                    # said "needs name and value" even when a name was given and only
+                    # the value failed to parse, which sent people looking in the wrong
+                    # place
+                    raise HTTPException(
+                        422, "a parameter needs a numeric value")
                 return m.parameter(spec.name, spec.value, at=spec.at)
             if spec.kind == "variable":
-                if spec.name is None:
-                    raise HTTPException(422, "variable needs a name")
-                return m.variable(spec.name, spec.var_type, at=spec.at)
+                if not spec.name:
+                    raise HTTPException(422, "a variable needs a name")
+                it = m.variable(spec.name, spec.var_type, at=spec.at)
+                if spec.value is not None:      # optional initial value, e.g. for a stock
+                    m.set_init(spec.name, spec.value)
+                return it
             if spec.kind == "operation":
                 if not spec.op:
                     raise HTTPException(422, "operation needs 'op'")

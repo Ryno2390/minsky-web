@@ -520,8 +520,19 @@ equality. All 37 shipped examples still load exactly.
 conditions — so a user must press *+ Flow row* before entering anything, while the hint
 text talks about flows. Discoverable, not fixed.
 
-Also noted, not fixed: adding a variable or parameter fires **two chained native
-`prompt()` dialogs**, which block the page, cannot be validated, and cannot be answered
-independently by an automated client. Entering a non-numeric value gets the message
-"parameter needs name and value", which is wrong — a name *was* given; only the value was
-unparseable.
+**Adding a variable fired two chained native `prompt()` dialogs** — now an inline form in
+the palette. The prompts blocked the page, could not validate before a round trip, and
+could not be answered independently at all (an automated client gives both the same
+answer). Validation is now local and reported in place rather than as a toast: a missing
+name, a name starting with a digit, and an unparseable value each say so against the
+offending field, and the form stays open with the input preserved.
+
+The server's message was wrong too. "parameter needs name and value" appeared when a name
+*had* been given and only the value failed to parse, which sends people looking in the
+wrong place; it now says "a parameter needs a numeric value". A stock may also carry an
+optional initial value, a flow takes none (it is driven by whatever is wired in), and a
+parameter requires one.
+
+Worth knowing: **the same name twice is legitimate.** Minsky treats it as one variable
+with two icons, so the form does not reject it — verified that two `alpha` icons yield a
+single `:alpha` value.

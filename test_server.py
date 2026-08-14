@@ -356,5 +356,35 @@ check("its wires survived", len(back["wires"]) == n_wires,
 g = c.get(f"/api/godley/{gi if gi < len(back['items']) else 0}").json()
 check("its godley table survived", "Reserves" in str(g["cells"]), str(g["cells"][0])[:60])
 
+print("\n12. item creation: messages and optional initial values")
+c.post("/api/clear")
+r = c.post("/api/item", json={"kind":"parameter","name":"p"})
+check("missing value names the VALUE, not the name",
+      r.status_code == 422 and "numeric value" in r.text, r.text[:70])
+r = c.post("/api/item", json={"kind":"parameter","value":1.0})
+check("missing name says so", r.status_code == 422 and "needs a name" in r.text,
+      r.text[:60])
+r = c.post("/api/item", json={"kind":"variable","var_type":"flow"})
+check("variable without a name is refused",
+      r.status_code == 422 and "needs a name" in r.text, r.text[:60])
+
+# a stock may carry an optional initial value; a flow needs none
+c.post("/api/clear")
+c.post("/api/item", json={"kind":"variable","name":"S","var_type":"stock","value":42})
+c.post("/api/item", json={"kind":"variable","name":"f","var_type":"flow"})
+c.post("/api/reset")
+vals = c.get("/api/state").json()["values"]
+check("stock initial value applied", vals.get(":S") == 42.0, str(vals))
+check("flow needs no value", ":f" in vals, str(vals))
+
+# the same name twice is legitimate in Minsky: one variable, two icons
+c.post("/api/clear")
+c.post("/api/item", json={"kind":"parameter","name":"a","value":1.0})
+st = c.post("/api/item", json={"kind":"parameter","name":"a","value":1.0}).json()["state"]
+names = [i.get("name") for i in st["items"]]
+check("a repeated name gives two icons, one variable",
+      names.count("a") == 2 and len([k for k in st["values"] if k == ":a"]) == 1,
+      f"icons={names} vars={list(st['values'])}")
+
 print(f"\n{'ALL PASS' if not FAILED else 'FAILURES: ' + ', '.join(FAILED)}")
 sys.exit(1 if FAILED else 0)

@@ -379,6 +379,21 @@ def check_save_path(name: str) -> Path:
              f"read-only; use Save As, or Download to keep a copy elsewhere.")
 
 
+def is_minsky_document(path) -> bool:
+    """Is this actually a Minsky model?
+
+    `minsky.load()` accepts any well-formed XML and quietly yields an empty model, so
+    opening the wrong file reported success and silently replaced whatever was open with
+    nothing. Checked before loading, so a mistake costs nothing.
+    """
+    import xml.etree.ElementTree as ET
+    try:
+        root = ET.parse(str(path)).getroot()
+    except Exception:
+        return False
+    return root.tag.split("}")[-1] == "Minsky"
+
+
 def check_model_path(path: str) -> Path:
     """Resolve a requested path, or refuse it."""
     p = Path(path).expanduser()
@@ -593,7 +608,17 @@ def create_app() -> FastAPI:
     async def clear():
         global _CURRENT
         require_idle()
-        await call(lambda: engine().clear())
+
+        def _clear():
+            m = engine()
+            m.clear()
+            # clearAllMaps leaves t where the last run stopped, so a brand-new empty
+            # document reported t=3.04 in the toolbar
+            try:
+                m.minsky.reset()
+            except Exception:
+                pass
+        await call(_clear)
         _WIRES.clear()
         _CURRENT = None; mark_dirty(False)
         await call(reset_history)
@@ -883,12 +908,13 @@ def create_app() -> FastAPI:
         kw = {k: v for k, v in spec.model_dump().items() if v is not None}
 
         def _cfg():
+            # configure() merges with SANE_SOLVER, so a partial payload silently reset the
+            # fields the caller did not send: posting {"order": 4} put epsRel back to 1e-8
+            # and implicit back to true. Apply exactly what was asked for.
             m = engine()
-            m.configure(**{k: v for k, v in kw.items()
-                           if k in ("epsRel", "epsAbs", "order", "implicit")})
-            for k in ("t0", "tmax"):
-                if k in kw:
-                    getattr(m.minsky, k)(kw[k])
+            for k, v in kw.items():
+                if k in ("epsRel", "epsAbs", "order", "implicit", "t0", "tmax"):
+                    getattr(m.minsky, k)(v)
         await call(_cfg)
         return await call(snapshot)
 
@@ -977,6 +1003,9 @@ def create_app() -> FastAPI:
         global _CURRENT
         require_idle()
         path = str(check_model_path(path))
+        if not await call(is_minsky_document, path):
+            raise HTTPException(
+                422, f"{Path(path).name} is not a Minsky model. Nothing was changed.")
         await call(lambda: engine().minsky.load(path))
         _WIRES.clear()
         _WIRES.extend(await call(_topology_from_mky, path))

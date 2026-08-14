@@ -868,5 +868,48 @@ check("the selected item's stroke is set inline, where it can win",
 check("the wire hit target does not shrink with the zoom",
       re.search(r"\.wirehit\{[^}]*vector-effect:non-scaling-stroke", ui) is not None)
 
+print("\n26. clear resets the clock; junk files are refused; solver applies only what is sent")
+import glob
+c.post("/api/clear")
+p1 = c.post("/api/item", json={"kind":"parameter","name":"c","value":1.0}).json()["index"]
+ig = c.post("/api/item", json={"kind":"operation","op":"integrate"}).json()["index"]
+c.post("/api/wire", json={"src":p1,"dst":ig,"port":1})
+with c.websocket_connect("/ws/sim") as ws:
+    ws.send_json({"cmd":"run","steps":200,"tmax":3.0})
+    while True:
+        m = ws.receive_json()
+        if m.get("done") or m.get("stopped") or "error" in m: break
+check("a run advances t", c.get("/api/state").json()["t"] > 1)
+c.post("/api/clear")
+# clearAllMaps leaves t where the last run stopped, so a brand-new document showed 3.04
+check("clear resets the clock", c.get("/api/state").json()["t"] == 0.0,
+      str(c.get("/api/state").json()["t"]))
+
+# minsky.load() accepts any well-formed XML and quietly yields an EMPTY model, so opening
+# the wrong file reported success and replaced the open model with nothing
+junk = os.path.expanduser("~/minsky-models/_notamodel.mky")
+open(junk, "w").write('<?xml version="1.0"?><notminsky><hello/></notminsky>')
+c.post("/api/item", json={"kind":"parameter","name":"keep","value":1.0})
+before = len(c.get("/api/state").json()["items"])
+r = c.post(f"/api/load?path={junk}")
+check("a file that is not a Minsky model is refused",
+      r.status_code == 422 and "not a Minsky model" in r.text, r.text[:70])
+check("and the open model is untouched",
+      len(c.get("/api/state").json()["items"]) == before, "the model was replaced")
+os.remove(junk)
+
+# every shipped example must still pass the check
+rejected = [os.path.basename(f) for f in sorted(glob.glob(os.path.expanduser("~/minsky/examples/*.mky")))
+            if c.post(f"/api/load?path={f}").status_code != 200]
+check("no real model is rejected by the check", not rejected, str(rejected[:4]))
+
+# configure() merged with SANE_SOLVER, so a partial payload reset what was not sent
+c.post("/api/solver", json={"epsRel":1e-6,"epsAbs":1e-8,"order":2,"implicit":False})
+c.post("/api/solver", json={"order":4})
+sv = c.get("/api/state").json()["solver"]
+check("a partial solver post changes only what it sends",
+      (sv["epsRel"], sv["epsAbs"], sv["order"], sv["implicit"]) == (1e-6, 1e-8, 4, False),
+      str({k: sv[k] for k in ("epsRel","epsAbs","order","implicit")}))
+
 print(f"\n{'ALL PASS' if not FAILED else 'FAILURES: ' + ', '.join(FAILED)}")
 sys.exit(1 if FAILED else 0)

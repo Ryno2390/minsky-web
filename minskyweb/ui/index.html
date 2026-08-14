@@ -290,6 +290,20 @@ svg#board.panning{cursor:grabbing}
   </div>
 </div></div>
 
+<div class="fwrap" id="sawrap"><div class="fpanel" style="max-width:520px">
+  <div class="fhead"><b style="font-size:15px">Save model as</b>
+    <div class="spacer"></div><button class="gbtn" id="sa-cancel">Cancel</button></div>
+  <div style="padding:14px 16px 4px">
+    <input class="fsearch" id="sa-name" style="width:100%" autocomplete="off"
+           spellcheck="false" placeholder="name">
+    <div style="font-size:11.5px;color:var(--ink-3);padding:6px 2px 0" id="sa-hint"></div>
+    <div class="err" id="sa-err" style="display:none;margin-top:6px"></div>
+  </div>
+  <div class="ffoot" style="justify-content:flex-end">
+    <button class="gbtn" id="sa-ok" style="font-weight:600">Save</button>
+  </div>
+</div></div>
+
 <div class="gwrap" id="gwrap"><div class="gpanel">
   <div class="ghead">
     <b>Godley table</b>
@@ -1280,12 +1294,39 @@ $("#save").onclick = guard(async () => {
   if (!state.currentFile) return $("#saveas").click();
   await doSave(null);
 });
-$("#saveas").onclick = guard(async () => {
-  const suggested = state.currentFile || "model";
-  const name = prompt("Save as (name, or a full path inside a writable directory):",
-                      suggested);
-  if (!name) return;
-  await doSave(name);
+// Save As used a native prompt(), which is a modal the page cannot style, validate or
+// explain -- the only feedback for a name the server refuses was a toast after the
+// dialog had already gone. Same inline form treatment as adding an item.
+function openSaveAs(){
+  $("#sa-name").value = state.currentFile || "model";
+  $("#sa-hint").textContent =
+    `A bare name is saved into ${state.saveDir || "the models directory"}. `
+    + "A full path must be inside a writable directory.";
+  $("#sa-err").style.display = "none";
+  $("#sawrap").classList.add("open");
+  $("#sa-name").focus(); $("#sa-name").select();
+}
+function closeSaveAs(){ $("#sawrap").classList.remove("open"); }
+$("#saveas").onclick = () => openSaveAs();
+$("#sa-cancel").onclick = closeSaveAs;
+$("#sa-ok").onclick = guard(async () => {
+  const name = $("#sa-name").value.trim();
+  if (!name) {
+    $("#sa-err").textContent = "A name is required.";
+    $("#sa-err").style.display = ""; $("#sa-name").focus(); return;
+  }
+  try {
+    await doSave(name);
+    closeSaveAs();
+  } catch (err) {
+    // keep the dialog open with the name still in it, so it can be corrected
+    $("#sa-err").textContent = err.message;
+    $("#sa-err").style.display = ""; $("#sa-name").focus(); $("#sa-name").select();
+  }
+});
+$("#sa-name").addEventListener("keydown", e => {
+  if (e.key === "Enter")  { e.preventDefault(); $("#sa-ok").click(); }
+  if (e.key === "Escape") { e.preventDefault(); closeSaveAs(); }
 });
 $("#download").onclick = () => { location.href = "/api/download"; };
 addEventListener("keydown", e => {

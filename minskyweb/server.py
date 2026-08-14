@@ -871,7 +871,7 @@ def snapshot() -> dict[str, Any]:
         items=items, groups=groups, wires=wires, values=vals, inits=inits, t=m.t(),
         running=_RUNNING.is_set(), diverged=bad or None,
         currentFile=(Path(_CURRENT).stem if _CURRENT else None),
-        currentPath=_CURRENT, dirty=_DIRTY,
+        currentPath=_CURRENT, dirty=_DIRTY, saveDir=str(SAVE_DIR),
         canUndo=can_undo(),
         canRedo=can_redo(),
         solver=dict(epsRel=m.epsRel(), epsAbs=m.epsAbs(), order=m.order(),

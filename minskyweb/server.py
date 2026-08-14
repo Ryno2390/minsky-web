@@ -1245,7 +1245,11 @@ def create_app() -> FastAPI:
             from .headless import Item
             m = engine()
             # moveTo works directly on the raw item, so this reaches a group member too
-            m.move(Item(m, 0, "?", ref=ref), spec.x, spec.y)
+            try:
+                m.move(Item(m, 0, "?", ref=ref), spec.x, spec.y)
+            except RuntimeError as ex:
+                rollback()
+                raise HTTPException(409, str(ex))
         await call(_move)
         mark_dirty()
         return await call(snapshot)
@@ -1349,6 +1353,38 @@ def create_app() -> FastAPI:
         except Exception as ex:
             raise HTTPException(400, str(ex))
 
+    def _relocate(index: int, was: tuple) -> int:
+        """Where the Godley table that WAS at `index` is now.
+
+        A table edit can reorder model.items -- renaming a stock header moves the
+        regenerated variable, and everything after it shifts. Re-resolving the table by
+        its old index then found something else: the endpoint answered 422 "item 16 is a
+        Variable:stock, not a Godley table" over an edit that had been applied.
+        """
+        m = engine().minsky
+        best = None
+        for i in range(len(m.model.items)):
+            it = m.model.items[i]
+            if "Godley" not in it.classType():
+                continue
+            try:
+                here = ((it.table.title() or "").strip(), round(it.x(), 1), round(it.y(), 1))
+            except Exception:
+                continue
+            if here == was:
+                return i
+            if best is None:
+                best = i
+        return best if best is not None else index
+
+    def _godley_ident(index: int):
+        m = engine().minsky
+        it = m.model.items[index]
+        try:
+            return ((it.table.title() or "").strip(), round(it.x(), 1), round(it.y(), 1))
+        except Exception:
+            return None
+
     def _godley_write(index, fn):
         """A table mutation that must leave nothing behind if it fails.
 
@@ -1396,8 +1432,22 @@ def create_app() -> FastAPI:
                     continue
                 val = (t.getCell(ic, c) or "").strip() if ic is not None else ""
                 seen[nm].append((i, (t.title() or "").strip() or f"table {i}", val))
-        return {nm: v for nm, v in seen.items()
-                if len(v) > 1 and len({x[2] for x in v if x[2]}) > 1}
+
+        def same(a: str, b: str) -> bool:
+            try:
+                return float(a) == float(b)
+            except ValueError:
+                return a.strip() == b.strip()
+
+        out = {}
+        for nm, where in seen.items():
+            vals = [x[2] for x in where if x[2]]
+            # Compare NUMBERS where both are numbers. Comparing the raw cell text called
+            # "100" and "100.0" a disagreement, and told the user two tables were in
+            # conflict over a stock they agreed about exactly.
+            if len(where) > 1 and vals and any(not same(vals[0], v) for v in vals[1:]):
+                out[nm] = where
+        return out
 
     @app.get("/api/godley/{index}")
     async def godley_get(index: int):
@@ -1407,9 +1457,11 @@ def create_app() -> FastAPI:
     async def godley_cell(index: int, spec: CellSpec):
         require_idle()
         await call(checkpoint)
+        was = await call(_godley_ident, index)
         await call(lambda: _godley_write(
             index, lambda t: t.set_cell(spec.row, spec.col, spec.value)))
         mark_dirty()
+        index = await call(_relocate, index, was)
         out = await call(lambda: _godley_op(index, lambda t: t.snapshot()))
         clashes = await call(_shared_stocks)
         if clashes:
@@ -1426,16 +1478,20 @@ def create_app() -> FastAPI:
     async def godley_class(index: int, spec: ClassSpec):
         require_idle()
         await call(checkpoint)
+        was = await call(_godley_ident, index)
         await call(lambda: _godley_write(index, lambda t: t.set_class(spec.col, spec.cls)))
         mark_dirty()
+        index = await call(_relocate, index, was)
         return await call(lambda: _godley_op(index, lambda t: t.snapshot()))
 
     @app.post("/api/godley/{index}/resize")
     async def godley_resize(index: int, spec: SizeSpec):
         require_idle()
         await call(checkpoint)
+        was = await call(_godley_ident, index)
         await call(lambda: _godley_write(index, lambda t: t.resize(spec.rows, spec.cols)))
         mark_dirty()
+        index = await call(_relocate, index, was)
         return await call(lambda: _godley_op(index, lambda t: t.snapshot()))
 
     @app.post("/api/godley/{index}/row/{action}")
@@ -1444,9 +1500,11 @@ def create_app() -> FastAPI:
         await call(checkpoint)
         if action not in ("insert", "delete"):
             raise HTTPException(422, "action must be insert or delete")
+        was = await call(_godley_ident, index)
         await call(lambda: _godley_write(index, lambda t:
             t.insert_row(spec.at) if action == "insert" else t.delete_row(spec.at)))
         mark_dirty()
+        index = await call(_relocate, index, was)
         return await call(lambda: _godley_op(index, lambda t: t.snapshot()))
 
     @app.post("/api/godley/{index}/col/{action}")
@@ -1455,9 +1513,11 @@ def create_app() -> FastAPI:
         await call(checkpoint)
         if action not in ("insert", "delete"):
             raise HTTPException(422, "action must be insert or delete")
+        was = await call(_godley_ident, index)
         await call(lambda: _godley_write(index, lambda t:
             t.insert_col(spec.at) if action == "insert" else t.delete_col(spec.at)))
         mark_dirty()
+        index = await call(_relocate, index, was)
         return await call(lambda: _godley_op(index, lambda t: t.snapshot()))
 
     @app.delete("/api/wire/{index}")

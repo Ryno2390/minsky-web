@@ -2057,5 +2057,65 @@ finally:
     (SAVE_DIR / "runsave-probe.mky").unlink(missing_ok=True)
 
 
+print("\n49. Godley tables tell the truth about what they did")
+c.post("/api/clear")
+_g = c.post("/api/item", json={"kind":"godley","name":"Bank"}).json()["index"]
+for _col, _nm in ((1, "Vault"), (2, "Deposits")):
+    c.post(f"/api/godley/{_g}/cell", json={"row":0,"col":_col,"value":_nm})
+
+# renaming a stock header reorders model.items, and the endpoint re-resolved the table by
+# its OLD index afterwards: it answered 422 "not a Godley table" over an edit it had
+# already applied, and a wire was destroyed on the way
+r = c.post(f"/api/godley/{_g}/cell", json={"row":0,"col":1,"value":"VaultX"})
+check("renaming a stock header reports success", r.status_code == 200,
+      f"{r.status_code} {r.text[:70]}")
+check("and returns the table it was asked about",
+      r.json()["cells"][0][1] == "VaultX", str(r.json()["cells"][0]))
+check("with no wire left mis-pointed",
+      not any(w.get("desync") for w in c.get("/api/state").json()["wires"]))
+
+# the initial-conditions row could be deleted despite the guard's own wording, and the
+# engine went on reporting the initial values it held
+c.post(f"/api/godley/{_g}/row/insert", json={"at": 3})
+_snap = c.get(f"/api/godley/{_g}").json()
+_ic = next(i for i, v in enumerate(_snap["icRow"]) if v)
+r = c.post(f"/api/godley/{_g}/row/delete", json={"at": _ic})
+check("the initial-conditions row cannot be deleted", r.status_code == 422,
+      f"{r.status_code}")
+check("and it is still there",
+      any(c.get(f"/api/godley/{_g}").json()["icRow"]))
+
+# a Godley table places the variables it generates, so moveTo on one is undone by the
+# icon's own updateBoundingBox -- which the next snapshot runs. It reported success.
+c.post("/api/save", json={"name": "godleytruth-probe"})
+try:
+    _st = c.get("/api/state").json()
+    _v = next(i for i in _st["items"] if i["classType"] == "Variable:stock")
+    r = c.post(f"/api/item/{_v['ref']}/move", json={"x": 900, "y": 900})
+    check("moving a table-owned variable is refused", r.status_code == 409,
+          f"{r.status_code}")
+    check("and the refusal says why", "Godley" in r.json().get("detail", ""),
+          r.text[:80])
+    check("a refused move leaves the document saved",
+          c.get("/api/state").json()["dirty"] is False)
+    check("while the table itself still moves",
+          c.post(f"/api/item/{_g}/move", json={"x":500,"y":500}).status_code == 200)
+finally:
+    (SAVE_DIR / "godleytruth-probe.mky").unlink(missing_ok=True)
+
+# the conflict warning compared raw cell TEXT, so "100" and "100.0" were a disagreement
+c.post("/api/clear")
+_g1 = c.post("/api/item", json={"kind":"godley"}).json()["index"]
+_g2 = c.post("/api/item", json={"kind":"godley"}).json()["index"]
+for _gg in (_g1, _g2):
+    c.post(f"/api/godley/{_gg}/cell", json={"row":0,"col":1,"value":"D"})
+c.post(f"/api/godley/{_g1}/cell", json={"row":1,"col":1,"value":"100"})
+r = c.post(f"/api/godley/{_g2}/cell", json={"row":1,"col":1,"value":"100.0"})
+check("two tables holding the same number are not called a conflict",
+      not r.json().get("conflicts"), str(r.json().get("conflicts"))[:80])
+r = c.post(f"/api/godley/{_g2}/cell", json={"row":1,"col":1,"value":"250"})
+check("but two different numbers still are", bool(r.json().get("conflicts")))
+
+
 print(f"\n{'ALL PASS' if not FAILED else 'FAILURES: ' + ', '.join(FAILED)}")
 sys.exit(1 if FAILED else 0)

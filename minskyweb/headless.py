@@ -219,6 +219,14 @@ class Godley:
             raise ValueError("row 0 holds the stock names and cannot be deleted")
         if self._t.rows() <= 2:
             raise ValueError("a Godley table needs its header and initial-conditions rows")
+        if self._t.initialConditionRow(at):
+            # The guard above only counted rows, so on a table with extra flow rows the
+            # initial-conditions row itself could be deleted. The engine goes on
+            # reporting the initial values it holds, so the app kept telling the user the
+            # model opened at 100 with nothing on screen saying so.
+            raise ValueError(
+                "that row holds the initial conditions and cannot be deleted -- clear "
+                "its cells instead if you want them empty")
         self._t.deleteRow(at); self._commit()
 
     def insert_col(self, at: int):
@@ -555,7 +563,29 @@ class Model:
                 i.index -= 1
 
     def move(self, item: Item, x: float, y: float) -> None:
+        """Move an item. Verified -- some items do not own their own position.
+
+        A Godley table places the stock and flow variables it generates, so `moveTo` on
+        one of those returns without error and changes nothing. That was reported as
+        success, and still marked the document unsaved and pushed an undo point for an
+        edit that had not happened.
+        """
         item.move_to(x, y)
+        # moveTo does set the position -- and then the owning GodleyIcon's
+        # updateBoundingBox() puts it straight back, which is what the next snapshot
+        # runs. Checking before that happens saw the move "succeed" and the user saw the
+        # item where it started. Settle first, so the check sees what the user will.
+        for _ref, r in self.all_raw():
+            try:
+                r.updateBoundingBox()
+            except Exception:
+                pass
+        raw = item._raw
+        if abs(raw.x() - x) > 1.0 or abs(raw.y() - y) > 1.0:
+            raise RuntimeError(
+                f"that item did not move: it is at ({raw.x():.0f},{raw.y():.0f}), not "
+                f"({x:.0f},{y:.0f}). A Godley table places the variables it generates, "
+                f"so they can only be moved by moving the table.")
 
     def ungroup(self, gref) -> int:
         """Dissolve a TOP-LEVEL group, leaving its contents as ordinary items.

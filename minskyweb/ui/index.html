@@ -432,6 +432,14 @@ let state = {items:[],wires:[],values:{}}, sel = null, selWire = null, ws = null
 // button on a wire that no longer existed -- or, worse, on whichever wire had inherited
 // that index in the new model.
 function clearSelection(){ sel = null; selWire = null; selGroup = null; }
+// The add endpoints answer with a numeric model.items index, but selection is by REF and
+// every ref is a string -- assigning the number left nothing highlighted on the canvas
+// and printed "1 · ?" in the panel, because no item's ref ever equals a number.
+function refOfIndex(i){
+  if (i === null || i === undefined) return null;
+  const it = state.items.find(x => x.index === i);
+  return it ? it.ref : String(i);
+}
 // `sel` holds a REF, not an index: "3" for a top-level item, "g0:5" for member 5 of
 // group 0. Group members are not in model.items at all, so an index cannot name one.
 let selGroup = null;   // a group's own index, when the group box itself is selected
@@ -600,6 +608,7 @@ function render() {
     // so a bare === lit up every group member as selected
     const isSel = sel !== null && sel === it.ref;
     g.setAttribute("class","item" + (isSel ? " sel" : ""));
+    g.dataset.ref = it.ref;
     const name = pretty(it.name || label);
     // Engine items are SMALL -- half-widths of 12 to 24px -- while a label like
     // "multiply" needs ~60. They cannot share a box: sizing to the label puts ports
@@ -762,7 +771,7 @@ function render() {
 
   // Rename is offered only where there is a name to change. An operation accepts a
   // rename call and does nothing with it, so showing the control would be a lie.
-  const selItem = sel === null ? null : byIdx.get(sel);
+  const selItem = sel === null ? null : byRef.get(sel);
   const ct = selItem?.classType || "";
   const canRename = !!selItem && (ct.startsWith("Variable:") || ct.includes("Godley"));
   $("#renamewrap").style.display = canRename ? "" : "none";
@@ -854,7 +863,7 @@ async function submitAddForm(){
   }
   try {
     const r = await api("/item", {method:"POST", body: JSON.stringify(body)});
-    state = r.state; sel = r.index;
+    state = r.state; sel = refOfIndex(r.index);
     closeAddForm(); render();
   } catch (err) {
     formError(err.message, "#af-name");     // e.g. a name already used at another type
@@ -894,7 +903,7 @@ document.addEventListener("click", guard(async e => {
   const body = {kind, at: freeSlot()};
   if (kind === "operation") body.op = b.dataset.op;
   const r = await api("/item", {method:"POST", body:JSON.stringify(body)});
-  state = r.state; sel = r.index; render();
+  state = r.state; sel = refOfIndex(r.index); render();
 }));
 
 $("#af-ok").onclick = guard(submitAddForm);
@@ -1033,10 +1042,15 @@ board.addEventListener("pointermove", e => {
     $("#drag").setAttribute("d",
       `M${drag.x0},${drag.y0} C${drag.x0+dx},${drag.y0} ${p.x-dx},${p.y} ${p.x},${p.y}`);
   } else {
-    const g = gItems.children[state.items.findIndex(i=>i.index===drag.idx)];
-    if (g) g.setAttribute("transform",
-      `translate(${p.x + drag.dx - state.items.find(i=>i.index===drag.idx).x},
-                 ${p.y + drag.dy - state.items.find(i=>i.index===drag.idx).y})`);
+    // The drag record carries a REF. Looking the item up by numeric index here found
+    // undefined, so findIndex returned -1, children[-1] was undefined, and the item
+    // never moved under the cursor -- it jumped only when the pointer was released.
+    // Find the element by its ref rather than by position: group boxes are drawn first
+    // and hidden members are skipped, so child order does not track state.items.
+    const it = state.items.find(i => i.ref === drag.ref);
+    const g = gItems.querySelector(`.item[data-ref="${CSS.escape(drag.ref)}"]`);
+    if (g && it) g.setAttribute("transform",
+      `translate(${p.x + drag.dx - it.x}, ${p.y + drag.dy - it.y})`);
   }
 });
 board.addEventListener("pointerup", guard(async e => {

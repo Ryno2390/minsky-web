@@ -870,6 +870,15 @@ check("applyView still writes the counter-scaled radius",
 # as selected whenever nothing was. Every item has a ref, and `sel` is null or a string,
 # so the two can never match by accident.
 check("selection is compared by ref", "sel === it.ref" in ui)
+# `sel` holds a REF. Three places went on using the numeric index after that change, and
+# each one silently disabled something: the Selection panel could never open, a new item
+# was never highlighted, and a drag showed no movement until the pointer was released.
+check("the selection panel looks the item up by ref",
+      "byRef.get(sel)" in ui and "byIdx.get(sel)" not in ui)
+check("a newly added item is selected by ref, not by the numeric index",
+      "sel = refOfIndex(" in ui and "sel = r.index" not in ui)
+check("the drag preview finds its element by ref",
+      "drag.idx" not in ui and 'data-ref="${CSS.escape(drag.ref)}"' in ui)
 check("and nothing compares a possibly-null index for selection",
       "sel === it.index" not in ui)
 # the inline stroke set for the item colour beat the .sel rule

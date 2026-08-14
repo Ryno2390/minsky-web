@@ -1561,6 +1561,17 @@ def create_app() -> FastAPI:
         if tm is not None and tm <= t0:
             raise HTTPException(422, f"tmax ({tm}) must be later than t0 ({t0})")
 
+        def _same():
+            m = engine().minsky
+            return all(getattr(m, k)() == v for k, v in kw.items()
+                       if k in ("epsRel", "epsAbs", "order", "implicit", "t0", "tmax"))
+        if await call(_same):
+            # Setting a value to what it already holds is not an edit. It was taking a
+            # checkpoint and marking the document unsaved anyway, so pressing Run --
+            # which posts the panel's values before every run -- turned a saved model
+            # into an unsaved one and pushed an undo point that undid nothing.
+            return await call(snapshot)
+
         await call(checkpoint)
 
         def _cfg():

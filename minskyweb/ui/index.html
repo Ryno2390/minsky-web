@@ -432,6 +432,13 @@ let state = {items:[],wires:[],values:{}}, sel = null, selWire = null, ws = null
 // button on a wire that no longer existed -- or, worse, on whichever wire had inherited
 // that index in the new model.
 function clearSelection(){ sel = null; selWire = null; selGroup = null; }
+// A keyboard shortcut must not reach the model while something modal is in front of it.
+// The confirm dialog focuses a BUTTON, so guards that only excluded INPUT/TEXTAREA let
+// Backspace and Ctrl+Z through to the canvas behind it.
+function modalOpen(){
+  return ["#cfwrap", "#sawrap", "#fwrap", "#gwrap"].some(
+    id => $(id) && $(id).classList.contains("open"));
+}
 // The add endpoints answer with a numeric model.items index, but selection is by REF and
 // every ref is a string -- assigning the number left nothing highlighted on the canvas
 // and printed "1 · ?" in the panel, because no item's ref ever equals a number.
@@ -717,8 +724,14 @@ function render() {
   // actually carried 0.01 -- Minsky's own default, which produces NaN and reports
   // success. Show what the model really has, without fighting the user's typing.
   const sv = state.solver || {};
+  // toExponential(0) keeps ONE significant digit, so 2.5e-9 was shown as "3e-9" and
+  // 123456 as "1e+5". The panel first misreported the model, and then -- because Run
+  // reads these fields back -- WROTE the rounded number into it: pressing Run without
+  // touching anything changed the solver. Show the value exactly; only choose the
+  // notation.
   const fmt = v => (v === null || v === undefined) ? ""
-    : (Math.abs(v) < 1e-3 || Math.abs(v) >= 1e5) ? Number(v).toExponential(0)
+    : (Math.abs(v) !== 0 && (Math.abs(v) < 1e-3 || Math.abs(v) >= 1e5))
+      ? Number(v).toExponential()
     : String(v);
   for (const [id, val] of [["epsRel", sv.epsRel], ["epsAbs", sv.epsAbs],
                            ["order", sv.order], ["tmax", sv.tmax]]) {
@@ -730,11 +743,17 @@ function render() {
     $("#implicit").checked = !!sv.implicit;
 
   applyView();          // render() rebuilt the ports; restore their zoom-corrected size
-  $("#tval").textContent = (state.t ?? 0).toFixed(3);
-  const st = $("#status");
-  if (state.diverged) { st.textContent = "diverged"; st.className = "pill diverged"; }
-  else if (state.running) { st.textContent = "running"; st.className = "pill live"; }
-  else { st.textContent = "idle"; st.className = "pill"; }
+  // While a run is streaming, the clock and the status pill belong to the STREAM. render()
+  // runs on every selection too, and it was overwriting both from whatever snapshot the
+  // client last fetched -- so clicking an item mid-run flipped the pill to "idle" and
+  // jumped the clock backwards, over a run that was still going.
+  if (!ws || ws.readyState !== WebSocket.OPEN) {
+    $("#tval").textContent = (state.t ?? 0).toFixed(3);
+    const st = $("#status");
+    if (state.diverged) { st.textContent = "diverged"; st.className = "pill diverged"; }
+    else if (state.running) { st.textContent = "running"; st.className = "pill live"; }
+    else { st.textContent = "idle"; st.className = "pill"; }
+  }
   $("#del").disabled = sel === null && selWire === null;
   const nm = state.currentFile;
   $("#fname").textContent = (nm || "untitled") + (state.dirty ? " •" : "");
@@ -1216,6 +1235,10 @@ function finish(){
 }
 $("#stop").onclick = () => { try { ws?.send(JSON.stringify({cmd:"stop"})); } catch {} };
 addEventListener("keydown", e => {
+  // Not while a modal is open: the confirm dialog focuses a BUTTON, so the INPUT/TEXTAREA
+  // test let Backspace through and it deleted the selected item BEHIND the dialog. The
+  // user then pressed Cancel and was left with the deletion anyway.
+  if (modalOpen()) return;
   if ((e.key === "Delete" || e.key === "Backspace") && (sel !== null || selWire !== null)
       && !/INPUT|TEXTAREA/.test(document.activeElement.tagName)) {
     e.preventDefault(); $("#del").click(); }
@@ -1248,7 +1271,7 @@ async function drawGodley(g){
   let h = `<table class="gtable"><thead><tr>`;
   h += `<th></th>`;
   for (let c = 1; c < g.cols; c++) {
-    h += `<th class="${g.classes[c]}">` +
+    h += `<th class="${esc(g.classes[c])}">` +
       (g.cols > 2 ? `<button class="rm" data-delcol="${c}" title="Remove this stock column">×</button>` : "") +
       `<select data-col="${c}">` +
       CLASSES.map(k => `<option value="${esc(k)}"${k===g.classes[c]?" selected":""}>${
@@ -1355,7 +1378,13 @@ async function doRename(){
   const r = await api(`/item/${sel}/rename`, {method:"POST",
                                               body: JSON.stringify({name})});
   state = r.state; render();
-  toast(`Renamed to ${r.name}`, true);
+  // The server says when a rename MERGED two variables and which value was discarded,
+  // and when the engine stored the name in a different form. Both were being dropped on
+  // the floor and replaced with a green "Renamed to ..." -- the one case where the user
+  // has just lost a number is the one where they were told everything went well.
+  if (r.warning) toast(r.warning);
+  else if (r.note) toast(`Renamed to ${r.name}. ${r.note}`, true);
+  else toast(`Renamed to ${r.name}`, true);
 }
 $("#renameok").onclick = guard(doRename);
 
@@ -1422,6 +1451,7 @@ async function step(what){
 $("#undo").onclick = guard(() => step("undo"));
 $("#redo").onclick = guard(() => step("redo"));
 addEventListener("keydown", e => {
+  if (modalOpen()) return;
   if (!(e.metaKey || e.ctrlKey) || e.key.toLowerCase() !== "z") return;
   if (/INPUT|TEXTAREA/.test(document.activeElement.tagName)) return;  // let fields undo
   e.preventDefault();
@@ -1459,7 +1489,13 @@ $("#cf-no").onclick  = () => endConfirm(false);
 addEventListener("keydown", e => {
   if (!cfResolve) return;
   if (e.key === "Escape") { e.preventDefault(); endConfirm(false); }
-  if (e.key === "Enter")  { e.preventDefault(); endConfirm(true); }
+  // Enter used to mean Discard while the focus ring sat on Cancel -- the ring is what
+  // tells the user what Enter will do. Let Enter act on whichever button has focus, so
+  // the two agree; the destructive answer needs the button, Tab, or a deliberate click.
+  if (e.key === "Enter") {
+    e.preventDefault();
+    endConfirm(document.activeElement === $("#cf-yes"));
+  }
 });
 
 // Save As used a native prompt(), which is a modal the page cannot style, validate or

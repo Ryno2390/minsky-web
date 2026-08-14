@@ -674,24 +674,44 @@ ui = open(os.path.join(os.path.dirname(os.path.abspath(__file__)),
                        "minskyweb", "ui", "index.html")).read()
 check("the UI defines an escape helper", "const esc = v =>" in ui)
 
-# every innerHTML assignment must be built only from escaped or literal parts
+# Every interpolation into MARKUP must be escaped or demonstrably literal.
+#
+# This used to scan a fixed 400-character window after each `innerHTML =`, which made it
+# blind to the way most of this file builds markup: an accumulator (`h += ...`) filled
+# over many lines and assigned at the end. The window saw only `h`, which was on the
+# allowlist -- so the whole of drawGodley() and drawFiles(), the markup that carries
+# model data, was never examined at all. Scan every template literal that contains a tag,
+# wherever its result ends up.
+LITERAL_OK = {
+    # loop counters and lengths
+    "c", "r", "i", "n", "bad.length",
+    # conditionals whose branches are both string literals
+    'k===g.classes[c]?" selected":""', 'g.icRow[r] ? "ic" : ""', 'c===0?"lab":""',
+    'v && v.trim()==="0" ? "ok":"bad"', 'bad.length>1?"s":""',
+    # a number, and a colour this file chose from its own palette
+    "(f.bytes/1024).toFixed(0)", "colors[k]",
+    # OPS is a constant array declared in this file
+    "o",
+    # escapes its own model data inline
+    'v === null ? "" : (v.trim()==="0" ? "✓ 0" : "≠ " + esc(v))',
+}
 bad = []
-for m in re.finditer(r"innerHTML\s*=\s*(.{0,400})", ui, re.S):
-    frag = m.group(1)
-    for interp in re.findall(r"\$\{([^}]*)\}", frag):
+for lit in re.findall(r"`([^`]*)`", ui, re.S):
+    # any "<" at all, opening OR closing: markup is built up in fragments, and the one
+    # carrying a Godley cell value ends with "</td>" and opens no tag of its own -- a
+    # test looking for "<" followed by a letter skipped exactly that fragment
+    if "<" not in lit:
+        continue
+    for interp in re.findall(r"\$\{([^{}]*)\}", lit):
         t = interp.strip()
-        # esc() is HTML escaping; encodeURIComponent is the right escaping for a URL,
-        # which appears inside the scan window because it is crude and fixed-width
-        if t.startswith(("esc(", "(", "encodeURIComponent(")):
+        if t.startswith(("esc(", "encodeURIComponent(")) or t in LITERAL_OK:
             continue
-        if re.fullmatch(r"[A-Za-z0-9_.\[\]]+", t) and not any(
-                k in t for k in ("name", "dir", "path", "cells", "title", "k", "v")):
-            continue
-        if t in ("h", "nudge", "n ? h", "colors[k]"):
-            continue
-        bad.append(t[:60])
-check("no innerHTML interpolation takes raw model data",
+        bad.append(t[:70])
+check("every interpolation into markup is escaped or literal",
       not bad, f"unescaped: {bad[:4]}")
+# and the scan itself must be looking at the markup that carries model data
+check("the scan reaches the table markup",
+      any("data-r=" in l for l in re.findall(r"`([^`]*)`", ui, re.S)))
 
 # filenames reach the client verbatim; escaping is the renderer's job, not the server's
 open(os.path.expanduser("~/minsky-models/plain-check.mky"), "w").write(

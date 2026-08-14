@@ -82,6 +82,47 @@ def _iter_items(m):
             yield f"g{gi}:{i}", grp.items[i]
 
 
+def _identity_list(m):
+    """A fingerprint of every item in order, for remapping indices after a delete.
+
+    Position is deliberately NOT part of the key: the engine nudges surviving items by a
+    few pixels when the canvas is rebuilt, which would break every match.
+    """
+    out = []
+    for ref, it in _iter_items(m):
+        try:
+            nm = it.name()
+        except Exception:
+            nm = ""
+        out.append((ref, it.classType(), nm))
+    return out
+
+
+def _remap_wires(m, before):
+    """Rebuild `_WIRES` refs after a delete, by matching items rather than counting.
+
+    Deleting ONE thing can remove SEVERAL items: a Godley icon takes its generated stock
+    variables with it, and an IntOp takes its variable. The old code subtracted 1 from
+    every higher index, so deleting a Godley icon that sat below a wire left both
+    endpoints pointing at the wrong items. The wire then failed to resolve and was
+    silently skipped at render time -- and because the tracked count still matched the
+    engine's, `desync` stayed quiet. The user's wire simply disappeared from the canvas.
+
+    A delete only removes items, it never reorders the survivors, so walking the two
+    fingerprints in step gives an exact old-to-new map: when the current new item matches,
+    the old item survived; when it does not, that old item is one of the removed ones and
+    only the old cursor advances.
+    """
+    after = _identity_list(m)
+    remap, j = {}, 0
+    for old in before:
+        if j < len(after) and after[j][1:] == old[1:]:
+            remap[old[0]] = after[j][0]
+            j += 1
+    _WIRES[:] = [(remap[a], b, remap[c], d) for a, b, c, d in _WIRES
+                 if a in remap and c in remap]
+
+
 def _resolve(m, ref: str):
     if ":" in ref:
         g, i = ref[1:].split(":")
@@ -756,19 +797,13 @@ def create_app() -> FastAPI:
             n = len(m.minsky.model.items)
             if not 0 <= index < n:
                 raise HTTPException(422, f"index {index} out of range (0..{n-1})")
+            before = _identity_list(m.minsky)
             m.delete(Item(m, index, "?"))
+            _remap_wires(m.minsky, before)
         try:
             await call(_del)
         except RuntimeError as ex:
             raise HTTPException(400, str(ex))
-        # deleting an item removes its wires and shifts every higher index down one
-        def _shift(r):
-            # only top-level refs shift; group members are unaffected by a top-level delete
-            return str(int(r) - 1) if (":" not in r and int(r) > index) else r
-        kept = [w for w in _WIRES
-                if not (":" not in w[0] and int(w[0]) == index)
-                and not (":" not in w[2] and int(w[2]) == index)]
-        _WIRES[:] = [(_shift(a), b, _shift(c), d) for a, b, c, d in kept]
         mark_dirty()
         # indices shift after a delete -- the client must re-render from this snapshot
         return await call(snapshot)

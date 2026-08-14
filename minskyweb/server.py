@@ -31,6 +31,7 @@ from __future__ import annotations
 
 import asyncio
 import math
+import os
 import shutil
 import tempfile
 import threading
@@ -38,7 +39,7 @@ from pathlib import Path
 from typing import Any
 
 from fastapi import FastAPI, File, HTTPException, UploadFile, WebSocket, WebSocketDisconnect
-from fastapi.responses import JSONResponse
+from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 from starlette.concurrency import run_in_threadpool
@@ -185,14 +186,53 @@ def _topology_from_mky(path: str):
 #: it -- an unconstrained path parameter would turn that into an arbitrary-file read.
 #: Uploads land in UPLOAD_DIR, which is therefore also a root.
 UPLOAD_DIR = Path(tempfile.gettempdir()) / "minskyweb-uploads"
-MODEL_ROOTS = [Path.home() / "minsky" / "examples",
-               Path.home() / "minsky-models",
-               Path.cwd() / "models",
-               UPLOAD_DIR]
+SAVE_DIR = Path.home() / "minsky-models"
+
+#: Readable roots. Includes the shipped examples.
+MODEL_ROOTS = [Path.home() / "minsky" / "examples", SAVE_DIR,
+               Path.cwd() / "models", UPLOAD_DIR]
+
+#: WRITABLE roots -- deliberately a smaller set. The shipped examples are read-only:
+#: saving into them would quietly modify the Minsky installation, and "Save" is one
+#: mis-click away from overwriting a reference model that nothing would restore.
+WRITE_ROOTS = [SAVE_DIR, Path.cwd() / "models", UPLOAD_DIR]
+
+#: The file the current model came from, and whether it has been edited since.
+_CURRENT: str | None = None
+_DIRTY = False
+
+
+def mark_dirty(v: bool = True):
+    global _DIRTY
+    _DIRTY = v
 
 
 def _roots() -> list[Path]:
     return [r for r in MODEL_ROOTS if r.is_dir()]
+
+
+def check_save_path(name: str) -> Path:
+    """Resolve a save target, or refuse it.
+
+    A bare name goes to SAVE_DIR. A full path must land inside a WRITABLE root --
+    notably NOT ~/minsky/examples, which is readable but must stay pristine.
+    """
+    raw = Path(name).expanduser()
+    p = raw if raw.is_absolute() else SAVE_DIR / raw.name
+    if p.suffix.lower() != ".mky":
+        p = p.with_suffix(".mky")
+    p = Path(os.path.normpath(str(p)))
+    for r in WRITE_ROOTS:
+        try:
+            p.relative_to(r.resolve() if r.exists() else r)
+            p.parent.mkdir(parents=True, exist_ok=True)
+            return p
+        except ValueError:
+            continue
+    raise HTTPException(
+        403, f"cannot save to {p}. Writable directories: "
+             f"{', '.join(str(r) for r in WRITE_ROOTS)}. The shipped examples are "
+             f"read-only; use Save As, or Download to keep a copy elsewhere.")
 
 
 def check_model_path(path: str) -> Path:
@@ -312,6 +352,10 @@ class AtSpec(BaseModel):
     at: int
 
 
+class SaveSpec(BaseModel):
+    name: str | None = None
+
+
 # ------------------------------------------------------------------------ read model
 def snapshot() -> dict[str, Any]:
     """Everything a client needs to draw the model."""
@@ -368,6 +412,8 @@ def snapshot() -> dict[str, Any]:
     return jsonable(dict(
         items=items, groups=groups, wires=wires, values=vals, t=m.t(),
         running=_RUNNING.is_set(), diverged=bad or None,
+        currentFile=(Path(_CURRENT).stem if _CURRENT else None),
+        currentPath=_CURRENT, dirty=_DIRTY,
         solver=dict(epsRel=m.epsRel(), epsAbs=m.epsAbs(), order=m.order(),
                     implicit=m.implicit(), t0=m.t0(), tmax=m.tmax())))
 
@@ -386,9 +432,11 @@ def create_app() -> FastAPI:
 
     @app.post("/api/clear")
     async def clear():
+        global _CURRENT
         require_idle()
         await call(lambda: engine().clear())
         _WIRES.clear()
+        _CURRENT = None; mark_dirty(False)
         return await call(snapshot)
 
     @app.post("/api/item")
@@ -413,6 +461,7 @@ def create_app() -> FastAPI:
                 return m.godley(at=spec.at)
             raise HTTPException(422, f"unknown kind {spec.kind!r}")
 
+        mark_dirty()
         it = await call(_add)
         return {"index": it.index, "kind": it.kind, "state": await call(snapshot)}
 
@@ -430,6 +479,7 @@ def create_app() -> FastAPI:
             m.wire(Item(m, spec.src, "?"), Item(m, spec.dst, "?"), spec.port)
             _WIRES.append((str(spec.src), 0, str(spec.dst), spec.port))
 
+        mark_dirty()
         await call(_wire)
         return await call(snapshot)
 
@@ -444,6 +494,7 @@ def create_app() -> FastAPI:
             if not 0 <= index < n:
                 raise HTTPException(422, f"index {index} out of range (0..{n-1})")
             m.move(Item(m, index, "?"), spec.x, spec.y)
+        mark_dirty()
         await call(_move)
         return await call(snapshot)
 
@@ -470,6 +521,7 @@ def create_app() -> FastAPI:
                 if not (":" not in w[0] and int(w[0]) == index)
                 and not (":" not in w[2] and int(w[2]) == index)]
         _WIRES[:] = [(_shift(a), b, _shift(c), d) for a, b, c, d in kept]
+        mark_dirty()
         # indices shift after a delete -- the client must re-render from this snapshot
         return await call(snapshot)
 
@@ -505,18 +557,19 @@ def create_app() -> FastAPI:
         require_idle()
         await call(lambda: _godley_op(
             index, lambda t: t.set_cell(spec.row, spec.col, spec.value)))
+        mark_dirty()
         return await call(lambda: _godley_op(index, lambda t: t.snapshot()))
 
     @app.post("/api/godley/{index}/class")
     async def godley_class(index: int, spec: ClassSpec):
         require_idle()
-        await call(lambda: _godley_op(index, lambda t: t.set_class(spec.col, spec.cls)))
+        mark_dirty(); await call(lambda: _godley_op(index, lambda t: t.set_class(spec.col, spec.cls)))
         return await call(lambda: _godley_op(index, lambda t: t.snapshot()))
 
     @app.post("/api/godley/{index}/resize")
     async def godley_resize(index: int, spec: SizeSpec):
         require_idle()
-        await call(lambda: _godley_op(index, lambda t: t.resize(spec.rows, spec.cols)))
+        mark_dirty(); await call(lambda: _godley_op(index, lambda t: t.resize(spec.rows, spec.cols)))
         return await call(lambda: _godley_op(index, lambda t: t.snapshot()))
 
     @app.post("/api/godley/{index}/row/{action}")
@@ -524,6 +577,7 @@ def create_app() -> FastAPI:
         require_idle()
         if action not in ("insert", "delete"):
             raise HTTPException(422, "action must be insert or delete")
+        mark_dirty()
         await call(lambda: _godley_op(index, lambda t:
             t.insert_row(spec.at) if action == "insert" else t.delete_row(spec.at)))
         return await call(lambda: _godley_op(index, lambda t: t.snapshot()))
@@ -533,6 +587,7 @@ def create_app() -> FastAPI:
         require_idle()
         if action not in ("insert", "delete"):
             raise HTTPException(422, "action must be insert or delete")
+        mark_dirty()
         await call(lambda: _godley_op(index, lambda t:
             t.insert_col(spec.at) if action == "insert" else t.delete_col(spec.at)))
         return await call(lambda: _godley_op(index, lambda t: t.snapshot()))
@@ -540,6 +595,7 @@ def create_app() -> FastAPI:
     @app.post("/api/init")
     async def set_init(spec: InitSpec):
         require_idle()
+        mark_dirty()
         await call(lambda: engine().set_init(spec.name, spec.value))
         return await call(snapshot)
 
@@ -594,24 +650,47 @@ def create_app() -> FastAPI:
         dest = UPLOAD_DIR / name
         with dest.open("wb") as fh:
             shutil.copyfileobj(file.file, fh)
+        global _CURRENT
         await call(lambda: engine().minsky.load(str(dest)))
         _WIRES.clear()
         _WIRES.extend(await call(_topology_from_mky, str(dest)))
+        _CURRENT = str(dest); mark_dirty(False)
         return dict(loaded=str(dest), state=await call(snapshot))
 
     @app.post("/api/load")
     async def load(path: str):
+        global _CURRENT
         require_idle()
         path = str(check_model_path(path))
         await call(lambda: engine().minsky.load(path))
         _WIRES.clear()
         _WIRES.extend(await call(_topology_from_mky, path))
+        _CURRENT = path; mark_dirty(False)
         return await call(snapshot)
 
     @app.post("/api/save")
-    async def save(path: str):
-        await call(lambda: engine().minsky.save(path))
-        return {"saved": path}
+    async def save(spec: SaveSpec):
+        global _CURRENT
+        if spec.name:
+            dest = check_save_path(spec.name)
+        elif _CURRENT:
+            dest = check_save_path(_CURRENT)     # plain Save, re-validated
+        else:
+            raise HTTPException(422, "nothing to save to yet -- use Save As")
+        await call(lambda: engine().minsky.save(str(dest)))
+        _CURRENT = str(dest)
+        mark_dirty(False)
+        return dict(saved=str(dest), name=dest.stem, dirty=False)
+
+    @app.get("/api/download")
+    async def download():
+        """Hand the model to the browser so it can be kept anywhere, without giving
+        the server a write path outside its own directories."""
+        tmp = Path(tempfile.gettempdir()) / "minskyweb-download.mky"
+        await call(lambda: engine().minsky.save(str(tmp)))
+        stem = Path(_CURRENT).stem if _CURRENT else "model"
+        return FileResponse(str(tmp), media_type="application/xml",
+                            filename=f"{stem}.mky")
 
     @app.websocket("/ws/sim")
     async def ws_sim(ws: WebSocket):

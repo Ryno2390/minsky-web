@@ -22,6 +22,9 @@ See **[docs/MINSKY_HEADLESS.md](docs/MINSKY_HEADLESS.md)** for what the engine e
   detected and reported rather than crashing the stream.
 - **Open** — any of the shipped examples, or upload a `.mky`. All 37 shipped examples
   load with exact wire topology.
+- **Save** — Save / Save As / Download, with an unsaved-changes indicator. The shipped
+  examples are readable but **not** writable, so a mis-click cannot overwrite a reference
+  model.
 
 ## Why a server exists
 
@@ -49,7 +52,7 @@ it, or place it at `~/minsky`.
 ## Tests
 
     python3 test_headless.py    # 12 checks
-    python3 test_server.py      # 23 checks
+    python3 test_server.py      # 38 checks
 
 Both build models whose answers are known analytically, so a mis-wired model fails loudly
 instead of producing plausible numbers.

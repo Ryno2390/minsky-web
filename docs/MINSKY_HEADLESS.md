@@ -376,3 +376,39 @@ rather than `getBoundingClientRect`, keeping drag and wiring correct at any zoom
 Names are shown through `pretty()`: Minsky round-trips `C_D` as `C<sub>D</sub>` and
 prefixes scoped variables with a numeric id (`50191504896:w`). The raw key stays the
 identity used against the API and appears on hover.
+
+## Saving
+
+    Save        write back to the file the model came from (⌘S)
+    Save As…    write to a name or path inside a writable directory (⇧⌘S)
+    ↓           download a copy through the browser
+
+    POST /api/save     {name}  -- omit `name` to save back to the current file
+    GET  /api/download          -- the model as a .mky attachment
+
+### Readable and writable roots are deliberately different sets
+
+Loading may read `~/minsky/examples`. Saving may **not** write there. A save is one
+mis-click from overwriting a shipped reference model, and nothing would restore it.
+Writable roots are `~/minsky-models` (created on demand), `./models`, and the upload dir;
+a bare name resolves into `~/minsky-models`. Anything else is refused with the list of
+allowed directories and a pointer to Download, which keeps a copy anywhere without giving
+the server a write path outside its own directories.
+
+The pre-existing `/api/save?path=…` took an unvalidated path — an unguarded write
+primitive on a server with no auth that any browser page can POST to. That is now gone.
+
+### Dirty tracking
+
+`snapshot()` carries `currentFile`, `currentPath` and `dirty`. Every mutating endpoint
+marks the model dirty; load, clear and save clear it. The filename in the toolbar shows
+`•` in amber while unsaved, Save is disabled when there is nothing to write, and Clear,
+Open and page-unload all confirm before discarding unsaved work.
+
+### Round-trip fidelity
+
+An engine-saved file re-parses to **identical** wire topology — verified by loading
+GoodwinLinear02, saving it, and comparing the parsed topology of both (27 wires, equal).
+`test_server.py` section 9 goes further: build a model, Save As, clear, reopen from disk,
+confirm the topology is exact, and confirm it still integrates correctly
+(`int1 = 14.6` at `t = 3.04` against `7.0 + 2.5t`).

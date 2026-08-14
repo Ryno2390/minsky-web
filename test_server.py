@@ -190,5 +190,73 @@ if up.status_code == 200:
 bad_up = c.post("/api/upload", files={"file": ("x.txt", b"nope", "text/plain")})
 check("upload rejects non-.mky", bad_up.status_code == 422, str(bad_up.status_code))
 
+print("\n9. save / save-as / download")
+import os
+c.post("/api/clear")
+st = c.get("/api/state").json()
+check("clean model is untitled and not dirty",
+      st["currentFile"] is None and st["dirty"] is False)
+
+r  = c.post("/api/item", json={"kind":"parameter","name":"c","value":2.5}).json()["index"]
+ig = c.post("/api/item", json={"kind":"operation","op":"integrate"}).json()["index"]
+c.post("/api/wire", json={"src":r,"dst":ig,"port":1})
+c.post("/api/init", json={"name":"int1","value":7.0})
+check("edits mark the model dirty", c.get("/api/state").json()["dirty"] is True)
+
+check("plain Save with no file refuses",
+      c.post("/api/save", json={}).status_code == 422)
+
+sv = c.post("/api/save", json={"name":"roundtrip-test"})
+check("Save As accepted", sv.status_code == 200, sv.text[:70])
+saved = sv.json()["saved"]
+check("saved under the writable dir", "minsky-models" in saved, saved)
+st = c.get("/api/state").json()
+check("saving clears dirty and names the file",
+      st["dirty"] is False and st["currentFile"] == "roundtrip-test")
+
+# writable roots are a SMALLER set than readable ones
+check("refuses to overwrite a shipped example",
+      c.post("/api/save", json={
+          "name": os.path.expanduser("~/minsky/examples/Solow.mky")}).status_code == 403)
+check("refuses to write outside the roots",
+      c.post("/api/save", json={"name":"/etc/evil.mky"}).status_code == 403)
+
+# edit again, plain Save should now work against the remembered path
+c.post("/api/item", json={"kind":"operation","op":"time"})
+check("re-dirtied after further edits", c.get("/api/state").json()["dirty"] is True)
+check("plain Save works once a file is known",
+      c.post("/api/save", json={}).status_code == 200)
+
+# the round trip that matters: clear, reload, still exact and still runs
+c.post("/api/clear")
+check("cleared", c.get("/api/state").json()["currentFile"] is None)
+ld = c.post(f"/api/load?path={saved}")
+check("reopened the saved model", ld.status_code == 200, str(ld.status_code))
+back = ld.json()
+check("reopened topology is exact",
+      not any(w.get("desync") for w in back["wires"]),
+      f"{len(back['items'])} items, {len(back['wires'])} wires")
+last = None
+with c.websocket_connect("/ws/sim") as ws:
+    ws.send_json({"cmd":"run","steps":600,"tmax":3.0})
+    while True:
+        msg = ws.receive_json()
+        if "error" in msg: check("reopened model runs", False, msg["error"]); break
+        if msg.get("done") or msg.get("stopped"): break
+        last = msg
+if last:
+    t_, v = last["t"], last["values"][":int1"]
+    check("reopened model integrates correctly", abs(v-(7.0+2.5*t_)) < 1e-6,
+          f"t={t_:.4f} int1={v:.4f} expect {7.0+2.5*t_:.4f}")
+
+dl = c.get("/api/download")
+check("download returns a parseable .mky", dl.status_code == 200 and
+      dl.content.lstrip().startswith(b"<Minsky"), f"{dl.status_code}, {dl.content[:24]!r}")
+import xml.etree.ElementTree as _ET
+try:
+    _ET.fromstring(dl.content); ok_xml = True
+except Exception: ok_xml = False
+check("downloaded bytes parse as XML", ok_xml)
+
 print(f"\n{'ALL PASS' if not FAILED else 'FAILURES: ' + ', '.join(FAILED)}")
 sys.exit(1 if FAILED else 0)

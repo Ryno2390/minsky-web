@@ -153,8 +153,12 @@ svg#board{position:absolute;inset:0;width:100%;height:100%;touch-action:none}
 <div class="top">
   <div class="brand">Minsky <span>headless</span></div>
   <button id="open">Open…</button>
+  <button id="save">Save</button>
+  <button id="saveas">Save As…</button>
+  <button id="download" title="Download a copy to your computer">↓</button>
   <button id="clear">Clear</button>
   <button id="del" class="danger" disabled>Delete</button>
+  <span id="fname" style="font-size:12.5px;color:var(--ink-3);margin-left:4px"></span>
   <div class="spacer"></div>
   <span class="pill" id="status">idle</span>
   <span class="tval">t = <span id="tval">0</span></span>
@@ -373,6 +377,11 @@ function render() {
   else if (state.running) { st.textContent = "running"; st.className = "pill live"; }
   else { st.textContent = "idle"; st.className = "pill"; }
   $("#del").disabled = sel === null;
+  const nm = state.currentFile;
+  $("#fname").textContent = (nm || "untitled") + (state.dirty ? " •" : "");
+  $("#fname").title = state.currentPath || "not saved yet";
+  $("#fname").style.color = state.dirty ? "var(--warn)" : "var(--ink-3)";
+  $("#save").disabled = !state.dirty && !!nm;
   $("#selinfo").textContent = sel === null ? "Nothing selected."
     : `#${sel} · ${byIdx.get(sel)?.classType ?? "?"}`;
 }
@@ -403,6 +412,7 @@ document.addEventListener("click", guard(async e => {
 }));
 
 $("#clear").onclick = guard(async () => {
+  if (state.dirty && !confirm("Discard unsaved changes?")) return;
   state = await api("/clear", {method:"POST"});
   sel = null; series = {}; tSeries = []; colors = {}; drawPlot(); render();
 });
@@ -639,9 +649,39 @@ $("#gaddstock").onclick = guard(async () => {
     body: JSON.stringify({at: g.cols})}));
 });
 
+/* ---------- save ---------- */
+async function doSave(name){
+  const r = await api("/save", {method:"POST", body: JSON.stringify({name: name || null})});
+  await refresh();
+  toast(`Saved ${r.name}`, true);
+}
+$("#save").onclick = guard(async () => {
+  if (!state.currentFile) return $("#saveas").click();
+  await doSave(null);
+});
+$("#saveas").onclick = guard(async () => {
+  const suggested = state.currentFile || "model";
+  const name = prompt("Save as (name, or a full path inside a writable directory):",
+                      suggested);
+  if (!name) return;
+  await doSave(name);
+});
+$("#download").onclick = () => { location.href = "/api/download"; };
+addEventListener("keydown", e => {
+  if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "s") {
+    e.preventDefault();
+    (e.shiftKey ? $("#saveas") : $("#save")).click();
+  }
+});
+// leaving with unsaved edits should not be silent
+addEventListener("beforeunload", e => {
+  if (state && state.dirty) { e.preventDefault(); e.returnValue = ""; }
+});
+
 /* ---------- file picker ---------- */
 let fileRoots = [];
 $("#open").onclick = guard(async () => {
+  if (state.dirty && !confirm("Discard unsaved changes and open another model?")) return;
   fileRoots = (await api("/files")).roots;
   $("#fwrap").classList.add("open");
   $("#fsearch").value = ""; drawFiles(); $("#fsearch").focus();

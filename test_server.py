@@ -1042,5 +1042,35 @@ if last:
     check("two wires into one input are summed", abs(v_ - 4.0*t_) < 1e-6,
           f"t={t_:.4f} int={v_:.4f} expect {(1.5+2.5)*t_:.4f}")
 
+print("\n30. port roles are honest, and wiring failures are readable")
+c.post(f"/api/load?path={os.path.expanduser('~/minsky/examples/GoodwinLinear02.mky')}")
+st = c.get("/api/state").json()
+plot = next(i for i in st["items"] if "Plot" in i["classType"])
+# a plot consumes and never produces; labelling its port 0 "output" offered the canvas a
+# drag source that could never make a wire
+check("a plot widget has no output port",
+      all(p["role"] == "input" for p in plot["ports"]),
+      str(sorted({p["role"] for p in plot["ports"]})))
+
+# port 0 is the output for operations whatever their rotation -- this multiply is
+# mirrored in the file, so geometry cannot be used to decide
+mult = next(i for i in st["items"] if i["classType"] == "Operation:multiply")
+check("an operation's port 0 is its output even when mirrored",
+      [p["role"] for p in mult["ports"]] == ["output", "input", "input"],
+      str([p["role"] for p in mult["ports"]]))
+
+v = c.post("/api/item", json={"kind":"variable","name":"probe","var_type":"flow",
+                              "at":[80,900]}).json()["index"]
+r = c.post("/api/wire", json={"src":plot["index"],"dst":v,"port":1})
+body = r.json()
+# the WiringError text is a developer diagnosis: object reprs, pixel coordinates and two
+# speculative causes. Useful in a log, meaningless to someone who dragged a line.
+check("a wiring failure reads as a sentence", r.status_code == 400 and
+      "cannot be connected" in body.get("detail",""), str(body)[:80])
+check("it leaks no reprs or pixel coordinates",
+      "<" not in body.get("detail","") and "port 0 at" not in body.get("detail",""),
+      body.get("detail","")[:70])
+check("the diagnosis is kept for the log", bool(body.get("diagnostic")))
+
 print(f"\n{'ALL PASS' if not FAILED else 'FAILURES: ' + ', '.join(FAILED)}")
 sys.exit(1 if FAILED else 0)

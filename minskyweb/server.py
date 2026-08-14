@@ -526,8 +526,14 @@ def snapshot() -> dict[str, Any]:
     items = []
     for ref, it in _iter_items(m):
         it.updateBoundingBox()          # port coords are stale until this runs
+        # Port 0 is the output for operations and variables, whatever their rotation --
+        # a mirrored multiply still has its output at port 0, so geometry cannot be used
+        # to tell them apart. But some classes have NO output at all: a plot consumes and
+        # never produces, and labelling its port 0 "output" offered the canvas a drag
+        # source that could never make a wire.
+        sink_only = any(k in it.classType() for k in ("Plot", "Godley", "Sheet"))
         ports = [dict(index=p, x=it.portX(p), y=it.portY(p),
-                      role="output" if p == 0 else "input")
+                      role="input" if (sink_only or p != 0) else "output")
                  for p in range(it.portsSize())]
         nested = ":" in ref
         entry = dict(index=int(ref) if not nested else None, ref=ref,
@@ -597,8 +603,15 @@ def create_app() -> FastAPI:
 
     @app.exception_handler(WiringError)
     async def _wiring(_req, exc: WiringError):
-        # wiring failures carry the diagnosis; surface it rather than a bare 500
-        return JSONResponse(status_code=400, content={"error": str(exc)})
+        # The WiringError text is a developer diagnosis -- object reprs, port pixel
+        # coordinates, two speculative causes. Useful in a log, meaningless to someone
+        # who just dragged a line. Keep the detail server-side, hand back a sentence.
+        import logging
+        logging.getLogger("minskyweb").warning("wiring failed: %s", exc)
+        return JSONResponse(status_code=400, content={
+            "detail": "those two ports cannot be connected. Check the wire starts at an "
+                      "output and ends at a free input, and that the items do not overlap.",
+            "diagnostic": str(exc)})
 
     @app.get("/api/state")
     async def get_state():

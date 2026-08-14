@@ -386,5 +386,42 @@ check("a repeated name gives two icons, one variable",
       names.count("a") == 2 and len([k for k in st["values"] if k == ":a"]) == 1,
       f"icons={names} vars={list(st['values'])}")
 
+print("\n13. a new Godley table is usable immediately")
+c.post("/api/clear")
+gi = c.post("/api/item", json={"kind":"godley"}).json()["index"]
+g = c.get(f"/api/godley/{gi}").json()
+n_ic = sum(1 for v in g["icRow"] if v)
+check("a fresh table has a flow row to type into",
+      g["rows"] - 1 - n_ic >= 1, f"{g['rows']} rows, {n_ic} initial-condition row(s)")
+check("its columns are pre-classified",
+      g["classes"][1:4] == ["asset","liability","equity"], str(g["classes"]))
+check("the blank flow row balances", g["rowSums"][-1] == "0", repr(g["rowSums"]))
+
+# and the seeded row is immediately usable end to end
+for r,cc,v in ((0,1,"Reserves"),(0,2,"Deposits"),(1,1,"100"),(1,2,"100"),
+               (2,0,"Lending"),(2,1,"Lend"),(2,2,"Lend")):
+    assert c.post(f"/api/godley/{gi}/cell",
+                  json={"row":r,"col":cc,"value":v}).status_code == 200, (r,cc)
+g = c.get(f"/api/godley/{gi}").json()
+check("filled straight in, with no extra rows added",
+      all(v == "0" for v in g["rowSums"][1:]), repr(g["rowSums"]))
+rate = c.post("/api/item", json={"kind":"parameter","name":"rate","value":5.0,
+                                 "at":[140,420]}).json()["index"]
+lend = c.post("/api/item", json={"kind":"variable","name":"Lend","var_type":"flow",
+                                 "at":[420,420]}).json()["index"]
+c.post("/api/wire", json={"src":rate,"dst":lend,"port":1})
+last = None
+with c.websocket_connect("/ws/sim") as ws:
+    ws.send_json({"cmd":"run","steps":900,"tmax":3.0})
+    while True:
+        m = ws.receive_json()
+        if "error" in m: check("seeded table runs", False, m["error"]); break
+        if m.get("done") or m.get("stopped"): break
+        last = m
+if last:
+    t_, R = last["t"], last["values"][":Reserves"]
+    check("seeded table integrates correctly", abs(R-(100+5*t_)) < 1e-6,
+          f"t={t_:.4f} Reserves={R:.4f} expect {100+5*t_:.4f}")
+
 print(f"\n{'ALL PASS' if not FAILED else 'FAILURES: ' + ', '.join(FAILED)}")
 sys.exit(1 if FAILED else 0)

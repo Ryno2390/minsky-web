@@ -175,6 +175,7 @@ svg#board.panning{cursor:grabbing}
 .addform input:focus{border-color:var(--accent)}
 .addform input.bad{border-color:var(--bad)}
 .addform .val{margin-top:7px}
+.gtable input::placeholder{color:var(--ink-3);opacity:.55}
 .addform .err{color:var(--bad);font-size:11.5px;margin-top:6px;display:none}
 .addform .err.show{display:block}
 .addform .btns{display:flex;gap:6px;margin-top:8px}
@@ -756,10 +757,19 @@ async function drawGodley(g){
         k==="noAssetClass"?"unclassified":k}</option>`).join("") + `</select></th>`;
   }
   h += `<th style="border-top:0"></th></tr></thead><tbody>`;
+  // Each cell says what belongs in it. The table's three row kinds mean three different
+  // things and nothing on screen used to distinguish them, so a new table looked like a
+  // blank grid.
+  const hint = (r, c) => {
+    if (r === 0)          return c === 0 ? "flows ↓  stocks →" : "stock name";
+    if (g.icRow[r])       return c === 0 ? "" : "initial value";
+    return c === 0 ? "flow label" : "flow variable";
+  };
   for (let r = 0; r < g.rows; r++) {
     h += `<tr class="${g.icRow[r] ? "ic" : ""}">`;
     for (let c = 0; c < g.cols; c++) {
-      h += `<td class="${c===0?"lab":""}"><input data-r="${r}" data-c="${c}" value="${
+      h += `<td class="${c===0?"lab":""}"><input data-r="${r}" data-c="${c}" ` +
+           `placeholder="${hint(r,c)}" value="${
         (g.cells[r][c]||"").replace(/"/g,"&quot;")}"></td>`;
     }
     const v = g.rowSums[r];
@@ -768,7 +778,11 @@ async function drawGodley(g){
             v === null ? "" : (v.trim()==="0" ? "✓ 0" : "≠ " + v)}</td>`;
     h += `</tr>`;
   }
-  $("#gbody").innerHTML = h + `</tbody></table>`;
+  const flowRows = g.rows - 1 - g.icRow.filter(Boolean).length;
+  const nudge = flowRows > 0 ? "" :
+    `<div style="margin:0 18px 4px;color:var(--ink-3);font-size:12.5px">
+       No flow rows yet — press <b>+ Flow row</b> to record a transaction.</div>`;
+  $("#gbody").innerHTML = h + `</tbody></table>` + nudge;
 
   $("#gbody").querySelectorAll("input").forEach(inp => {
     inp.onchange = guard(async () => {
@@ -943,6 +957,9 @@ function fitView(){
   // match the viewport's aspect so nothing is squashed
   const ar = (vp.w||1000)/(vp.h||700);
   if (w/h < ar) w = h*ar; else h = w/ar;
+  // Fitting means "zoom out until everything is visible", never "zoom in". A model with
+  // one small item otherwise fits at 597%, which reads as broken rather than close.
+  if (w < vp.w) { h *= vp.w / w; w = vp.w; }
   view = {x:(b.x0+b.x1)/2 - w/2, y:(b.y0+b.y1)/2 - h/2, w, h};
   applyView();
 }

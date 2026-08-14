@@ -427,6 +427,9 @@ maths goes through the SVG's inverse CTM, so drag and wiring need no special cas
 zoom. Verified: dragging at 50% lands within **1e-5 model units** of the drop point, and
 wiring works at 0.894.
 
+**Fit never zooms in.** Fitting means "zoom out until everything is visible"; a model
+with a single small item otherwise fit at 597%, which reads as broken rather than close.
+
 Two counter-scales keep it usable when zoomed out. Strokes carry
 `vector-effect: non-scaling-stroke`, and port radius is divided by the zoom so ports stay
 clickable rather than shrinking to a pixel. Text is deliberately **not** counter-scaled:
@@ -516,9 +519,17 @@ The file's items in fact align with a *prefix* of the engine's, with the generat
 appended, so the alignment now maps the prefix and verifies types rather than demanding
 equality. All 37 shipped examples still load exactly.
 
-**A new Godley table has no flow row.** It opens as 2 rows — headers and initial
-conditions — so a user must press *+ Flow row* before entering anything, while the hint
-text talks about flows. Discoverable, not fixed.
+**A new Godley table had no flow row.** The engine creates one with two rows — stock
+headers and initial conditions — so there was nowhere to enter a flow, while every
+description of the thing, including the editor's own hint, talks about flow rows.
+`Model.godley()` now seeds one (`flow_rows=1`, overridable). A blank flow row sums to `0`
+and drives nothing, so an unused one costs nothing; verified a seeded table fills in and
+integrates correctly with no extra rows added.
+
+Each cell also carries a placeholder naming what belongs in it — `stock name`,
+`initial value`, `flow label`, `flow variable`, and `flows ↓ stocks →` in the corner —
+because the three row kinds mean different things and nothing on screen distinguished
+them. A table with no flow rows at all now says so instead of showing a bare grid.
 
 **Adding a variable fired two chained native `prompt()` dialogs** — now an inline form in
 the palette. The prompts blocked the page, could not validate before a round trip, and

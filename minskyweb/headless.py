@@ -280,9 +280,22 @@ class Model:
         return self._adopt(f"op:{op}", None, at,
                            expect="IntOp" if op == "integrate" else f"Operation:{op}")
 
-    def godley(self, at=None) -> Item:
+    def godley(self, at=None, flow_rows: int = 1) -> Item:
+        """A Godley table, with `flow_rows` blank flow rows.
+
+        The engine creates one with only two rows -- the stock headers and initial
+        conditions -- so it has nowhere to enter a flow, while every description of the
+        thing (including the editor's own hint) talks about flow rows. Seeding one means
+        the table matches what it says it is and can be typed into immediately. A blank
+        flow row sums to '0' and drives nothing, so it costs nothing to leave unused.
+        """
         self.minsky.canvas.addGodley()
-        return self._adopt("godley", None, at, expect="GodleyIcon")
+        it = self._adopt("godley", None, at, expect="GodleyIcon")
+        if flow_rows:
+            t = Godley(self, it.index)
+            snap = t.snapshot()
+            t.resize(snap["rows"] + flow_rows, snap["cols"])
+        return it
 
     def table(self, index: int) -> "Godley":
         """The Godley table at `index`, wrapped so update() cannot be forgotten."""

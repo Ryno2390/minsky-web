@@ -8,17 +8,32 @@
   --accent:#4C9AFF; --accent-dim:#1E3A5C;
   --ok:#3FB950; --warn:#D29922; --bad:#F85149;
   --var:#4C9AFF; --par:#3FB950; --op:#D29922; --godley:#BC8CFF; --int:#FF7B72;
+  --plot:#2BB7A8; --grp:#9B7CF5;
   --mono:"SF Mono","JetBrains Mono",ui-monospace,Menlo,Consolas,monospace;
 }
 *{box-sizing:border-box}
 html,body{height:100%;margin:0}
 body{background:var(--bg);color:var(--ink);
   font:14px/1.5 -apple-system,BlinkMacSystemFont,"Inter","Segoe UI",sans-serif;
-  display:grid;grid-template-columns:210px 1fr 320px;grid-template-rows:44px 1fr;
+  display:grid;grid-template-columns:210px minmax(0,1fr) 320px;grid-template-rows:44px 1fr;
   grid-template-areas:"top top top" "pal canvas side";overflow:hidden}
+
+/* The two side columns are fixed at 210px and 320px, so below 530px the canvas column
+   -- the only flexible one -- collapsed to nothing at all. Every zoom calculation then
+   divides by that width, so the board blanked and stayed blank. Drop the panels rather
+   than the thing the whole window is for. */
+@media (max-width:1000px){
+  body{grid-template-columns:210px minmax(0,1fr);grid-template-areas:"top top" "pal canvas"}
+  .side{display:none}
+}
+@media (max-width:640px){
+  body{grid-template-columns:minmax(0,1fr);grid-template-areas:"top" "canvas"}
+  .pal{display:none}
+}
 
 /* ---------- top bar ---------- */
 .top{grid-area:top;display:flex;align-items:center;gap:10px;padding:0 14px;
+  min-width:0;overflow-x:auto;overflow-y:hidden;scrollbar-width:none;
   background:var(--panel);border-bottom:1px solid var(--line)}
 .brand{font-weight:600;letter-spacing:-.01em;margin-right:6px}
 .brand span{color:var(--ink-3);font-weight:400;font-size:12px;margin-left:7px}
@@ -48,12 +63,16 @@ button.danger:hover:not(:disabled){border-color:var(--bad);color:var(--bad)}
 .grid2{display:grid;grid-template-columns:1fr 1fr;gap:2px}
 
 /* ---------- canvas ---------- */
-.canvas{grid-area:canvas;position:relative;overflow:hidden;background:
+.canvas{grid-area:canvas;min-width:0;position:relative;overflow:hidden;background:
   radial-gradient(circle at 1px 1px,#1B2226 1px,transparent 0) 0 0/22px 22px,var(--bg)}
 svg#board{position:absolute;inset:0;width:100%;height:100%;touch-action:none;
   cursor:grab}
 svg#board.panning{cursor:grabbing}
 .item-body{cursor:grab}
+/* a group member: drawn so the diagram reads correctly, but there is no index to
+   address it by, so it is not offered as something to drag, rename or delete */
+.ro{cursor:not-allowed;opacity:.55;stroke-dasharray:3 2}
+.ilabel.dim{opacity:.6;font-size:9px}
 .item-body:active{cursor:grabbing}
 .sel .shape{stroke:var(--accent);stroke-width:2}
 .shape{stroke:var(--line-2);stroke-width:1.5;fill:var(--panel-2);
@@ -359,6 +378,12 @@ function pretty(name){
 }
 const board = $("#board"), gItems = $("#items"), gWires = $("#wires");
 let state = {items:[],wires:[],values:{}}, sel = null, selWire = null, ws = null;
+
+// Both selections are indices INTO THE CURRENT MODEL, so they cannot outlive it. selWire
+// was left set across Clear, undo, redo and opening another file, which armed the Delete
+// button on a wire that no longer existed -- or, worse, on whichever wire had inherited
+// that index in the new model.
+function clearSelection(){ sel = null; selWire = null; }
 let series = {}, tSeries = [], colors = {};
 const PALETTE = ["#4C9AFF","#3FB950","#D29922","#BC8CFF","#FF7B72","#39C5CF","#F778BA","#E3B341"];
 
@@ -399,18 +424,87 @@ function kindOf(ct){
   if (ct === "IntOp")                      return ["int","∫"];
   if (ct.startsWith("Operation"))          return ["op", ct.split(":")[1]||"op"];
   if (ct.startsWith("Godley"))             return ["godley","godley"];
+  if (ct.startsWith("Plot"))               return ["plot","plot"];
+  if (ct.startsWith("Sheet"))              return ["plot","sheet"];
   return ["op", ct];
 }
+// where a line from (tx,ty) meets the edge of a group box
+function edgeOf(b, tx, ty){
+  const dx = tx - b.cx, dy = ty - b.cy;
+  if (!dx && !dy) return {x: b.cx, y: b.cy};
+  const s = Math.min(Math.abs(dx) ? (b.w/2)/Math.abs(dx) : Infinity,
+                     Math.abs(dy) ? (b.h/2)/Math.abs(dy) : Infinity);
+  return {x: b.cx + dx*s, y: b.cy + dy*s};
+}
+
 function render() {
   $("#empty").style.display = state.items.length ? "none" : "grid";
   gItems.innerHTML = ""; gWires.innerHTML = "";
   const byIdx = new Map(state.items.map(i => [i.index, i]));
 
+  // A COLLAPSED group (displayContents false) is drawn by Minsky as a single icon: its
+  // members' coordinates are positions INSIDE the group, so drawing them on the canvas
+  // piled eight items into a 160x22 box with every label on top of every other. Draw the
+  // group instead, as the one thing it is on screen.
+  const groups = state.groups || [];
+  const boxes = new Map();                       // group index -> {x,y,w,h}
+  const hidden = new Set();                      // refs not to draw individually
+  for (const grp of groups) {
+    if (grp.displayContents) continue;
+    const inside = state.items.filter(i => i.ref && i.ref.startsWith(`g${grp.index}:`));
+    if (!inside.length) continue;
+    inside.forEach(i => hidden.add(i.ref));
+    const xs = inside.map(i => i.x), ys = inside.map(i => i.y);
+    const cx = (Math.min(...xs) + Math.max(...xs)) / 2;
+    const cy = (Math.min(...ys) + Math.max(...ys)) / 2;
+    const w = Math.max(120, Math.max(...xs) - Math.min(...xs) + 40);
+    const h = Math.max(52, Math.max(...ys) - Math.min(...ys) + 40);
+    boxes.set(grp.index, {x: cx - w/2, y: cy - h/2, w, h, cx, cy, grp, count: inside.length});
+  }
+  const groupOf = ref => {
+    const m = /^g(\d+):/.exec(String(ref || ""));
+    return m && boxes.has(+m[1]) ? boxes.get(+m[1]) : null;
+  };
+
+  for (const grp of boxes.values()) {
+    const g = document.createElementNS("http://www.w3.org/2000/svg","g");
+    g.setAttribute("class","item");
+    const r = document.createElementNS("http://www.w3.org/2000/svg","rect");
+    r.setAttribute("x",grp.x); r.setAttribute("y",grp.y);
+    r.setAttribute("width",grp.w); r.setAttribute("height",grp.h);
+    r.setAttribute("rx",8);
+    r.setAttribute("class","shape ro");
+    r.style.fill = "color-mix(in srgb, var(--grp, #9b7cf5) 14%, var(--panel-2))";
+    r.style.stroke = "var(--grp, #9b7cf5)";
+    r.dataset.ro = "1";
+    g.appendChild(r);
+    const t = document.createElementNS("http://www.w3.org/2000/svg","text");
+    t.setAttribute("x",grp.cx); t.setAttribute("y",grp.cy + 4);
+    t.setAttribute("text-anchor","middle");
+    t.setAttribute("class","ilabel");
+    t.textContent = pretty(grp.grp.title || "group");
+    g.appendChild(t);
+    const n = document.createElementNS("http://www.w3.org/2000/svg","text");
+    n.setAttribute("x",grp.cx); n.setAttribute("y",grp.y + grp.h + 13);
+    n.setAttribute("text-anchor","middle");
+    n.setAttribute("class","ilabel dim");
+    n.textContent = `${grp.count} items`;
+    g.appendChild(n);
+    gItems.appendChild(g);
+  }
+
   for (const w of state.wires) {
     const c = w.coords;
     if (!c || c.length < 4) continue;
+    // a wire with BOTH ends inside a collapsed group is internal to it and not on screen
+    const gs = groupOf(w.src), gd = groupOf(w.dst);
+    if (gs && gd && gs === gd) continue;
     const p = document.createElementNS("http://www.w3.org/2000/svg","path");
-    const [x1,y1] = [c[0],c[1]], [x2,y2] = [c[c.length-2],c[c.length-1]];
+    let [x1,y1] = [c[0],c[1]], [x2,y2] = [c[c.length-2],c[c.length-1]];
+    // one end inside a collapsed group: bring it to the group's edge, or the wire runs to
+    // a point in the middle of nowhere where its hidden member used to be
+    if (gs) { const e = edgeOf(gs, x2, y2); x1 = e.x; y1 = e.y; }
+    if (gd) { const e = edgeOf(gd, x1, y1); x2 = e.x; y2 = e.y; }
     const dx = Math.max(30, Math.abs(x2-x1)*0.45);
     p.setAttribute("d", `M${x1},${y1} C${x1+dx},${y1} ${x2-dx},${y2} ${x2},${y2}`);
     p.setAttribute("class","wire" + (selWire === w.index ? " sel" : ""));
@@ -425,6 +519,7 @@ function render() {
   }
 
   for (const it of state.items) {
+    if (hidden.has(it.ref)) continue;
     const [cls, label] = kindOf(it.classType);
     const g = document.createElementNS("http://www.w3.org/2000/svg","g");
     // `it.index` is null for group members, and `sel` is null when nothing is selected,
@@ -456,12 +551,20 @@ function render() {
     const shape = document.createElementNS("http://www.w3.org/2000/svg","rect");
     shape.setAttribute("x", L); shape.setAttribute("y", T);
     shape.setAttribute("width", hw*2); shape.setAttribute("height", hh*2);
-    shape.setAttribute("rx", cls === "var" || cls === "par" ? 4 : hh);
-    shape.setAttribute("class","shape item-body");
+    // rx = hh makes a small operation a stadium, which is what it should look like --
+    // but a plot is over 100px tall, and the same rule turned it into a huge ellipse
+    // that swallowed its neighbours. Cap the corner so tall items stay rectangles.
+    shape.setAttribute("rx", cls === "var" || cls === "par" ? 4 : Math.min(hh, 14));
+    // The server marks group members readOnly with a null index: there is no index to
+    // address them by, so nothing can move, rename or delete one. They were still drawn
+    // as ordinary interactive items, and `dataset.idx = null` stringifies to "null",
+    // which +"null" turns into NaN -- so clicking one selected NaN and the drag setup
+    // threw on an item that could not be found. Draw them, do not offer them.
+    shape.setAttribute("class", "shape" + (it.index === null ? " ro" : " item-body"));
     shape.style.fill = `color-mix(in srgb, var(--${cls}) 18%, var(--panel-2))`;
     shape.style.stroke = isSel ? "var(--accent)" : `var(--${cls})`;
     if (isSel) shape.style.strokeWidth = "2.5";
-    shape.dataset.idx = it.index;
+    if (it.index !== null) shape.dataset.idx = it.index; else shape.dataset.ro = "1";
     g.appendChild(shape);
 
     const glyph = {multiply:"×", add:"+", subtract:"−", divide:"÷", integrate:"∫",
@@ -664,7 +767,7 @@ $("#addform").addEventListener("keydown", e => {
 $("#clear").onclick = guard(async () => {
   if (state.dirty && !confirm("Discard unsaved changes?")) return;
   state = await api("/clear", {method:"POST"});
-  sel = null; series = {}; tSeries = []; colors = {}; drawPlot(); render();
+  clearSelection(); series = {}; tSeries = []; colors = {}; drawPlot(); render();
 });
 $("#del").onclick = guard(async () => {
   if (selWire !== null) {
@@ -703,9 +806,20 @@ board.addEventListener("pointerdown", e => {
     board.setPointerCapture(e.pointerId);
     return;
   }
+  const ro = e.target.closest("[data-ro]");
+  if (ro) {
+    // Say why rather than let the click fall through to a pan, which reads as the item
+    // simply refusing to move.
+    toast("This item is inside a group. Groups cannot be edited here yet.");
+    return;
+  }
   const body = e.target.closest(".item-body");
   if (body) {
     const idx = +body.dataset.idx;
+    if (!Number.isInteger(idx) || !state.items.some(i => i.index === idx)) {
+      toast("That item belongs to a group and cannot be edited here.");
+      return;
+    }
     selWire = null;
     if (e.detail >= 2) {
       const it = state.items.find(i => i.index === idx);
@@ -1042,7 +1156,7 @@ async function step(what){
   if (r.status === 409) return;            // nothing to do; the buttons already say so
   const body = await r.json();
   if (!r.ok) throw new Error(body.error || body.detail || `HTTP ${r.status}`);
-  state = body; sel = null; render();
+  state = body; clearSelection(); render();
   if (gIdx !== null && $("#gwrap").classList.contains("open")) {
     try { await drawGodley(await api(`/godley/${gIdx}`)); } catch { closeGodley(); }
   }
@@ -1133,7 +1247,7 @@ $("#fupload").onchange = guard(async () => {
   state = body.state; afterLoad(f.name);
 });
 function afterLoad(name){
-  closeFiles(); sel = null; series = {}; tSeries = []; colors = {}; drawPlot();
+  closeFiles(); clearSelection(); series = {}; tSeries = []; colors = {}; drawPlot();
   fitView(); render();
   const d = state.wires.find(w => w.desync);
   if (d) toast(`Loaded ${name}, but ${d.engine - d.tracked} of ${d.engine} wires could `
@@ -1156,8 +1270,21 @@ counter-scaled: letting labels shrink is what makes zooming out declutter a dens
 const PORT_R = 4.5, ZMIN = 0.05, ZMAX = 12;
 let view = null;                 // {x,y,w,h} in model units
 
-function viewport(){ const r = board.getBoundingClientRect(); return {w:r.width, h:r.height}; }
-function zoomLevel(){ return view ? viewport().w / view.w : 1; }
+// A hidden or very narrow canvas measures 0 wide. That fed a zero into every divisor
+// here: zoomLevel() went to 0, the port radius to Infinity, and the next zoom click set
+// the viewBox width to 0 -- which blanks the board and, since every later calculation
+// then divides by that 0, blanks it permanently. Never report a degenerate viewport.
+function viewport(){
+  const r = board.getBoundingClientRect();
+  return {w: Math.max(1, r.width || 0), h: Math.max(1, r.height || 0)};
+}
+function zoomLevel(){
+  if (!view || !(view.w > 0)) return 1;
+  // The SVG letterboxes when its aspect does not match the viewport's, so the scale
+  // actually applied is the SMALLER of the two ratios. Reading only the width made the
+  // percentage wrong after a resize, and put the pointer maths out by the same factor.
+  return Math.min(viewport().w / view.w, viewport().h / view.h);
+}
 
 function applyView(){
   if (!view) return;
@@ -1195,7 +1322,13 @@ function fitView(){
 function zoomBy(factor, clientX, clientY){
   if (!view) fitView();
   const z = zoomLevel();
-  const target = Math.min(ZMAX, Math.max(ZMIN, z*factor));
+  let target = Math.min(ZMAX, Math.max(ZMIN, z*factor));
+  // Clamping alone is not enough. Fitting a very large model can land BELOW ZMIN, and
+  // then clamping a zoom-OUT request up to ZMIN made it a zoom-in: the button marked
+  // with a minus enlarged the diagram and pushed items off the canvas. A clamp may stop
+  // a zoom, never reverse it.
+  target = factor < 1 ? Math.min(target, z) : Math.max(target, z);
+  if (!(target > 0) || target === z) return;
   const k = z/target;                              // new width = old width * k
   const vp = viewport(), r = board.getBoundingClientRect();
   // keep the point under the cursor fixed
@@ -1239,7 +1372,18 @@ addEventListener("keydown", e => {
   else if (e.key === "=" || e.key === "+") { e.preventDefault(); zoomBy(1.25, null, null); }
   else if (e.key === "-")               { e.preventDefault(); zoomBy(1/1.25, null, null); }
 });
-addEventListener("resize", () => { if (view) applyView(); });
+addEventListener("resize", () => {
+  if (!view) return;
+  // Keep the view's aspect equal to the viewport's. Otherwise the SVG letterboxes after
+  // a window resize: the zoom readout disagrees with what is drawn, and dragging stops
+  // following the pointer because the two axes are then at different scales.
+  const vp = viewport(), ar = vp.w / vp.h;
+  const cx = view.x + view.w/2, cy = view.y + view.h/2;
+  let {w, h} = view;
+  if (w/h < ar) w = h*ar; else h = w/ar;
+  view = {w, h, x: cx - w/2, y: cy - h/2};
+  applyView();
+});
 
 refresh().then(() => { fitView(); drawPlot(); }).catch(e => toast(e.message));
 </script>

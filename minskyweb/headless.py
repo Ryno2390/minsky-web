@@ -544,9 +544,16 @@ class Model:
         if not self.minsky.canvas.getItemAt(raw.x(), raw.y()):
             raise RuntimeError(
                 f"no item found at {item}'s own coordinates to rename")
+        was = (raw.name() or "").strip()
         self.minsky.canvas.renameAllInstances(new)
         got = self.minsky.model.items[item.index].name()
-        if got.strip() != new:
+
+        # The engine CANONICALISES names: it LaTeX-escapes "%", "#" and "&", and strips a
+        # leading ":" (the global-namespace marker). Comparing literally called every one
+        # of those a failure -- the caller got a 400 saying the rename had not happened
+        # while looking at a canvas where it plainly had. So judge by whether the name
+        # MOVED, and hand back what it actually became.
+        if got.strip() == was and was != new:
             raise RuntimeError(
                 f"rename to {new!r} left the item called {got!r}")
         return got

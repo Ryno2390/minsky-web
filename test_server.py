@@ -1230,5 +1230,52 @@ for junk in ("CaseProbe.mky", "my.model.mky"):
     (SAVE_DIR / junk).unlink(missing_ok=True)
 
 
+print("\n34. renaming")
+c.post("/api/clear")
+a = c.post("/api/item", json={"kind":"variable","name":"alpha","var_type":"flow"}).json()["index"]
+# the engine CANONICALISES names -- it LaTeX-escapes % # &, and strips a leading ":".
+# Comparing literally called each of those a failure: a 400 saying the rename had not
+# happened, over a canvas where it plainly had.
+for want, why in (("100%", "a percent sign"), ("a#b", "a hash"), (":lead", "a leading colon")):
+    r = c.post(f"/api/item/{a}/rename", json={"name": want})
+    check(f"a name with {why} is accepted", r.status_code == 200,
+          f"{r.status_code} {r.text[:70]}")
+    body = r.json()
+    check("and the stored form is reported back",
+          bool(body.get("name")) and (body["name"] == want or "note" in body),
+          str(body.get("name")))
+
+# the engine applies a rename and THEN notices the name is bound to another variable
+# type: it reports the clash but keeps the change, leaving a model that never resets
+c.post("/api/clear")
+c.post("/api/item", json={"kind":"variable","name":"shared","var_type":"stock"})
+f = c.post("/api/item", json={"kind":"variable","name":"flowvar","var_type":"flow"}).json()["index"]
+r = c.post(f"/api/item/{f}/rename", json={"name": "shared"})
+check("renaming onto a name held at another type is refused", r.status_code == 400)
+names = sorted(i.get("name") for i in c.get("/api/state").json()["items"])
+check("and the model is left exactly as it was", names == ["flowvar", "shared"], str(names))
+
+# renaming onto a name another variable already uses MERGES them -- legitimate, but the
+# two values become one and this item's own value is the one that goes
+c.post("/api/clear")
+c.post("/api/item", json={"kind":"parameter","name":"keep","value":7.5})
+q = c.post("/api/item", json={"kind":"parameter","name":"other","value":1.25}).json()["index"]
+r = c.post(f"/api/item/{q}/rename", json={"name": "keep"}).json()
+check("a merging rename says so", "warning" in r and "merged" in r["warning"], str(r)[:80])
+check("and it is undoable", c.post("/api/undo").status_code == 200)
+vals = c.get("/api/state").json()["values"]
+check("undo brings the separate variable back", len(vals) == 2, str(vals))
+
+# two items at one point cannot be told apart by the engine, which resolves by position
+c.post("/api/clear")
+c.post("/api/item", json={"kind":"parameter","name":"aa","value":1,"at":[300,300]})
+b = c.post("/api/item", json={"kind":"parameter","name":"bb","value":2,"at":[600,300]}).json()["index"]
+c.post(f"/api/item/{b}/move", json={"x":300,"y":300})
+r = c.post(f"/api/item/{b}/rename", json={"name":"cc"})
+check("renaming one of two coincident items is refused", r.status_code == 400)
+check("and neither was renamed",
+      sorted(i.get("name") for i in c.get("/api/state").json()["items"]) == ["aa","bb"])
+
+
 print(f"\n{'ALL PASS' if not FAILED else 'FAILURES: ' + ', '.join(FAILED)}")
 sys.exit(1 if FAILED else 0)

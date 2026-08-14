@@ -936,16 +936,50 @@ def create_app() -> FastAPI:
             n = len(m.minsky.model.items)
             if not 0 <= index < n:
                 raise HTTPException(422, f"index {index} out of range (0..{n-1})")
+
+            # Renaming a variable onto a name another variable already uses MERGES them.
+            # That is legitimate -- it is how one variable comes to appear in two places
+            # -- but the two values become one, and this item's own value is the one that
+            # goes. It reported plain success, so the number simply vanished.
+            want = spec.name.strip()
+            twin = None
+            for ref, it in _iter_items(m.minsky):
+                if ref == str(index) or not it.classType().startswith("Variable:"):
+                    continue
+                try:
+                    if (it.name() or "").strip() == want:
+                        twin = it.classType().split(":")[-1]
+                        break
+                except Exception:
+                    continue
             try:
-                return m.rename(Item(m, index, "?"), spec.name)
+                before = m.minsky.model.items[index].name()
+            except Exception:
+                before = None
+
+            try:
+                got = m.rename(Item(m, index, "?"), spec.name)
             except ValueError as ex:
                 raise HTTPException(422, str(ex))
             except RuntimeError as ex:
-                raise HTTPException(400, str(ex))
+                # The engine applies a rename and THEN discovers the name is bound to a
+                # different variable type -- it reports the clash but keeps the change,
+                # leaving a model that can never reset again. Put it back.
+                rollback()
+                raise HTTPException(400, f"{ex}. The model was left unchanged.")
+            return got, twin, before
 
-        name = await call(_rename)
+        got, twin, before = await call(_rename)
         mark_dirty()
-        return dict(name=name, state=await call(snapshot))
+        out = dict(name=got, state=await call(snapshot))
+        if got.strip() != spec.name.strip():
+            out["note"] = (f"Minsky stores that name as {got!r}.")
+        if twin:
+            out["warning"] = (
+                f"{before!r} was merged into the existing {twin} {got!r}. They are one "
+                f"variable now and share a single value; the value {before!r} had has "
+                f"been discarded. Undo to separate them.")
+        return out
 
     @app.delete("/api/item/{index}")
     async def delete_item(index: int):

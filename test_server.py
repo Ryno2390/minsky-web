@@ -1959,5 +1959,83 @@ with c.websocket_connect("/ws/sim") as ws:
           "error" in m and "t0" in m["error"], str(m)[:70])
 
 
+print("\n48. the saved point survives the history moving under it")
+from minskyweb.server import MAX_HISTORY, SAVE_DIR
+# The saved point was a raw INDEX into a list that is truncated from the right when a new
+# edit abandons a redo tail, and trimmed from the left at MAX_HISTORY. Either one leaves
+# the index naming a DIFFERENT state, so the marker went false over a model that differed
+# from the file -- which also disabled Save and silenced the discard confirmations.
+c.post("/api/clear")
+c.post("/api/item", json={"kind":"parameter","name":"a","value":1,"at":[100,100]})
+for x in (110, 120, 130):
+    c.post("/api/item/0/move", json={"x": x, "y": 100})
+r = c.post("/api/save", json={"name": "savedpoint-probe"}).json()
+try:
+    check("saving clears the marker", c.get("/api/state").json()["dirty"] is False)
+    c.post("/api/undo"); c.post("/api/undo")
+    for x in (500, 600, 700, 800):          # a new edit truncates the redo tail
+        c.post("/api/item/0/move", json={"x": x, "y": 100})
+    c.post("/api/undo"); c.post("/api/undo")
+    st = c.get("/api/state").json()
+    on_disk = float(re.search(r"<x>([\d.]+)</x>", open(r["saved"]).read()).group(1))
+    differs = abs(st["items"][0]["x"] - on_disk) > 0.5
+    check("after truncation the marker still matches reality",
+          st["dirty"] is differs,
+          f'model x={st["items"][0]["x"]:.0f} file x={on_disk:.0f} dirty={st["dirty"]}')
+
+    # and again with the buffer trimmed from the left
+    c.post("/api/save", json={"name": "savedpoint-probe"})
+    for i in range(MAX_HISTORY + 5):
+        c.post("/api/item/0/move", json={"x": 100 + (i % 40), "y": 100})
+    st = c.get("/api/state").json()
+    check("after MAX_HISTORY trimming the marker is still true",
+          st["dirty"] is True, f'dirty={st["dirty"]}')
+finally:
+    (SAVE_DIR / "savedpoint-probe.mky").unlink(missing_ok=True)
+
+# a Save used to append a duplicate entry, so the first undo after it did nothing visible
+c.post("/api/clear")
+c.post("/api/item", json={"kind":"parameter","name":"a","value":1,"at":[100,100]})
+c.post("/api/item/0/move", json={"x": 200, "y": 100})
+c.post("/api/save", json={"name": "dupe-probe"})
+try:
+    was = c.get("/api/state").json()["items"][0]["x"]
+    c.post("/api/undo")
+    now = c.get("/api/state").json()["items"][0]["x"]
+    check("the first undo after a save actually undoes something", was != now,
+          f"{was} -> {now}")
+finally:
+    (SAVE_DIR / "dupe-probe.mky").unlink(missing_ok=True)
+
+# saving reads the file back only when there is a Godley table to reorder; doing it
+# always reset the engine and threw away the results of a completed run
+c.post("/api/clear")
+_p = c.post("/api/item", json={"kind":"parameter","name":"g","value":0.3}).json()["index"]
+c.post("/api/item", json={"kind":"operation","op":"integrate"})
+_io = next(i["index"] for i in c.get("/api/state").json()["items"]
+           if i["classType"] == "IntOp")
+c.post("/api/wire", json={"src": _p, "dst": _io, "port": 1})
+c.post("/api/solver", json={"tmax": 5})
+c.post("/api/save", json={"name": "runsave-probe"})
+try:
+    check("saving clears the marker", c.get("/api/state").json()["dirty"] is False)
+    with c.websocket_connect("/ws/sim") as ws:
+        ws.send_json({"cmd": "run", "steps": 200, "tmax": 5})
+        while True:
+            m = ws.receive_json()
+            if m.get("done") or m.get("stopped") or "error" in m: break
+    ran = c.get("/api/state").json()
+    check("a run at the tmax already stored leaves the document saved",
+          ran["dirty"] is False, f'dirty={ran["dirty"]}')
+    check("the run advanced the clock", ran["t"] > 4, str(ran["t"]))
+    c.post("/api/save", json={"name": "runsave-probe"})
+    after = c.get("/api/state").json()
+    check("and saving keeps the run's results",
+          abs(after["t"] - ran["t"]) < 1e-9 and after["values"] == ran["values"],
+          f'{ran["t"]} -> {after["t"]}')
+finally:
+    (SAVE_DIR / "runsave-probe.mky").unlink(missing_ok=True)
+
+
 print(f"\n{'ALL PASS' if not FAILED else 'FAILURES: ' + ', '.join(FAILED)}")
 sys.exit(1 if FAILED else 0)

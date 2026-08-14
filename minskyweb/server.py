@@ -491,7 +491,15 @@ _DIRTY = False
 #: restoring a document without its topology would leave the canvas drawing wires that no
 #: longer exist.
 MAX_HISTORY = 60
-_HIST: list[tuple[bytes, list]] = []
+
+#: (id, document, wire topology). The id is what marks the saved point: `_SAVED_PTR` used
+#: to be a raw INDEX into this list, and the list is both truncated from the right when a
+#: new edit abandons a redo tail and trimmed from the left at MAX_HISTORY. Either one
+#: leaves the index naming a different state, so the unsaved-changes marker went FALSE
+#: over a model that differed from the file -- which also disabled Save, silenced the
+#: "discard unsaved changes?" confirmations and the leave-the-page warning.
+_HIST: list[tuple[int, bytes, list]] = []
+_NEXT_ID = 0
 
 #: Index into `_HIST` of the entry matching the live model. Invariant: after `_snap()` or
 #: `_restore()`, `_HIST[_PTR]` IS the live state.
@@ -551,9 +559,9 @@ def _serialize() -> bytes:
     return f.read_bytes()
 
 
-def _restore(entry: tuple[bytes, list]):
+def _restore(entry: tuple[int, bytes, list]):
     global _PENDING
-    doc, wires = entry
+    _id, doc, wires = entry
     f = _hist_file()
     f.write_bytes(doc)
     engine().minsky.load(str(f))
@@ -563,7 +571,7 @@ def _restore(entry: tuple[bytes, list]):
 
 #: The history entry that matches what is on disk, so stepping back onto it can clear the
 #: unsaved marker instead of leaving the file looking edited when it is not.
-_SAVED_PTR: int | None = None
+_SAVED_ID: int | None = None
 
 
 def _snap(force: bool = False) -> bool:
@@ -579,8 +587,10 @@ def _snap(force: bool = False) -> bool:
     global _PTR, _PENDING
     if _HIST and not _PENDING and not force:
         return False
+    global _NEXT_ID
     del _HIST[_PTR + 1:]                 # a new state abandons the redo tail
-    _HIST.append((_serialize(), list(_WIRES)))
+    _NEXT_ID += 1
+    _HIST.append((_NEXT_ID, _serialize(), list(_WIRES)))
     if len(_HIST) > MAX_HISTORY:
         del _HIST[0]
     _PTR = len(_HIST) - 1
@@ -624,12 +634,14 @@ def rollback():
 
 def reset_history(saved: bool = False):
     """Start a fresh timeline, with the current model as its baseline."""
-    global _PTR, _SAVED_PTR
+    global _PTR, _SAVED_ID
     disable_engine_history()
-    _SAVED_PTR = 0 if saved else None
     _HIST.clear()
     _PTR = -1
+    _SAVED_ID = None
     _snap()
+    if saved:                            # this state is what is on disk
+        _SAVED_ID = _HIST[_PTR][0]
 
 
 def reset_history_sync():
@@ -1681,7 +1693,8 @@ def create_app() -> FastAPI:
         # Stepping back onto the state that was written to disk means the file is NOT
         # edited, whatever route got us here. _restore() left the history exactly in step,
         # so nothing is pending either way.
-        mark_dirty(_PTR != _SAVED_PTR, pending=False)
+        here = _HIST[_PTR][0] if 0 <= _PTR < len(_HIST) else None
+        mark_dirty(here != _SAVED_ID, pending=False)
         return await call(snapshot)
 
     @app.post("/api/undo")
@@ -1803,13 +1816,26 @@ def create_app() -> FastAPI:
             # nothing said so: the file simply did not match the screen, and the user
             # only found out on reopening it. Read the file back, so that from the moment
             # of saving what is on screen IS what is in the file.
-            restructuring(lambda: m.load(str(dest)))
-        await call(_write)
+            #
+            # Only when there IS a table, though. Reading the file back resets the
+            # engine, which throws away the results of any completed run -- t and every
+            # value snap back to their initial conditions. That is a steep price for a
+            # model with nothing to reorder, and only a Godley table is reordered.
+            if any("Godley" in it.classType() for _r, it in _iter_items(m)):
+                restructuring(lambda: m.load(str(dest)))
+                return True
+            return False
+        reloaded = await call(_write)
 
         def _mark():
-            global _SAVED_PTR
-            _snap(force=True)          # the file's exact contents, as a history entry
-            _SAVED_PTR = _PTR
+            global _SAVED_ID
+            # Record a history entry only if there is something new to record. Forcing
+            # one appended a duplicate of the current state on EVERY save, so the first
+            # undo afterwards did nothing visible -- and flipped the file to "unsaved"
+            # while doing it.
+            if _PENDING or reloaded:
+                _snap(force=reloaded)
+            _SAVED_ID = _HIST[_PTR][0] if 0 <= _PTR < len(_HIST) else None
         await call(_mark)
         _CURRENT = str(dest)
         mark_dirty(False)
@@ -1932,11 +1958,15 @@ def create_app() -> FastAPI:
                 return
             if tmax is not None:
                 # tmax is part of the saved document, not a transient run argument, so a
-                # run edits the model. Announce it, or Save silently persists a horizon
-                # the user never chose to store.
-                await call(checkpoint)
-                await call(lambda: engine().minsky.tmax(tmax))
-                mark_dirty()
+                # run that CHANGES it edits the model, and Save would persist a horizon
+                # the user never chose to store. But a run that sets it to what it
+                # already is changes nothing, and was still marking a saved document
+                # unsaved and pushing an undo point that undid nothing.
+                was = await call(lambda: engine().minsky.tmax())
+                if was != tmax:
+                    await call(checkpoint)
+                    await call(lambda: engine().minsky.tmax(tmax))
+                    mark_dirty()
 
             # Same filter the snapshot uses, so the plot's series and the values panel
             # list the same variables -- and neither shows one the model has dropped.

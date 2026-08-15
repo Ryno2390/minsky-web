@@ -895,6 +895,29 @@ def tables_in_groups_on_disk(path) -> list[str]:
     return bad
 
 
+def godley_owner(name: str):
+    """The Godley table that owns a stock of this name, at any depth, or None.
+
+    A table holds its stocks' initial conditions in its own initial-conditions row and
+    rewrites them from there at every reset, so setting one anywhere else is accepted and
+    then thrown away. This walked only `model.items`, so the guard evaporated the moment
+    the table was inside a group -- and it was skipped altogether by the other writer,
+    POST /api/item, which the UI's optional "initial value" field goes through.
+    """
+    m = engine().minsky
+    for ref, it in _iter_items(m):
+        if "Godley" not in it.classType():
+            continue
+        try:
+            t = it.table
+        except Exception:
+            continue
+        for c in range(1, t.cols()):
+            if (t.getCell(0, c) or "").strip() == name.strip():
+                return ref, (t.title() or "").strip(), c
+    return None
+
+
 def load_complaint(path) -> str | None:
     """Did the engine actually read the file? Returns something to say, or None.
 
@@ -1324,6 +1347,18 @@ def create_app() -> FastAPI:
                     raise HTTPException(422, "a variable needs a name")
                 it = m.variable(spec.name, spec.var_type, at=spec.at)
                 if spec.value is not None:      # optional initial value, e.g. for a stock
+                    # the same ownership rule /api/init applies. Without it, naming an
+                    # existing Godley stock here set a value that the table rewrites at
+                    # the next reset -- accepted, echoed back, and silently discarded.
+                    owner = godley_owner(spec.name)
+                    if owner:
+                        ref, title, col = owner
+                        raise HTTPException(
+                            409, f"{spec.name!r} is already a stock of "
+                                 f"{('the table ' + repr(title)) if title else 'a Godley table'}"
+                                 f", which holds its initial condition in the table's own "
+                                 f"initial-conditions row (column {col}). A value set here "
+                                 f"is rewritten from the table at the next reset.")
                     m.set_init(spec.name, spec.value)
                 return it
             if spec.kind == "operation":
@@ -1688,7 +1723,7 @@ def create_app() -> FastAPI:
         Variable:stock, not a Godley table" over an edit that had been applied.
         """
         m = engine().minsky
-        best = None
+        hits = []
         for i in range(len(m.model.items)):
             it = m.model.items[i]
             if "Godley" not in it.classType():
@@ -1698,10 +1733,21 @@ def create_app() -> FastAPI:
             except Exception:
                 continue
             if here == was:
-                return i
-            if best is None:
-                best = i
-        return best if best is not None else index
+                hits.append(i)
+        if len(hits) == 1:
+            return hits[0]
+        # Either nothing matched, or SEVERAL did -- two tables with the same title at the
+        # same point are indistinguishable by this identity, and taking the first meant
+        # an edit meant for one was answered with the other's grid. Fall back to the
+        # index the caller used, which is at least the one they asked for, and only if it
+        # is still a table.
+        if 0 <= index < len(m.model.items) and "Godley" in m.model.items[index].classType():
+            return index
+        if hits:
+            return hits[0]
+        raise HTTPException(
+            409, "that table cannot be identified after the edit -- another table shares "
+                 "its name and position. Give them different names, or move one.")
 
     def _godley_ident(index: int):
         m = engine().minsky
@@ -1795,8 +1841,9 @@ def create_app() -> FastAPI:
                 {"stock": nm,
                  "shown": [{"table": ttl, "value": v} for _i, ttl, v in where],
                  "note": (f"{nm} is one variable in {len(where)} tables, so it has one "
-                          f"initial condition. The tables disagree, and the engine uses "
-                          f"whichever was written last.")}
+                          f"initial condition. They disagree, and the engine keeps the "
+                          f"value from {where[-1][1]} -- the last of them in the model, "
+                          f"whichever you typed into most recently. Set it there.")}
                 for nm, where in clashes.items()]
         return out
 
@@ -1934,20 +1981,10 @@ def create_app() -> FastAPI:
         # stored in the table's initial-conditions row and rewritten from there at every
         # reset. Setting it here was accepted, echoed back, shown in the panel -- and
         # thrown away by the next run.
-        def _owner(name: str):
-            m = engine().minsky
-            for i in range(len(m.model.items)):
-                it = m.model.items[i]
-                if "Godley" not in it.classType():
-                    continue
-                t = it.table
-                for c in range(1, t.cols()):
-                    if (t.getCell(0, c) or "").strip() == name.strip():
-                        return i, (t.title() or "").strip(), c
-            return None
-        owner = await call(_owner, spec.name)
+        owner = await call(godley_owner, spec.name)
         if owner:
-            i, title, col = owner
+            ref, title, col = owner
+            i = ref
             raise HTTPException(
                 409, f"{spec.name!r} is a stock of "
                      f"{('the table ' + repr(title)) if title else f'Godley table {i}'}, "

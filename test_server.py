@@ -2083,6 +2083,21 @@ for _col, _nm in ((1, "Vault"), (2, "Deposits")):
 # renaming a stock header reorders model.items, and the endpoint re-resolved the table by
 # its OLD index afterwards: it answered 422 "not a Godley table" over an edit it had
 # already applied, and a wire was destroyed on the way
+# There must BE a wire for this to mean anything: the assertion used to run against a
+# model with none, so `not any([])` was true however badly the rename had gone.
+_p1 = c.post("/api/item", json={"kind":"parameter","name":"drive","value":2,
+                                "at":[700,300]}).json()["index"]
+_o1 = c.post("/api/item", json={"kind":"variable","name":"sink","var_type":"flow",
+                                "at":[900,300]}).json()["index"]
+c.post("/api/wire", json={"src": _p1, "dst": _o1, "port": 1})
+def _wire_ends_49():
+    st = c.get("/api/state").json()
+    m = {i["ref"]: (i["classType"], i.get("name")) for i in st["items"]}
+    return sorted((m.get(w["src"]), m.get(w["dst"]))
+                  for w in st["wires"] if not w.get("desync"))
+_before49 = _wire_ends_49()
+check("the model has a wire to lose", len(_before49) == 1, str(_before49))
+
 r = c.post(f"/api/godley/{_g}/cell", json={"row":0,"col":1,"value":"VaultX"})
 check("renaming a stock header reports success", r.status_code == 200,
       f"{r.status_code} {r.text[:70]}")
@@ -2090,6 +2105,8 @@ check("and returns the table it was asked about",
       r.json()["cells"][0][1] == "VaultX", str(r.json()["cells"][0]))
 check("with no wire left mis-pointed",
       not any(w.get("desync") for w in c.get("/api/state").json()["wires"]))
+check("and the wire still joins the same two items",
+      _wire_ends_49() == _before49, f"{_before49} -> {_wire_ends_49()}")
 
 # the initial-conditions row could be deleted despite the guard's own wording, and the
 # engine went on reporting the initial values it held
@@ -2509,6 +2526,57 @@ finally:
 r = c.post("/api/load", params={"path": "/tmp/bad\x00name.mky"})
 check("a null character in a LOAD path is refused, not a 500",
       r.status_code in (404, 422), f"{r.status_code}")
+
+
+print("\n54. a table's stocks belong to the table, wherever it is")
+# The ownership guard walked only model.items, so it evaporated once the table was inside
+# a group -- and it was skipped altogether by the OTHER writer, POST /api/item, which is
+# what the UI's optional "initial value" field goes through.
+c.post("/api/clear")
+_g = c.post("/api/item", json={"kind":"godley","at":[300,300]}).json()["index"]
+c.post(f"/api/godley/{_g}/cell", json={"row":0,"col":1,"value":"Reserves"})
+c.post(f"/api/godley/{_g}/cell", json={"row":1,"col":1,"value":"100"})
+check("setting a table stock through /api/init is refused",
+      c.post("/api/init", json={"name":"Reserves","value":999}).status_code == 409)
+r = c.post("/api/item", json={"kind":"variable","name":"Reserves","var_type":"stock",
+                              "value":999})
+check("and so is adding it again with a value", r.status_code == 409, f"{r.status_code}")
+check("and it explains where the value lives", "table" in r.json().get("detail",""),
+      r.text[:80])
+check("the table's own value is untouched",
+      c.get("/api/state").json()["inits"].get(":Reserves") in ("100", 100),
+      str(c.get("/api/state").json()["inits"]))
+
+# two tables that share a name AND a point cannot be told apart by (title, position) --
+# the edit was answered with the other table's grid
+c.post("/api/clear")
+_a = c.post("/api/item", json={"kind":"godley","name":"Bank","at":[300,300]}).json()["index"]
+_b = c.post("/api/item", json={"kind":"godley","name":"Bank","at":[300,300]}).json()["index"]
+r = c.post(f"/api/godley/{_b}/cell", json={"row":0,"col":1,"value":"Reserves"})
+check("an edit to one of two identical tables is answered by that table",
+      r.status_code != 200 or r.json()["index"] == _b,
+      f'asked {_b}, answered {r.json().get("index")}')
+if r.status_code == 200:
+    check("and the OTHER table is untouched",
+          c.get(f"/api/godley/{_a}").json()["cells"][0][1] == "",
+          str(c.get(f"/api/godley/{_a}").json()["cells"][0]))
+
+# the conflict note used to say the engine keeps "whichever was written last"; it keeps
+# the later table in item order, whatever the write order was
+c.post("/api/clear")
+_g1 = c.post("/api/item", json={"kind":"godley","name":"First"}).json()["index"]
+_g2 = c.post("/api/item", json={"kind":"godley","name":"Second"}).json()["index"]
+for _gg in (_g1, _g2):
+    c.post(f"/api/godley/{_gg}/cell", json={"row":0,"col":1,"value":"D"})
+c.post(f"/api/godley/{_g2}/cell", json={"row":1,"col":1,"value":"777"})
+r = c.post(f"/api/godley/{_g1}/cell", json={"row":1,"col":1,"value":"111"})
+_conf = r.json().get("conflicts")
+check("a disagreement between two tables is reported", bool(_conf), str(_conf)[:60])
+c.post("/api/reset")
+_kept = c.get("/api/state").json()["inits"].get(":D")
+check("the note names the table whose value the engine actually keeps",
+      _conf and _conf[0]["note"].count("Second") == 1 and float(_kept) == 777.0,
+      f'engine kept {_kept}; note said: {_conf[0]["note"][:90] if _conf else ""}')
 
 
 print(f"\n{'ALL PASS' if not FAILED else 'FAILURES: ' + ', '.join(FAILED)}")

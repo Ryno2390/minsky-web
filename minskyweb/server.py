@@ -768,6 +768,70 @@ def is_minsky_document(path) -> bool:
     return root.tag.split("}")[-1] == "Minsky"
 
 
+#: A Godley table inside a GROUP is a state the engine cannot serialise twice.
+#:
+#: Writing such a model produces a complete, valid-looking .mky. Reading that file back
+#: and serialising it again SEGFAULTS -- not an exception, a SIGSEGV that takes the whole
+#: process with it: the model, the undo history, and every other browser tab on this
+#: server. And because /api/save reads the file back to reconcile Godley column order, an
+#: ordinary Save is enough to trigger it. The file it wrote is then permanently
+#: unopenable, killing the process again on every attempt.
+#:
+#: Measured: a table alone is fine, a table with a named stock column is fine, a group is
+#: fine -- only "a table with a named stock column, inside a group" is poison. None of
+#: the 37 shipped examples contains one, so this is reachable only by grouping.
+#:
+#: There is nothing to do about the engine from here, so do not let the state exist:
+#: refuse the grouping that creates it, and refuse to open a file that already has it.
+def _tables_in_groups_live() -> list[str]:
+    """Titles of any Godley tables that currently sit inside a group."""
+    out = []
+    m = engine().minsky
+    for gref, grp, _parent in _iter_groups(m):
+        for i in range(len(grp.items)):
+            it = grp.items[i]
+            if "Godley" in it.classType():
+                try:
+                    t = (it.table.title() or "").strip()
+                except Exception:
+                    t = ""
+                out.append(t or gref)
+    return out
+
+
+def tables_in_groups_on_disk(path) -> list[str]:
+    """The same question asked of a FILE, before it is opened."""
+    import xml.etree.ElementTree as ET
+    try:
+        root = ET.parse(str(path)).getroot()
+    except Exception:
+        return []
+    kind = {}
+    for holder in root.findall(".//{*}items"):
+        for it in holder:
+            i = it.findtext("{*}id") or it.findtext("id")
+            if i is None:
+                for c in it:
+                    if c.tag.split("}")[-1] == "id":
+                        i = c.text
+                        break
+            t = None
+            for c in it:
+                if c.tag.split("}")[-1] == "type":
+                    t = c.text
+            if i is not None and t:
+                kind[i] = t
+    bad = []
+    for g in root.findall(".//{*}groups/{*}Group"):
+        holder = g.find("{*}items")
+        if holder is None:
+            continue
+        for ref in holder:
+            if "Godley" in (kind.get((ref.text or "").strip()) or ""):
+                bad.append((g.findtext("{*}title") or "").strip() or "a group")
+    return bad
+
+
 def load_complaint(path) -> str | None:
     """Did the engine actually read the file? Returns something to say, or None.
 
@@ -785,6 +849,12 @@ def load_complaint(path) -> str | None:
         root = ET.parse(str(path)).getroot()
     except Exception as ex:
         return f"the XML could not be parsed ({ex})"
+    poison = tables_in_groups_on_disk(path)
+    if poison:
+        return ("it holds a Godley table inside a group, which this engine cannot read "
+                "and re-save without crashing (it exits on a segmentation fault, taking "
+                "the model and the undo history with it). Opening it is refused rather "
+                "than risked")
     n_items = len(root.findall(".//{*}Item")) + len(root.findall(".//{*}Group"))
     n_wires = len(root.findall(".//{*}Wire"))
     if not (n_items or n_wires):
@@ -1844,6 +1914,16 @@ def create_app() -> FastAPI:
                 raise HTTPException(
                     422, "nothing in that region to group. Drag a box around two or more "
                          "items -- one on its own has nothing to be grouped with.")
+            # BEFORE anything serialises -- resync_wires() below writes the document,
+            # and writing this state is what kills the process.
+            poisoned = _tables_in_groups_live()
+            if poisoned:
+                rollback()
+                raise HTTPException(
+                    409, "that selection would put a Godley table inside a group, which "
+                         "this engine cannot save: writing the file and reading it back "
+                         "exits on a segmentation fault, taking the model and the undo "
+                         "history with it. Leave the table out of the selection.")
             if was_runnable and not resets():
                 rollback()
                 raise HTTPException(

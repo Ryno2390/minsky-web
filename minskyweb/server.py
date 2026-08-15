@@ -958,6 +958,16 @@ class LassoSpec(BaseModel):
     y1: float
 
 
+class RefsSpec(BaseModel):
+    refs: list[str]
+
+
+class NudgeSpec(BaseModel):
+    refs: list[str]
+    dx: float
+    dy: float
+
+
 class RenameSpec(BaseModel):
     name: str
 
@@ -1333,6 +1343,110 @@ def create_app() -> FastAPI:
         mark_dirty()
         # indices shift after a delete -- the client must re-render from this snapshot
         return await call(snapshot)
+
+    @app.post("/api/items/move")
+    async def move_items(spec: NudgeSpec):
+        """Move several items by the same offset, as ONE edit.
+
+        By offset rather than to a position, because that is what dragging a selection
+        means, and because it needs no per-item arithmetic on the client. One checkpoint,
+        so the whole drag is a single undo step rather than one per item.
+        """
+        require_idle()
+        if not spec.refs:
+            raise HTTPException(422, "no items given")
+        for ref in spec.refs:
+            await call(check_ref, ref)
+        await call(checkpoint)
+
+        def _go():
+            from .headless import Item
+            m = engine()
+            # Resolve every target BEFORE moving anything: a move does not shift indices,
+            # but reading them all first keeps this honest if that ever changes.
+            targets = [(r, _resolve(m.minsky, r)) for r in spec.refs]
+            for r, raw in targets:
+                x, y = raw.x() + spec.dx, raw.y() + spec.dy
+                check_at((x, y))
+            moved, refused = 0, []
+            for r, raw in targets:
+                x, y = raw.x() + spec.dx, raw.y() + spec.dy
+                try:
+                    m.move(Item(m, 0, "?", ref=r), x, y)
+                    moved += 1
+                except RuntimeError as ex:
+                    # a Godley table owns the variables it generates; those cannot move
+                    refused.append(str(ex).split(".")[0])
+            return moved, refused
+
+        moved, refused = await call(_go)
+        if not moved:
+            rollback()
+            raise HTTPException(409, refused[0] if refused else "nothing moved")
+        mark_dirty()
+        out = await call(snapshot)
+        if refused:
+            out["note"] = (f"{moved} moved; {len(refused)} could not: "
+                           f"{refused[0]}.")
+        return out
+
+    @app.post("/api/items/delete")
+    async def delete_items(spec: RefsSpec):
+        """Delete several items, as ONE edit.
+
+        Deleting is geometric AND shifts every higher index, so the refs the client sent
+        go stale the moment the first one goes. Each target is therefore pinned by what
+        it IS -- class, name and position -- and re-found by that before it is deleted.
+        """
+        require_idle()
+        if not spec.refs:
+            raise HTTPException(422, "no items given")
+        for ref in spec.refs:
+            await call(check_ref, ref)
+            await call(refuse_in_group, ref, "delete")
+        await call(checkpoint)
+
+        def _go():
+            from .headless import Item
+            m = engine()
+            pinned = []
+            for r in spec.refs:
+                raw = _resolve(m.minsky, r)
+                try:
+                    nm = raw.name()
+                except Exception:
+                    nm = ""
+                pinned.append((raw.classType(), nm, round(raw.x(), 1), round(raw.y(), 1)))
+
+            gone = 0
+            for want in pinned:
+                here = None
+                for ref, raw in _iter_items(m.minsky):
+                    if ":" in ref:
+                        continue
+                    try:
+                        nm = raw.name()
+                    except Exception:
+                        nm = ""
+                    if (raw.classType(), nm, round(raw.x(), 1),
+                            round(raw.y(), 1)) == want:
+                        here = ref
+                        break
+                if here is None:
+                    continue        # already went, as a Godley table takes its variables
+                restructuring(lambda h=here: m.delete(Item(m, int(h), "?", ref=h)))
+                gone += 1
+            return gone
+
+        try:
+            gone = await call(_go)
+        except RuntimeError as ex:
+            rollback()
+            raise HTTPException(400, str(ex))
+        mark_dirty()
+        out = await call(snapshot)
+        out["deleted"] = gone
+        return out
 
     # ---- Godley tables ----------------------------------------------------------
     def _tbl(index: int):

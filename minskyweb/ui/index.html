@@ -280,7 +280,7 @@ svg#board.panning{cursor:grabbing}
   </div>
   <div class="empty" id="empty">
     <b>Empty model</b><div>Add a block from the left, then drag between ports to wire.<br>
-      Shift-drag a box around several items to group them.</div>
+      Shift-drag a box to select several at once; shift-click to add or remove one.</div>
   </div>
 </div>
 
@@ -360,6 +360,13 @@ svg#board.panning{cursor:grabbing}
     </div>
     <div style="font-size:11.5px;color:var(--ink-3);padding:0 2px" id="renamenote"></div>
   </div>
+  <div id="multiwrap" style="display:none;margin-top:8px">
+    <button id="groupsel" style="width:100%;font-size:12px;padding:6px 10px">
+      Group these <span id="multicount"></span> items</button>
+    <div style="font-size:11.5px;color:var(--ink-3);padding:6px 2px">
+      Drag any one of them to move them together. Delete removes them all.
+    </div>
+  </div>
   <div id="groupwrap" style="display:none;margin-top:8px">
     <div class="field" style="gap:6px">
       <input id="gname" style="width:100%;text-align:left" autocomplete="off"
@@ -431,7 +438,19 @@ let state = {items:[],wires:[],values:{}}, sel = null, selWire = null, ws = null
 // was left set across Clear, undo, redo and opening another file, which armed the Delete
 // button on a wire that no longer existed -- or, worse, on whichever wire had inherited
 // that index in the new model.
-function clearSelection(){ sel = null; selWire = null; selGroup = null; }
+// The selection is a SET of refs. `sel` is the single selected item, or null when none
+// or several are -- the rename and value fields act on one item, so they follow it.
+let selSet = new Set();
+function selectOnly(ref){ selSet = new Set(ref === null ? [] : [ref]); sel = ref; }
+function selectMany(refs){
+  selSet = new Set(refs);
+  sel = selSet.size === 1 ? [...selSet][0] : null;
+}
+function selectToggle(ref){
+  if (selSet.has(ref)) selSet.delete(ref); else selSet.add(ref);
+  sel = selSet.size === 1 ? [...selSet][0] : null;
+}
+function clearSelection(){ selSet = new Set(); sel = null; selWire = null; selGroup = null; }
 // A keyboard shortcut must not reach the model while something modal is in front of it.
 // The confirm dialog focuses a BUTTON, so guards that only excluded INPUT/TEXTAREA let
 // Backspace and Ctrl+Z through to the canvas behind it.
@@ -613,7 +632,7 @@ function render() {
     const g = document.createElementNS("http://www.w3.org/2000/svg","g");
     // `it.index` is null for group members, and `sel` is null when nothing is selected,
     // so a bare === lit up every group member as selected
-    const isSel = sel !== null && sel === it.ref;
+    const isSel = selSet.has(it.ref);
     g.setAttribute("class","item" + (isSel ? " sel" : ""));
     g.dataset.ref = it.ref;
     const name = pretty(it.name || label);
@@ -754,7 +773,7 @@ function render() {
     else if (state.running) { st.textContent = "running"; st.className = "pill live"; }
     else { st.textContent = "idle"; st.className = "pill"; }
   }
-  $("#del").disabled = sel === null && selWire === null;
+  $("#del").disabled = selSet.size === 0 && selWire === null;
   const nm = state.currentFile;
   $("#fname").textContent = (nm || "untitled") + (state.dirty ? " •" : "");
   $("#fname").title = state.currentPath || "not saved yet";
@@ -765,7 +784,8 @@ function render() {
   const selGrp = selGroup === null ? null
     : (state.groups || []).find(g => g.ref === selGroup);
   $("#selinfo").textContent =
-    selWire !== null ? `wire #${selWire} — press Delete to remove it`
+    selSet.size > 1 ? `${selSet.size} items selected`
+    : selWire !== null ? `wire #${selWire} — press Delete to remove it`
     : selGrp ? (() => {
         // count everything the box on screen stands for, at every depth -- the group's
         // own `size` is its DIRECT children only, so a nested group's contents were
@@ -779,13 +799,15 @@ function render() {
       })()
     : sel === null ? "Nothing selected."
     : `${sel} · ${byRef.get(sel)?.classType ?? "?"}`;
+  $("#multiwrap").style.display = selSet.size > 1 ? "" : "none";
+  if (selSet.size > 1) $("#multicount").textContent = String(selSet.size);
   $("#groupwrap").style.display = selGrp ? "" : "none";
   if (selGrp) {
     if (document.activeElement !== $("#gname")) $("#gname").value = pretty(selGrp.title || "");
     $("#gnote").textContent =
       "Delete and wiring find their target through the canvas, which never reaches "
       + "inside a group. Ungrouping leaves the contents as ordinary items. To group "
-      + "them again, shift-drag a box around them.";
+      + "them again, select them and use Group.";
   }
 
   // Rename is offered only where there is a name to change. An operation accepts a
@@ -945,8 +967,18 @@ $("#del").onclick = guard(async () => {
     state = await api(`/wire/${selWire}`, {method:"DELETE"});
     selWire = null; render(); return;
   }
-  if (sel === null) return;
-  state = await api(`/item/${sel}`, {method:"DELETE"}); sel = null; render();
+  if (selSet.size === 0) return;
+  if (selSet.size === 1) {
+    state = await api(`/item/${[...selSet][0]}`, {method:"DELETE"});
+  } else {
+    // one request, so it is one undo step -- and so the refs cannot go stale between
+    // deletes, which they would if the client looped
+    const r = await api("/items/delete", {method:"POST",
+      body: JSON.stringify({refs: [...selSet]})});
+    state = r;
+    toast(`Deleted ${r.deleted} items.`, true);
+  }
+  clearSelection(); render();
 });
 
 /* ---------- drag: move items, and wire between ports ---------- */
@@ -964,7 +996,7 @@ function svgPt(e){
 }
 board.addEventListener("pointerdown", e => {
   const w = e.target.closest("[data-wire]");
-  if (w) { selWire = +w.dataset.wire; sel = null; render(); return; }
+  if (w) { selWire = +w.dataset.wire; selectOnly(null); selGroup = null; render(); return; }
   const port = e.target.closest(".port");
   if (port) {
     if ((port.dataset.ref || "").includes(":")) {
@@ -985,7 +1017,7 @@ board.addEventListener("pointerdown", e => {
   }
   const gbox = e.target.closest("[data-group]");
   if (gbox) {
-    selWire = null; sel = null; selGroup = gbox.dataset.group;
+    selWire = null; selectOnly(null); selGroup = gbox.dataset.group;
     render();
     return;
   }
@@ -1004,23 +1036,33 @@ board.addEventListener("pointerdown", e => {
         openGodley(idx); return;
       }
       if (it0.classType.startsWith("Variable:")) {
-        sel = ref; render();
+        selectOnly(ref); render();
         $("#rename").focus(); $("#rename").select(); return;
       }
     }
-    sel = ref; render();
+    // Shift adds to or removes from the selection. Clicking an item that is ALREADY in
+    // a multiple selection keeps it, so the whole set can be dragged; clicking anything
+    // else selects just that one.
+    if (e.shiftKey) { selectToggle(ref); render(); return; }
+    if (!selSet.has(ref)) selectOnly(ref);
+    render();
     const it = it0;
     const p = svgPt(e);
-    drag = {mode:"move", ref, dx: it.x - p.x, dy: it.y - p.y, x0: it.x, y0: it.y};
+    // every selected item moves by the same offset, so remember where they all started
+    const moving = [...selSet].filter(r => state.items.some(i => i.ref === r));
+    drag = {mode:"move", ref, dx: it.x - p.x, dy: it.y - p.y, x0: it.x, y0: it.y,
+            refs: moving,
+            from: Object.fromEntries(moving.map(r => {
+              const m = state.items.find(i => i.ref === r);
+              return [r, [m.x, m.y]];
+            }))};
     board.setPointerCapture(e.pointerId);
     return;
   }
   if (e.shiftKey) {
-    // Shift-drag draws a lasso and groups what it covers. Ungrouping is how a group's
-    // contents become editable, so without this it is a one-way door: the group could
-    // only come back by undoing the very edits it was opened for.
+    // Shift-drag draws a lasso and selects what it covers.
     const p0 = svgPt(e);
-    selWire = null; sel = null; selGroup = null;
+    selWire = null; selGroup = null;
     drag = {mode:"lasso", x0:p0.x, y0:p0.y, x1:p0.x, y1:p0.y};
     board.setPointerCapture(e.pointerId);
     render();
@@ -1067,9 +1109,12 @@ board.addEventListener("pointermove", e => {
     // Find the element by its ref rather than by position: group boxes are drawn first
     // and hidden members are skipped, so child order does not track state.items.
     const it = state.items.find(i => i.ref === drag.ref);
-    const g = gItems.querySelector(`.item[data-ref="${CSS.escape(drag.ref)}"]`);
-    if (g && it) g.setAttribute("transform",
-      `translate(${p.x + drag.dx - it.x}, ${p.y + drag.dy - it.y})`);
+    if (!it) return;
+    const tx = p.x + drag.dx - it.x, ty = p.y + drag.dy - it.y;
+    for (const r of (drag.refs && drag.refs.length ? drag.refs : [drag.ref])) {
+      const g = gItems.querySelector(`.item[data-ref="${CSS.escape(r)}"]`);
+      if (g) g.setAttribute("transform", `translate(${tx}, ${ty})`);
+    }
   }
 });
 board.addEventListener("pointerup", guard(async e => {
@@ -1077,17 +1122,23 @@ board.addEventListener("pointerup", guard(async e => {
   const d = drag; drag = null;
   board.classList.remove("panning");
   if (d.mode === "lasso") {
+    // The lasso SELECTS. It used to group what it covered the instant the pointer came
+    // up, which is a destructive edit made from a gesture with nothing shown first --
+    // grouping is now something you do to a selection you can see.
     $("#lasso").style.display = "none";
-    if (Math.abs(d.x1 - d.x0) < 8 || Math.abs(d.y1 - d.y0) < 8) { render(); return; }
-    const r = await api("/group", {method:"POST", body: JSON.stringify(
-      {x0:d.x0, y0:d.y0, x1:d.x1, y1:d.y1})});
-    state = r.state; clearSelection(); render();
-    toast(`Grouped ${r.grouped} items. Wires crossing the boundary were split, `
-          + `which is how Minsky stores a group.`, true);
+    const x0 = Math.min(d.x0, d.x1), x1 = Math.max(d.x0, d.x1);
+    const y0 = Math.min(d.y0, d.y1), y1 = Math.max(d.y0, d.y1);
+    if (x1 - x0 < 4 && y1 - y0 < 4) { render(); return; }
+    const inside = state.items.filter(
+      i => i.index !== null && i.x >= x0 && i.x <= x1 && i.y >= y0 && i.y <= y1);
+    selWire = null; selGroup = null;
+    selectMany(inside.map(i => i.ref));
+    render();
+    if (!inside.length) toast("Nothing in that box.");
     return;
   }
   if (d.mode === "pan") {
-    if (!d.moved) { sel = null; render(); }   // a click, not a pan
+    if (!d.moved) { clearSelection(); render(); }   // a click, not a pan
     return;
   }
   $("#drag").removeAttribute("d");
@@ -1105,8 +1156,16 @@ board.addEventListener("pointerup", guard(async e => {
     // which marks the document dirty, adds an undo checkpoint, and makes "discard
     // unsaved changes?" appear after the user has only looked at something.
     if (Math.abs(nx - d.x0) < 0.5 && Math.abs(ny - d.y0) < 0.5) { render(); return; }
-    state = await api(`/item/${d.ref}/move`, {method:"POST",
-      body: JSON.stringify({x: nx, y: ny})});
+    if (d.refs && d.refs.length > 1) {
+      // one request for the whole selection, so the drag is a single undo step
+      const r = await api("/items/move", {method:"POST", body: JSON.stringify(
+        {refs: d.refs, dx: nx - d.x0, dy: ny - d.y0})});
+      state = r;
+      if (r.note) toast(r.note);
+    } else {
+      state = await api(`/item/${d.ref}/move`, {method:"POST",
+        body: JSON.stringify({x: nx, y: ny})});
+    }
     render();
   }
 }));
@@ -1425,6 +1484,26 @@ $("#gnameok").onclick = guard(async () => {
 $("#gname").addEventListener("keydown", e => {
   if (e.key === "Enter")  { e.preventDefault(); $("#gnameok").click(); }
   if (e.key === "Escape") { e.preventDefault(); $("#gname").blur(); render(); }
+});
+$("#groupsel").onclick = guard(async () => {
+  if (selSet.size < 2) return;
+  const chosen = state.items.filter(i => selSet.has(i.ref));
+  const pad = 12;
+  const box = {x0: Math.min(...chosen.map(i => i.x)) - pad,
+               y0: Math.min(...chosen.map(i => i.y)) - pad,
+               x1: Math.max(...chosen.map(i => i.x)) + pad,
+               y1: Math.max(...chosen.map(i => i.y)) + pad};
+  const r = await api("/group", {method:"POST", body: JSON.stringify(box)});
+  state = r.state; clearSelection(); render();
+  // The engine groups by RECTANGLE, so anything sitting inside the selection's bounding
+  // box comes along. Say how many actually went in rather than let the count differ in
+  // silence.
+  const extra = r.grouped - chosen.length;
+  toast(extra > 0
+    ? `Grouped ${r.grouped} items — ${extra} more than selected, because a group takes `
+      + `everything inside its bounds. Undo if that is not what you wanted.`
+    : `Grouped ${r.grouped} items. Wires crossing the boundary were split, which is how `
+      + `Minsky stores a group.`, extra <= 0);
 });
 $("#ungroup").onclick = guard(async () => {
   if (selGroup === null) return;

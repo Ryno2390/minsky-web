@@ -891,7 +891,7 @@ check("applyView still writes the counter-scaled radius",
 # model.items -- so comparing indices meant null === null, and every group member lit up
 # as selected whenever nothing was. Every item has a ref, and `sel` is null or a string,
 # so the two can never match by accident.
-check("selection is compared by ref", "sel === it.ref" in ui)
+check("selection is compared by ref", "selSet.has(it.ref)" in ui)
 # `sel` holds a REF. Three places went on using the numeric index after that change, and
 # each one silently disabled something: the Selection panel could never open, a new item
 # was never highlighted, and a drag showed no movement until the pointer was released.
@@ -900,7 +900,7 @@ check("the selection panel looks the item up by ref",
 check("a newly added item is selected by ref, not by the numeric index",
       "sel = refOfIndex(" in ui and "sel = r.index" not in ui)
 check("the drag preview finds its element by ref",
-      "drag.idx" not in ui and 'data-ref="${CSS.escape(drag.ref)}"' in ui)
+      "drag.idx" not in ui and 'item[data-ref="${CSS.escape(r)}"]' in ui)
 check("and nothing compares a possibly-null index for selection",
       "sel === it.index" not in ui)
 # the inline stroke set for the item colour beat the .sel rule
@@ -2204,6 +2204,70 @@ check("the Godley editor remembers WHICH table it is open on",
       "let gKey" in ui and "function findGodley()" in ui)
 check("and re-finds it rather than trusting the index",
       "gIdx = now" in ui and "godleyKey(" in ui)
+
+
+print("\n51. several items at once")
+c.post("/api/clear")
+for _n in range(1, 7):
+    c.post("/api/item", json={"kind":"parameter","name":f"q{_n}","value":_n,
+                              "at":[120+((_n-1)%3)*160, 220+((_n-1)//3)*140]})
+def _pos():
+    return {i.get("name"): (round(i["x"]), round(i["y"]))
+            for i in c.get("/api/state").json()["items"]}
+_before = _pos()
+
+# One request, so the whole drag is ONE undo step -- looping per item would also let the
+# refs go stale between calls.
+r = c.post("/api/items/move", json={"refs": ["0","1","2"], "dx": 40, "dy": -60})
+check("several items move together", r.status_code == 200, f"{r.status_code}")
+_after = _pos()
+check("each moved by the same offset",
+      all(_after[k] == (_before[k][0]+40, _before[k][1]-60) for k in ("q1","q2","q3")),
+      str({k: (_before[k], _after[k]) for k in ("q1","q2","q3")}))
+check("and the ones not asked for stayed put",
+      all(_after[k] == _before[k] for k in ("q4","q5","q6")))
+c.post("/api/undo")
+check("one undo puts all of them back", _pos() == _before, str(_pos()))
+
+# deleting shifts every higher index, so the refs the client sent go stale the moment the
+# first one goes: each target is pinned by what it IS and re-found before it is deleted
+r = c.post("/api/items/delete", json={"refs": ["0","2","4"]})
+check("several items delete together", r.status_code == 200 and r.json()["deleted"] == 3,
+      f'{r.status_code} {r.json().get("deleted")}')
+check("and it was the right three",
+      sorted(_pos()) == ["q2", "q4", "q6"], str(sorted(_pos())))
+c.post("/api/undo")
+check("one undo brings all three back", sorted(_pos()) == [f"q{i}" for i in range(1,7)],
+      str(sorted(_pos())))
+
+check("an empty selection is refused",
+      c.post("/api/items/delete", json={"refs": []}).status_code == 422)
+check("and so is a bad ref among good ones",
+      c.post("/api/items/delete", json={"refs": ["0", "nonsense"]}).status_code == 422)
+check("with nothing deleted", len(_pos()) == 6, str(len(_pos())))
+
+# a Godley table owns the variables it generates, so those cannot be moved
+c.post("/api/clear")
+_g = c.post("/api/item", json={"kind":"godley"}).json()["index"]
+c.post(f"/api/godley/{_g}/cell", json={"row":0,"col":1,"value":"S"})
+_p = c.post("/api/item", json={"kind":"parameter","name":"free","value":1,
+                               "at":[400,400]}).json()["index"]
+_st = c.get("/api/state").json()
+_stock = next(i["ref"] for i in _st["items"] if i["classType"] == "Variable:stock")
+r = c.post("/api/items/move", json={"refs": [str(_p), _stock], "dx": 30, "dy": 30})
+check("a mixed move reports what could not move", r.status_code == 200 and "note" in r.json(),
+      str(r.json().get("note"))[:70])
+check("and the one that could, did",
+      next(i["x"] for i in c.get("/api/state").json()["items"]
+           if i.get("name") == "free") == 430)
+
+ui = open(os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                       "minskyweb", "ui", "index.html")).read()
+check("the canvas keeps a selection SET", "let selSet = new Set()" in ui)
+check("and highlights every member of it", "selSet.has(it.ref)" in ui)
+check("the lasso selects rather than grouping outright",
+      "selectMany(inside.map" in ui and '"/group", {method:"POST", body: JSON.stringify(\n      {x0:d.x0' not in ui)
+check("grouping is an action on the selection", '$("#groupsel").onclick' in ui)
 
 
 print(f"\n{'ALL PASS' if not FAILED else 'FAILURES: ' + ', '.join(FAILED)}")

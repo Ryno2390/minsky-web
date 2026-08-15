@@ -2447,5 +2447,69 @@ check("with no extra item left behind",
       f'{_n0} -> {len(c.get("/api/state").json()["items"])}')
 
 
+print("\n53. uploads and paths that used to reach further than they should")
+import concurrent.futures as _cf
+from minskyweb.server import UPLOAD_DIR as _UP
+_good = open("/Users/ryneschultz/minsky/examples/GoodwinLinear02.mky", "rb").read()
+
+# the move to the destination happened BEFORE the model was read, so an upload that was
+# then rejected had already overwritten the model of the same name -- under a reply
+# saying "Nothing was changed."
+c.post("/api/upload", files={"file": ("keepme.mky", _good, "application/xml")})
+_n0 = (_UP / "keepme.mky").stat().st_size
+r = c.post("/api/upload", files={"file": ("keepme.mky",
+      b'<Minsky><items><Item><type>x</type></Item></items><wires><Wire/></wires></Minsky>',
+      "application/xml")})
+try:
+    check("a rejected upload is refused", r.status_code == 422, f"{r.status_code}")
+    check("and the model of that name is untouched",
+          (_UP / "keepme.mky").stat().st_size == _n0,
+          f'{_n0} -> {(_UP / "keepme.mky").stat().st_size}')
+
+    # the staging name was derived from the upload's name, so two uploads of the same
+    # name raced and one deleted the other's bytes mid-move
+    _other = open("/Users/ryneschultz/minsky/examples/PredatorPrey.mky", "rb").read()
+    def _up(payload):
+        return c.post("/api/upload",
+                      files={"file": ("race.mky", payload, "application/xml")}).status_code
+    with _cf.ThreadPoolExecutor(2) as _ex:
+        _codes = list(_ex.map(_up, [_good, _other]))
+    check("two uploads of the same name at once do not 500",
+          all(x != 500 for x in _codes), str(_codes))
+finally:
+    (_UP / "keepme.mky").unlink(missing_ok=True)
+    (_UP / "race.mky").unlink(missing_ok=True)
+
+# the "upload-" staging prefix pushed a legal name past the filesystem limit
+for _n in (255, 300):
+    _nm = "z" * (_n - 4) + ".mky"
+    r = c.post("/api/upload", files={"file": (_nm, _good, "application/xml")})
+    check(f"an upload name of {_n} bytes is refused, not a 500",
+          r.status_code == 422, f"{r.status_code}")
+    # the name is too long for the filesystem, so nothing can have been written under it
+    try:
+        (_UP / _nm).unlink(missing_ok=True)
+    except OSError:
+        pass
+
+# check_save_path's job is to accept or refuse; it was throwing instead
+r = c.post("/api/save", json={"name": "parent-probe.mky"})
+try:
+    check("a save target can be created", r.status_code == 200)
+    _inside = str(SAVE_DIR / "parent-probe.mky" / "inner.mky")
+    r = c.post("/api/save", json={"name": _inside})
+    check("saving inside a FILE is refused, not a 500", r.status_code == 422,
+          f"{r.status_code}")
+    check("and it names the offending component", "is a file" in r.json().get("detail",""),
+          r.text[:80])
+finally:
+    (SAVE_DIR / "parent-probe.mky").unlink(missing_ok=True)
+
+# the NUL crash was fixed on the write path only; the read path had the same cause
+r = c.post("/api/load", params={"path": "/tmp/bad\x00name.mky"})
+check("a null character in a LOAD path is refused, not a 500",
+      r.status_code in (404, 422), f"{r.status_code}")
+
+
 print(f"\n{'ALL PASS' if not FAILED else 'FAILURES: ' + ', '.join(FAILED)}")
 sys.exit(1 if FAILED else 0)

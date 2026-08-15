@@ -795,10 +795,21 @@ def check_save_path(name: str) -> Path:
     for r in WRITE_ROOTS:
         try:
             p.relative_to(_resolved(r))
-            p.parent.mkdir(parents=True, exist_ok=True)
-            return p
         except ValueError:
             continue
+        try:
+            p.parent.mkdir(parents=True, exist_ok=True)
+        except (FileExistsError, NotADirectoryError):
+            # a component of the path is an existing FILE. The function whose job is to
+            # accept or refuse a target was throwing instead, as a bare 500.
+            bad = next((a for a in [p.parent, *p.parent.parents]
+                        if a.exists() and not a.is_dir()), p.parent)
+            raise HTTPException(
+                422, f"{bad} is a file, not a directory, so nothing can be saved "
+                     f"inside it")
+        except OSError as ex:
+            raise HTTPException(422, f"cannot use that location: {ex.strerror or ex}")
+        return p
     raise HTTPException(
         403, f"cannot save to {p}. Writable directories: "
              f"{', '.join(str(r) for r in WRITE_ROOTS)}. The shipped examples are "
@@ -920,10 +931,14 @@ def load_complaint(path) -> str | None:
 
 def check_model_path(path: str) -> Path:
     """Resolve a requested path, or refuse it."""
+    if "\x00" in path:
+        raise HTTPException(422, "a path cannot contain a null character")
     p = Path(path).expanduser()
     try:
         p = p.resolve(strict=True)
-    except OSError:
+    except (OSError, ValueError):
+        # ValueError as well: a path with an embedded null raises out of lstat, and this
+        # is the read half of the crash the write half was already taught to refuse
         raise HTTPException(404, f"no such file: {path}")
     if p.suffix.lower() != ".mky":
         raise HTTPException(422, "only .mky files can be loaded")
@@ -2222,34 +2237,43 @@ def create_app() -> FastAPI:
         if not name.lower().endswith(".mky"):
             raise HTTPException(422, "only .mky files can be uploaded")
         UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
-        dest = UPLOAD_DIR / name
-        # Write to a scratch file first and only then take the destination's place. The
-        # bytes used to land on `dest` before anything looked at them, so uploading a
-        # file that was then REJECTED had already overwritten the model of the same name
-        # uploaded earlier -- under a reply that said "Nothing was changed."
-        staged = _SCRATCH / f"upload-{name}"
-        with staged.open("wb") as fh:
-            shutil.copyfileobj(file.file, fh)
-        global _CURRENT
-        if not await call(is_minsky_document, str(staged)):
-            staged.unlink(missing_ok=True)
+        if len(name.encode("utf8")) > 240:
             raise HTTPException(
-                422, f"{name} is not a Minsky model. Nothing was changed.")
-        shutil.move(str(staged), str(dest))
-        await call(checkpoint)
+                422, f"that name is {len(name.encode('utf8'))} bytes long; the "
+                     f"filesystem will not take more than 255")
+        dest = UPLOAD_DIR / name
+        # Stage under a name unique to THIS request, and put it in place only once the
+        # engine has accepted it. Two things went wrong before: the staging name was
+        # derived from the upload's name, so two uploads of the same name raced and one
+        # deleted the other's bytes mid-move; and the move to `dest` happened before the
+        # model was read, so an upload that was then REJECTED had already overwritten the
+        # model of the same name -- under a reply saying "Nothing was changed."
+        fd, tmpname = tempfile.mkstemp(dir=str(_SCRATCH), suffix=".mky")
+        staged = Path(tmpname)
+        global _CURRENT
         try:
-            await call(lambda: engine().minsky.load(str(dest)))
-        except Exception as ex:
-            kept = await call(rollback)
-            raise HTTPException(422, f"{name} could not be read: {ex}. " +
-                                ("The model you had open was kept." if kept else
-                                 "The canvas has been cleared."))
-        complaint = await call(load_complaint, str(dest))
-        if complaint:
-            kept = await call(rollback)
-            raise HTTPException(422, f"{name} could not be read: {complaint}. " +
-                                ("The model you had open was kept." if kept else
-                                 "The canvas has been cleared."))
+            with os.fdopen(fd, "wb") as fh:
+                shutil.copyfileobj(file.file, fh)
+            if not await call(is_minsky_document, str(staged)):
+                raise HTTPException(
+                    422, f"{name} is not a Minsky model. Nothing was changed.")
+            await call(checkpoint)
+            try:
+                await call(lambda: engine().minsky.load(str(staged)))
+            except Exception as ex:
+                kept = await call(rollback)
+                raise HTTPException(422, f"{name} could not be read: {ex}. " +
+                                    ("The model you had open was kept." if kept else
+                                     "The canvas has been cleared."))
+            complaint = await call(load_complaint, str(staged))
+            if complaint:
+                kept = await call(rollback)
+                raise HTTPException(422, f"{name} could not be read: {complaint}. " +
+                                    ("The model you had open was kept." if kept else
+                                     "The canvas has been cleared."))
+            shutil.move(str(staged), str(dest))     # accepted: now it may take the name
+        finally:
+            staged.unlink(missing_ok=True)
         _WIRES.clear()
         _WIRES.extend(await call(_topology_from_mky, str(dest)))
         _CURRENT = str(dest); mark_dirty(False)

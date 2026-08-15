@@ -904,7 +904,7 @@ async function submitAddForm(){
   }
   try {
     const r = await api("/item", {method:"POST", body: JSON.stringify(body)});
-    state = r.state; sel = refOfIndex(r.index);
+    state = r.state; selectOnly(refOfIndex(r.index));
     closeAddForm(); render();
   } catch (err) {
     formError(err.message, "#af-name");     // e.g. a name already used at another type
@@ -944,7 +944,7 @@ document.addEventListener("click", guard(async e => {
   const body = {kind, at: freeSlot()};
   if (kind === "operation") body.op = b.dataset.op;
   const r = await api("/item", {method:"POST", body:JSON.stringify(body)});
-  state = r.state; sel = refOfIndex(r.index); render();
+  state = r.state; selectOnly(refOfIndex(r.index)); render();
 }));
 
 $("#af-ok").onclick = guard(submitAddForm);
@@ -1298,7 +1298,8 @@ addEventListener("keydown", e => {
   // test let Backspace through and it deleted the selected item BEHIND the dialog. The
   // user then pressed Cancel and was left with the deletion anyway.
   if (modalOpen()) return;
-  if ((e.key === "Delete" || e.key === "Backspace") && (sel !== null || selWire !== null)
+  if ((e.key === "Delete" || e.key === "Backspace")
+      && (selSet.size > 0 || selWire !== null)
       && !/INPUT|TEXTAREA/.test(document.activeElement.tagName)) {
     e.preventDefault(); $("#del").click(); }
 });

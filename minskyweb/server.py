@@ -1430,34 +1430,66 @@ def create_app() -> FastAPI:
         await call(checkpoint)
 
         def _go():
-            from .headless import Item
             m = engine()
-            # Resolve every target BEFORE moving anything: a move does not shift indices,
-            # but reading them all first keeps this honest if that ever changes.
-            targets = [(r, _resolve(m.minsky, r)) for r in spec.refs]
-            for r, raw in targets:
-                x, y = raw.x() + spec.dx, raw.y() + spec.dy
-                check_at((x, y))
-            moved, refused = 0, []
-            for r, raw in targets:
-                x, y = raw.x() + spec.dx, raw.y() + spec.dy
+            # One entry per item. The same ref named twice used to move it twice, which
+            # also walked straight through the coordinate check: that validated
+            # raw.x()+dx once, from the pre-move position, while the loop re-read the
+            # position each time -- so three copies of one ref moved it 3*dx, past the
+            # limit a single move is refused for.
+            refs, seen = [], set()
+            for r in spec.refs:
+                if r not in seen:
+                    seen.add(r); refs.append(r)
+
+            before = {}
+            for r in refs:
+                raw = _resolve(m.minsky, r)
+                before[r] = (raw.x(), raw.y())
+                check_at((raw.x() + spec.dx, raw.y() + spec.dy))
+
+            for r in refs:
+                x, y = before[r][0] + spec.dx, before[r][1] + spec.dy
                 try:
-                    m.move(Item(m, 0, "?", ref=r), x, y)
+                    _resolve(m.minsky, r).moveTo(x, y)
+                except Exception:
+                    pass
+
+            # Judge by the OFFSET ACHIEVED, not by the final coordinates. An item whose
+            # owner carries it -- an IntOp's variable, a Godley table's stocks -- can end
+            # up correctly displaced without landing on the exact point asked for, and
+            # comparing absolute positions called those moves failures while the user
+            # watched them move.
+            settle()
+            moved, refused = 0, []
+            for r in refs:
+                raw = _resolve(m.minsky, r)
+                gx, gy = raw.x() - before[r][0], raw.y() - before[r][1]
+                if abs(gx - spec.dx) < 1.0 and abs(gy - spec.dy) < 1.0:
                     moved += 1
-                except RuntimeError as ex:
-                    # a Godley table owns the variables it generates; those cannot move
-                    refused.append(str(ex).split(".")[0])
+                else:
+                    try:
+                        nm = raw.name() or raw.classType()
+                    except Exception:
+                        nm = raw.classType()
+                    refused.append(nm)
             return moved, refused
 
         moved, refused = await call(_go)
         if not moved:
             rollback()
-            raise HTTPException(409, refused[0] if refused else "nothing moved")
+            raise HTTPException(
+                409, f"{refused[0]} did not move. A Godley table places the variables it "
+                     f"generates, so they can only be moved by moving the table."
+                if refused else "nothing moved")
         mark_dirty()
         out = await call(snapshot)
         if refused:
-            out["note"] = (f"{moved} moved; {len(refused)} could not: "
-                           f"{refused[0]}.")
+            # say WHY, not where. The reason is the half that tells the user what to do.
+            out["note"] = (
+                f"{moved} moved; {len(refused)} did not "
+                f"({', '.join(refused[:3])}{'...' if len(refused) > 3 else ''}). "
+                f"A Godley table places the variables it generates, so they can only be "
+                f"moved by moving the table.")
         return out
 
     @app.post("/api/items/delete")
@@ -1479,33 +1511,64 @@ def create_app() -> FastAPI:
         def _go():
             from .headless import Item
             m = engine()
-            pinned = []
+
+            # Pin each target by WHAT IT IS, and deliberately NOT by where it is.
+            # Removing an item can translate the entire model: deleting one item of
+            # BasicGrowthModel moves every survivor by (-106,-108). A pin that included
+            # the position then matched nothing -- or, worse, matched a DIFFERENT item
+            # that had just slid onto the remembered coordinates, so an unselected item
+            # was deleted and the selected one survived, reported as success.
+            want = []
             for r in spec.refs:
+                if ":" in r:
+                    continue                       # refused earlier; belt and braces
                 raw = _resolve(m.minsky, r)
                 try:
                     nm = raw.name()
                 except Exception:
                     nm = ""
-                pinned.append((raw.classType(), nm, round(raw.x(), 1), round(raw.y(), 1)))
+                want.append((int(r), raw.classType(), nm))
+            # Descending, so each remaining index is unaffected by the deletions already
+            # done -- removing item N never renumbers anything below N.
+            want.sort(key=lambda t: -t[0])
+            seen, uniq = set(), []
+            for t in want:                          # the same item named twice is one
+                if t[0] not in seen:
+                    seen.add(t[0]); uniq.append(t)
 
             gone = 0
-            for want in pinned:
+            for idx, cls, nm in uniq:
+                n_before = len(m.minsky.model.items)
                 here = None
-                for ref, raw in _iter_items(m.minsky):
-                    if ":" in ref:
-                        continue
+                if 0 <= idx < n_before:
+                    raw = m.minsky.model.items[idx]
                     try:
-                        nm = raw.name()
+                        got = raw.name()
                     except Exception:
-                        nm = ""
-                    if (raw.classType(), nm, round(raw.x(), 1),
-                            round(raw.y(), 1)) == want:
-                        here = ref
-                        break
+                        got = ""
+                    if raw.classType() == cls and got == nm:
+                        here = idx
+                if here is None:
+                    # something shifted further than expected -- find it by identity,
+                    # but only when that identity is unambiguous
+                    hits = []
+                    for i in range(n_before):
+                        raw = m.minsky.model.items[i]
+                        try:
+                            got = raw.name()
+                        except Exception:
+                            got = ""
+                        if raw.classType() == cls and got == nm:
+                            hits.append(i)
+                    if len(hits) == 1:
+                        here = hits[0]
                 if here is None:
                     continue        # already went, as a Godley table takes its variables
-                restructuring(lambda h=here: m.delete(Item(m, int(h), "?", ref=h)))
-                gone += 1
+                restructuring(lambda h=here: m.delete(Item(m, h, "?", ref=str(h))))
+                # count what actually LEFT, not the calls made: deleting a Godley icon
+                # takes its generated stock variables with it, and reporting "2 deleted"
+                # over an emptied canvas is worse than saying nothing
+                gone += n_before - len(m.minsky.model.items)
             return gone
 
         try:
@@ -1881,6 +1944,40 @@ def create_app() -> FastAPI:
             check_at(pt)
         box = dict(x0=min(spec.x0, spec.x1), y0=min(spec.y0, spec.y1),
                    x1=max(spec.x0, spec.x1), y1=max(spec.y0, spec.y1))
+
+        def _enclosing_group():
+            """The group whose bounds swallow this box, if any.
+
+            `Canvas::select` starts with `minimalEnclosingGroup` (group.cc:865) and, when
+            the whole lasso fits inside a group, searches THAT GROUP'S children instead
+            of the top level. So a box drawn over a group -- to grab two ordinary items
+            that happen to sit on top of it -- selects nothing at all, and the failure
+            came back as "nothing in that region to group", which is the opposite of what
+            the user can see.
+            """
+            m = engine().minsky
+            for gref, grp, _p in _iter_groups(m):
+                try:
+                    z = grp.zoomFactor()
+                    hw, hh = 0.5 * z * grp.iWidth(), 0.5 * z * grp.iHeight()
+                    if (box["x0"] >= grp.x() - hw and box["x1"] <= grp.x() + hw
+                            and box["y0"] >= grp.y() - hh and box["y1"] <= grp.y() + hh):
+                        return gref, (grp.title() or "").strip()
+                except Exception:
+                    continue
+            return None
+
+        enclosing = await call(_enclosing_group)
+        if enclosing:
+            gref, title = enclosing
+            raise HTTPException(
+                409, f"that region lies entirely inside "
+                     f"{('the group ' + repr(title)) if title else gref}, and the engine "
+                     f"groups what it finds INSIDE the smallest group enclosing the "
+                     f"region -- so nothing outside {gref} can be grouped from there. "
+                     f"Drag a box that extends beyond {gref}, or move the items clear "
+                     f"of it first.")
+
         await call(checkpoint)
 
         def _go():

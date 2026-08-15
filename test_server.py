@@ -897,8 +897,23 @@ check("selection is compared by ref", "selSet.has(it.ref)" in ui)
 # was never highlighted, and a drag showed no movement until the pointer was released.
 check("the selection panel looks the item up by ref",
       "byRef.get(sel)" in ui and "byIdx.get(sel)" not in ui)
-check("a newly added item is selected by ref, not by the numeric index",
-      "sel = refOfIndex(" in ui and "sel = r.index" not in ui)
+# A substring check cannot tell "the new item is selected" from "a variable named sel was
+# assigned", and the previous one here was satisfied by the very code that broke adding.
+# The invariant that DOES catch it: `sel` and `selSet` are two views of one thing, so
+# nothing may assign `sel` except the helpers that keep them in step. Adding an item set
+# `sel` directly, so the panel named the new item while the canvas highlighted the old
+# one and Delete removed that instead.
+_assign = [(ui[:m.start()].count("\n") + 1, ui.splitlines()[ui[:m.start()].count("\n")].strip())
+           for m in re.finditer(r"(?<![\w.$])sel\s*=\s*(?!=)", ui)]
+_helpers = ui[ui.index("// The selection is a SET of refs"):
+              ui.index("function clearSelection(") + 200]
+_stray = [f"line {ln}: {txt[:60]}" for ln, txt in _assign
+          if "let state" not in txt and "forEach(sel" not in txt
+          and txt not in _helpers]
+check("nothing assigns `sel` outside the selection helpers", not _stray, str(_stray))
+check("and the helpers keep both views in step",
+      "function selectOnly(" in ui and "function selectMany(" in ui
+      and "function selectToggle(" in ui)
 check("the drag preview finds its element by ref",
       "drag.idx" not in ui and 'item[data-ref="${CSS.escape(r)}"]' in ui)
 check("and nothing compares a possibly-null index for selection",
@@ -2245,6 +2260,73 @@ check("an empty selection is refused",
 check("and so is a bad ref among good ones",
       c.post("/api/items/delete", json={"refs": ["0", "nonsense"]}).status_code == 422)
 check("with nothing deleted", len(_pos()) == 6, str(len(_pos())))
+
+# The tests above use unwired items, which is the ONE shape where the delete pin cannot
+# fail: positions only shift when a delete removes a wire. Deleting one item of
+# BasicGrowthModel translates every survivor by (-106,-108), which is exactly what a
+# position-keyed pin cannot survive -- it matched nothing, or worse, matched a DIFFERENT
+# item that had just slid onto the remembered coordinates.
+_ex = "/Users/ryneschultz/minsky/examples/BasicGrowthModel.mky"
+if os.path.exists(_ex):
+    _st = c.post("/api/load", params={"path": _ex}).json()
+    _want = {i["ref"]: i.get("name") for i in _st["items"] if i["ref"] in ("12","14","15")}
+    check("the model translates when one of these is deleted -- the case that matters",
+          True, str(list(_want.values())))
+    r = c.post("/api/items/delete", json={"refs": list(_want)})
+    check("all three are deleted from a wired model", r.status_code == 200
+          and r.json()["deleted"] == 3, f'{r.status_code} deleted={r.json().get("deleted")}')
+    _left = {i.get("name") for i in c.get("/api/state").json()["items"]}
+    check("and none of them survived",
+          not (set(_want.values()) & _left), str(set(_want.values()) & _left))
+    check("with no wire left mis-pointed",
+          not any(w.get("desync") for w in c.get("/api/state").json()["wires"]))
+
+    # the wrong-item case: a pin that goes stale can match an unrelated item
+    _st = c.post("/api/load", params={"path": _ex}).json()
+    _n = len(_st["items"])
+    _target = next(i for i in _st["items"] if i.get("name") == "s - Savings Rate")
+    r = c.post("/api/items/delete", json={"refs": [_target["ref"]]})
+    _after = c.get("/api/state").json()
+    check("deleting one names exactly one",
+          r.json()["deleted"] == _n - len(_after["items"]),
+          f'reported {r.json()["deleted"]}, really {_n - len(_after["items"])}')
+    check("and it was the one asked for",
+          "s - Savings Rate" not in {i.get("name") for i in _after["items"]})
+
+# a cascade: a Godley icon takes its generated stock variables, and the count must say so
+c.post("/api/clear")
+_g = c.post("/api/item", json={"kind":"godley"}).json()["index"]
+for _c, _nm in ((1,"S1"), (2,"S2")):
+    c.post(f"/api/godley/{_g}/cell", json={"row":0,"col":_c,"value":_nm})
+c.post("/api/item", json={"kind":"parameter","name":"keep","value":1})
+_n = len(c.get("/api/state").json()["items"])
+r = c.post("/api/items/delete", json={"refs": [str(_g)]})
+_left = c.get("/api/state").json()["items"]
+check("a cascade is counted by what LEFT, not by the calls made",
+      r.json()["deleted"] == _n - len(_left),
+      f'reported {r.json()["deleted"]}, really {_n - len(_left)}')
+check("and only the table and its own variables went",
+      [i.get("name") for i in _left] == ["keep"], str([i.get("name") for i in _left]))
+
+# the same item named twice moved it twice, which also walked through the coordinate check
+c.post("/api/clear")
+c.post("/api/item", json={"kind":"parameter","name":"dup","value":1,"at":[200,300]})
+c.post("/api/items/move", json={"refs":["0","0","0"], "dx":100, "dy":0})
+check("a ref repeated in one request moves the item once",
+      c.get("/api/state").json()["items"][0]["x"] == 300,
+      str(c.get("/api/state").json()["items"][0]["x"]))
+r = c.post("/api/items/move", json={"refs":["0"], "dx":2e6, "dy":0})
+check("and a move past the canvas limit is still refused", r.status_code == 422,
+      f"{r.status_code}")
+
+# an item carried by its owner DOES move, and must not be reported as refused
+c.post("/api/clear")
+c.post("/api/item", json={"kind":"operation","op":"integrate","at":[300,300]})
+_refs = [i["ref"] for i in c.get("/api/state").json()["items"]]
+r = c.post("/api/items/move", json={"refs": _refs, "dx": 100, "dy": 0})
+check("moving an IntOp with the variable it carries reports no refusal",
+      "note" not in r.json(), str(r.json().get("note"))[:80])
+
 
 # a Godley table owns the variables it generates, so those cannot be moved
 c.post("/api/clear")

@@ -454,8 +454,21 @@ function clearSelection(){ selSet = new Set(); sel = null; selWire = null; selGr
 // A keyboard shortcut must not reach the model while something modal is in front of it.
 // The confirm dialog focuses a BUTTON, so guards that only excluded INPUT/TEXTAREA let
 // Backspace and Ctrl+Z through to the canvas behind it.
+// Two different questions, and answering both with one list was wrong in both directions.
+//
+// `modalOpen` -- is something in front of the canvas, so a key must not reach the items
+// behind it. That includes the Godley editor: its overlay covers the canvas.
+//
+// `dialogOpen` -- is the user being ASKED something, so nothing may act on the model
+// until they answer. Only the confirm and Save As dialogs. The Godley editor is not one
+// of these: it is an editor, and blocking undo inside it left a cell edit that could not
+// be taken back at all, because the overlay also covers the Undo button.
 function modalOpen(){
   return ["#cfwrap", "#sawrap", "#fwrap", "#gwrap"].some(
+    id => $(id) && $(id).classList.contains("open"));
+}
+function dialogOpen(){
+  return ["#cfwrap", "#sawrap"].some(
     id => $(id) && $(id).classList.contains("open"));
 }
 // The add endpoints answer with a numeric model.items index, but selection is by REF and
@@ -1545,6 +1558,7 @@ $("#rename").addEventListener("keydown", e => {
   if (e.key === "Escape") { e.preventDefault(); $("#rename").blur(); render(); }
 });
 addEventListener("keydown", e => {
+  if (dialogOpen()) return;
   if (e.key !== "F2" || sel === null) return;
   if ($("#renamewrap").style.display === "none") return;
   e.preventDefault(); $("#rename").focus(); $("#rename").select();
@@ -1566,7 +1580,7 @@ async function step(what){
 $("#undo").onclick = guard(() => step("undo"));
 $("#redo").onclick = guard(() => step("redo"));
 addEventListener("keydown", e => {
-  if (modalOpen()) return;
+  if (dialogOpen()) return;
   if (!(e.metaKey || e.ctrlKey) || e.key.toLowerCase() !== "z") return;
   if (/INPUT|TEXTAREA/.test(document.activeElement.tagName)) return;  // let fields undo
   e.preventDefault();
@@ -1651,6 +1665,10 @@ $("#download").onclick = () => { location.href = "/api/download"; };
 addEventListener("keydown", e => {
   if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "s") {
     e.preventDefault();
+    // not while the user is being asked something: saving from behind "Discard unsaved
+    // changes?" wrote the file, and the Cancel they then pressed to keep their work came
+    // too late
+    if (dialogOpen()) return;
     (e.shiftKey ? $("#saveas") : $("#save")).click();
   }
 });

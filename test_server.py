@@ -1859,8 +1859,9 @@ check("a wire two groups deep is still counted",
       str([w for w in st["wires"] if w.get("desync")]))
 check("and it is still drawn",
       len([w for w in st["wires"] if not w.get("desync")]) == 1)
-check("only one place counts engine wires",
-      "sum(len(m.model.groups[g].wires)" not in src)
+# (the behavioural check for this is two lines above: a wire two groups deep is still
+# counted. Asserting the ABSENCE of a source fragment passed for any implementation that
+# spelled the counter differently -- including one that reintroduced the same bug.)
 
 check("a group reference that does not exist is refused",
       c.post("/api/group/g0.9/ungroup").status_code == 422)
@@ -2614,6 +2615,23 @@ if os.path.exists(_ex):
         check("and it still redoes", c.post("/api/redo").status_code == 200)
     finally:
         (SAVE_DIR / "histchurn-probe.mky").unlink(missing_ok=True)
+
+
+print("\n56. what a modal stops, and what it must not")
+# One list answered two different questions and was wrong in both directions: Ctrl+S
+# reached past every overlay and wrote the file from behind "Discard unsaved changes?",
+# while the Godley editor -- whose overlay also covers the Undo button -- blocked Ctrl+Z
+# and left a cell edit that could not be taken back at all.
+check("there are two questions, asked separately",
+      "function modalOpen()" in ui and "function dialogOpen()" in ui)
+check("undo is gated on a pending QUESTION, not on any overlay",
+      ui.count("if (dialogOpen()) return;") >= 3)
+check("the Godley editor counts as an overlay",
+      '"#gwrap"' in ui.split("function dialogOpen()")[0].split("function modalOpen()")[1])
+check("but not as a question",
+      '"#gwrap"' not in ui.split("function dialogOpen()")[1].split("}")[0])
+check("Delete still refuses to reach past an overlay",
+      "if (modalOpen()) return;" in ui)
 
 
 print(f"\n{'ALL PASS' if not FAILED else 'FAILURES: ' + ', '.join(FAILED)}")

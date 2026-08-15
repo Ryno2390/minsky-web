@@ -2112,11 +2112,10 @@ def create_app() -> FastAPI:
         def _go():
             m = engine().minsky
             # Does the model reset NOW? If it does and it does not afterwards, the
-            # grouping broke it, and grouping a Godley table does exactly that: the
-            # table's stock variables are re-scoped into the group while the table's own
-            # references are not, so reset fails with "Invalid valueId". That answered
-            # 200 with a full snapshot and left the model unable to run, silently -- on
-            # 9 of the 37 shipped examples.
+            # grouping broke it. This is a backstop only: it is SKIPPED for a model that
+            # does not reset to begin with, which is easy to arrange (one unwired stock
+            # is enough), so it cannot be what protects against the Godley case. That is
+            # refused outright below, whatever the model's state.
             def resets():
                 try:
                     m.requestReset(); m.reset()

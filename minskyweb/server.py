@@ -497,7 +497,11 @@ def _topology_from_mky(path: str):
 #: it -- an unconstrained path parameter would turn that into an arbitrary-file read.
 #: Uploads land in UPLOAD_DIR, which is therefore also a root.
 UPLOAD_DIR = Path(tempfile.gettempdir()) / "minskyweb-uploads"
-SAVE_DIR = Path.home() / "minsky-models"
+#: Where a bare name is saved. Overridable, so a test run writes into a directory of its
+#: own instead of the user's: the suite was leaving its probe files -- and a `.mky;1`
+#: backup for each, since Minsky renames the old file aside on every save -- among real
+#: models, where they then showed up in the Open picker.
+SAVE_DIR = Path(os.environ.get("MINSKYWEB_SAVE_DIR") or (Path.home() / "minsky-models"))
 
 #: Readable roots. Includes the shipped examples.
 MODEL_ROOTS = [Path.home() / "minsky" / "examples", SAVE_DIR,

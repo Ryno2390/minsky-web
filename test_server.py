@@ -6,7 +6,26 @@ rather than streaming plausible numbers.
 """
 import math, sys
 from fastapi.testclient import TestClient
-from minskyweb.server import app, require_idle, _RUNNING
+from minskyweb.server import app, require_idle, _RUNNING, SAVE_DIR
+
+
+_PRE_EXISTING = {f.name for f in SAVE_DIR.iterdir() if f.is_file()}
+
+
+def _rm(*names):
+    """Remove a test file and the `.mky;1` backup Minsky writes beside it on every save.
+
+    The suite was leaving both among the user's real models, where they turned up in the
+    Open picker. Set MINSKYWEB_SAVE_DIR to keep a run out of that directory entirely.
+    """
+    _SD = SAVE_DIR
+    for n in names:
+        base = str(n) if str(n).endswith(".mky") else f"{n}.mky"
+        for cand in (_SD / base, _SD / f"{base};1"):
+            try:
+                cand.unlink()
+            except OSError:
+                pass
 from fastapi import HTTPException
 
 c = TestClient(app)
@@ -209,7 +228,7 @@ check("plain Save with no file refuses",
 sv = c.post("/api/save", json={"name":"roundtrip-test"})
 check("Save As accepted", sv.status_code == 200, sv.text[:70])
 saved = sv.json()["saved"]
-check("saved under the writable dir", "minsky-models" in saved, saved)
+check("saved under the writable dir", str(SAVE_DIR) in saved, saved)
 st = c.get("/api/state").json()
 check("saving clears dirty and names the file",
       st["dirty"] is False and st["currentFile"] == "roundtrip-test")
@@ -257,6 +276,8 @@ try:
     _ET.fromstring(dl.content); ok_xml = True
 except Exception: ok_xml = False
 check("downloaded bytes parse as XML", ok_xml)
+
+_rm("roundtrip-test")
 
 print("\n10. undo / redo")
 c.post("/api/clear")
@@ -355,6 +376,7 @@ check("its wires survived", len(back["wires"]) == n_wires,
       f"{len(back['wires'])} vs {n_wires}")
 g = c.get(f"/api/godley/{gi if gi < len(back['items']) else 0}").json()
 check("its godley table survived", "Reserves" in str(g["cells"]), str(g["cells"][0])[:60])
+_rm("godley-roundtrip")
 
 print("\n12. item creation: messages and optional initial values")
 c.post("/api/clear")
@@ -714,13 +736,13 @@ check("the scan reaches the table markup",
       any("data-r=" in l for l in re.findall(r"`([^`]*)`", ui, re.S)))
 
 # filenames reach the client verbatim; escaping is the renderer's job, not the server's
-open(os.path.expanduser("~/minsky-models/plain-check.mky"), "w").write(
+(SAVE_DIR / "plain-check.mky").write_text(
     open(os.path.expanduser("~/minsky/examples/exponentialGrowth.mky")).read())
 listing = c.get("/api/files").json()
 names = [f["name"] for root in listing["roots"] for f in root["files"]]
 check("the file listing returns names verbatim", "plain-check" in names,
       str(names[:3]))
-os.remove(os.path.expanduser("~/minsky-models/plain-check.mky"))
+_rm("plain-check")
 
 print("\n20. save names are validated, not silently reinterpreted")
 c.post("/api/clear")
@@ -950,7 +972,7 @@ check("clear resets the clock", c.get("/api/state").json()["t"] == 0.0,
 
 # minsky.load() accepts any well-formed XML and quietly yields an EMPTY model, so opening
 # the wrong file reported success and replaced the open model with nothing
-junk = os.path.expanduser("~/minsky-models/_notamodel.mky")
+junk = str(SAVE_DIR / "_notamodel.mky")
 open(junk, "w").write('<?xml version="1.0"?><notminsky><hello/></notminsky>')
 c.post("/api/item", json={"kind":"parameter","name":"keep","value":1.0})
 before = len(c.get("/api/state").json()["items"])
@@ -1152,6 +1174,7 @@ if os.path.exists(EX):
               c.get("/api/state").json()["canUndo"] is True)
         check(f"and undo after {label} actually runs",
               c.post("/api/undo").status_code == 200)
+    _rm("hist-probe")
 
     # pushHistory() early-returns false while `undone` is set, so the first push after an
     # undo did nothing and the next edit had no undo point at all
@@ -1228,6 +1251,7 @@ c.post("/api/undo")
 check("undo puts the solver back",
       c.get("/api/state").json()["solver"]["order"] == 4,
       str(c.get("/api/state").json()["solver"]["order"]))
+_rm("solver-probe")
 
 
 print("\n33. opening and saving files")
@@ -1289,8 +1313,7 @@ if os.path.exists(EX):
     finally:
         bad.unlink(missing_ok=True); trunc.unlink(missing_ok=True)
 
-for junk in ("CaseProbe.mky", "my.model.mky"):
-    (SAVE_DIR / junk).unlink(missing_ok=True)
+_rm("CaseProbe", "my.model")
 
 
 print("\n34. renaming")
@@ -1494,7 +1517,7 @@ try:
     check("and the columns are in the engine's stored order",
           on_screen == ["", "A", "D", "B", "C"], str(on_screen))
 finally:
-    (SAVE_DIR / "colorder-probe.mky").unlink(missing_ok=True)
+    _rm("colorder-probe")
 
 
 print("\n38. the simulation socket")
@@ -1640,7 +1663,7 @@ if os.path.exists(EX):
         check("and undo back to the SAVED state clears it too",
               c.get("/api/state").json()["dirty"] is False)
     finally:
-        (SAVE_DIR / "dirty-probe.mky").unlink(missing_ok=True)
+        _rm("dirty-probe")
 
 
 print("\n43. editing what is inside a group")
@@ -2036,7 +2059,7 @@ try:
     check("after MAX_HISTORY trimming the marker is still true",
           st["dirty"] is True, f'dirty={st["dirty"]}')
 finally:
-    (SAVE_DIR / "savedpoint-probe.mky").unlink(missing_ok=True)
+    _rm("savedpoint-probe")
 
 # a Save used to append a duplicate entry, so the first undo after it did nothing visible
 c.post("/api/clear")
@@ -2050,7 +2073,7 @@ try:
     check("the first undo after a save actually undoes something", was != now,
           f"{was} -> {now}")
 finally:
-    (SAVE_DIR / "dupe-probe.mky").unlink(missing_ok=True)
+    _rm("dupe-probe")
 
 # saving reads the file back only when there is a Godley table to reorder; doing it
 # always reset the engine and threw away the results of a completed run
@@ -2079,7 +2102,7 @@ try:
           abs(after["t"] - ran["t"]) < 1e-9 and after["values"] == ran["values"],
           f'{ran["t"]} -> {after["t"]}')
 finally:
-    (SAVE_DIR / "runsave-probe.mky").unlink(missing_ok=True)
+    _rm("runsave-probe")
 
 
 print("\n49. Godley tables tell the truth about what they did")
@@ -2143,7 +2166,7 @@ try:
     check("while the table itself still moves",
           c.post(f"/api/item/{_g}/move", json={"x":500,"y":500}).status_code == 200)
 finally:
-    (SAVE_DIR / "godleytruth-probe.mky").unlink(missing_ok=True)
+    _rm("godleytruth-probe")
 
 # the conflict warning compared raw cell TEXT, so "100" and "100.0" were a disagreement
 c.post("/api/clear")
@@ -2537,7 +2560,7 @@ try:
     check("and it names the offending component", "is a file" in r.json().get("detail",""),
           r.text[:80])
 finally:
-    (SAVE_DIR / "parent-probe.mky").unlink(missing_ok=True)
+    _rm("parent-probe")
 
 # the NUL crash was fixed on the write path only; the read path had the same cause
 r = c.post("/api/load", params={"path": "/tmp/bad\x00name.mky"})
@@ -2630,7 +2653,7 @@ if os.path.exists(_ex):
               c.get("/api/state").json()["canRedo"] is True)
         check("and it still redoes", c.post("/api/redo").status_code == 200)
     finally:
-        (SAVE_DIR / "histchurn-probe.mky").unlink(missing_ok=True)
+        _rm("histchurn-probe")
 
 
 print("\n56. what a modal stops, and what it must not")
@@ -2648,6 +2671,17 @@ check("but not as a question",
       '"#gwrap"' not in ui.split("function dialogOpen()")[1].split("}")[0])
 check("Delete still refuses to reach past an overlay",
       "if (modalOpen()) return;" in ui)
+
+
+# Whatever any section forgot: the suite must not leave files among the user's models.
+# Minsky renames the old file to "<name>.mky;1" on every save, so both go.
+_left = [f for f in SAVE_DIR.iterdir()
+         if f.is_file() and f.name not in _PRE_EXISTING]
+for _f in _left:
+    try: _f.unlink()
+    except OSError: pass
+check("the suite leaves no files behind", not _left,
+      f"cleaned up after the fact: {[f.name for f in _left][:6]}")
 
 
 print(f"\n{'ALL PASS' if not FAILED else 'FAILURES: ' + ', '.join(FAILED)}")

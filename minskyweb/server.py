@@ -2377,10 +2377,20 @@ def create_app() -> FastAPI:
             # engine, which throws away the results of any completed run -- t and every
             # value snap back to their initial conditions. That is a steep price for a
             # model with nothing to reorder, and only a Godley table is reordered.
-            if any("Godley" in it.classType() for _r, it in _iter_items(m)):
-                restructuring(lambda: m.load(str(dest)))
-                return True
-            return False
+            if not any("Godley" in it.classType() for _r, it in _iter_items(m)):
+                return False
+            # Read it back, then say whether that CHANGED anything. Reporting "reloaded"
+            # for every model with a table meant a snapshot was forced on every save: a
+            # Save As with no edits made the document undoable, that undo restored a
+            # byte-identical model while flipping the file to unsaved, repeated saves
+            # pushed the real history out past MAX_HISTORY, and a save after an undo threw
+            # the redo branch away. Comparing the document with itself across the reload
+            # is exact -- both sides are the same serialisation of a live model.
+            was = dest.read_bytes()
+            restructuring(lambda: m.load(str(dest)))
+            settle()
+            m.save(str(_hist_file()))
+            return _hist_file().read_bytes() != was
         reloaded = await call(_write)
 
         def _mark():

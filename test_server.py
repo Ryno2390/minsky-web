@@ -2579,5 +2579,42 @@ check("the note names the table whose value the engine actually keeps",
       f'engine kept {_kept}; note said: {_conf[0]["note"][:90] if _conf else ""}')
 
 
+print("\n55. saving a Godley model does not churn the history")
+# Saving reads the file back to reconcile a table's column order, and that was reported
+# as "reloaded" for every model containing a table -- forcing a history entry on every
+# save whether or not anything had changed.
+_ex = "/Users/ryneschultz/minsky/examples/LoanableFunds.mky"
+if os.path.exists(_ex):
+    c.post("/api/load", params={"path": _ex})
+    check("a freshly opened model has nothing to undo",
+          c.get("/api/state").json()["canUndo"] is False)
+    r = c.post("/api/save", json={"name": "histchurn-probe"})
+    try:
+        _st = c.get("/api/state").json()
+        check("Save As with no edits does not make the model undoable",
+              _st["canUndo"] is False, f'canUndo={_st["canUndo"]}')
+        check("and leaves it saved", _st["dirty"] is False)
+
+        # ten saves used to leave sixty identical entries, pushing the real edits out
+        for _ in range(10):
+            c.post("/api/save", json={"name": "histchurn-probe"})
+        _n = 0
+        while c.post("/api/undo").status_code == 200 and _n < 70:
+            _n += 1
+        check("ten successive saves add no undo steps", _n == 0, f"{_n} undos")
+
+        # and a save after an undo used to drop the redo branch, on Godley models only
+        c.post("/api/load", params={"path": _ex})
+        c.post("/api/item/0/move", json={"x": 500, "y": 500})
+        c.post("/api/undo")
+        check("there is a redo to lose", c.get("/api/state").json()["canRedo"] is True)
+        c.post("/api/save", json={"name": "histchurn-probe"})
+        check("saving keeps the redo branch",
+              c.get("/api/state").json()["canRedo"] is True)
+        check("and it still redoes", c.post("/api/redo").status_code == 200)
+    finally:
+        (SAVE_DIR / "histchurn-probe.mky").unlink(missing_ok=True)
+
+
 print(f"\n{'ALL PASS' if not FAILED else 'FAILURES: ' + ', '.join(FAILED)}")
 sys.exit(1 if FAILED else 0)

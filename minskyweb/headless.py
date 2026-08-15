@@ -525,11 +525,28 @@ class Model:
                 f"an integral or a Godley table instead.")
 
         before = len(self.minsky.model.wires)
+        items_before = len(self.minsky.model.items)
         sx, sy = src.port_xy(0)
         dx, dy = dst.port_xy(port)
         self.minsky.canvas.mouseDown(sx, sy)
         self.minsky.canvas.mouseUp(dx, dy)
         after = len(self.minsky.model.wires)
+
+        # The engine sometimes answers a wiring request by CLONING the target rather
+        # than connecting it. Dropping a wire on a Godley table's generated flow variable
+        # creates a second variable of the same name at the same point and attaches the
+        # wire to THAT -- so the model gains an item the user did not ask for, the table's
+        # own variable is still unconnected, and the record names the original while the
+        # engine holds the copy. The only visible signal is that the item count grew.
+        if len(self.minsky.model.items) != items_before:
+            try:
+                what = dst._raw.name() or dst._raw.classType()
+            except Exception:
+                what = dst._raw.classType()
+            raise WiringError(
+                f"the engine answered that by making a second copy of {what!r} rather "
+                f"than connecting it -- a Godley table's own variables cannot be wired "
+                f"into from outside. Drive that flow from the table's own cell instead.")
 
         if after != before + 1:
             raise WiringError(

@@ -499,7 +499,17 @@ function toast(msg, ok=false) {
   document.body.appendChild(d);
   setTimeout(()=>d.remove(), ok ? 2200 : 6000);
 }
-const guard = fn => async (...a) => { try { await fn(...a); } catch(e){ toast(e.message); } };
+// A refused request can still have CHANGED the model: several endpoints roll back to a
+// recorded state, and restoring a document reorders model.items, so every ref the client
+// is holding now names a different item. Re-read after a failure, or the next click acts
+// on the wrong thing.
+const guard = fn => async (...a) => {
+  try { await fn(...a); }
+  catch(e) {
+    toast(e.message);
+    try { state = await api("/state"); render(); } catch { /* server is gone */ }
+  }
+};
 
 /* ---------- render ---------- */
 function kindOf(ct){

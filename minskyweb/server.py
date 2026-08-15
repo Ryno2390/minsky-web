@@ -188,6 +188,51 @@ def _remap_wires(m, before):
                  if a in remap and c in remap]
 
 
+def _wire_descriptors(topo):
+    """Describe a topology by what its endpoints ARE, resolved against the live model.
+
+    Refs cannot be compared across a load, because loading reorders model.items. A
+    description built from class, name and port survives it.
+    """
+    m = engine().minsky
+    out = []
+    for si, sp, di, dp in topo:
+        def desc(ref):
+            try:
+                it = _resolve(m, ref)
+                try:
+                    nm = it.name() or ""
+                except Exception:
+                    nm = ""
+                return (it.classType(), nm)
+            except Exception:
+                return ("?", "")
+        out.append((desc(si), sp, desc(di), dp))
+    return sorted(out)
+
+
+def _derive_topology():
+    """Re-derive the wire topology from the document, by writing it and reading it back.
+
+    `_topology_from_mky` aligns the file's items with the engine's by ORDER, and that
+    alignment is only true immediately after a LOAD: the engine then lists exactly what
+    the file listed, with a Godley table's regenerated variables appended at the end.
+    It is NOT true of a model edited in this session -- those regenerated variables sit
+    wherever the editing left them, in the middle -- so parsing a file written from a
+    live model paired the wrong items and mapped every wire onto the wrong ends.
+
+    Writing and then reading back puts the engine into exactly the state the alignment
+    assumes. It costs a load, which is also a reset; every caller here has already
+    invalidated any run.
+    """
+    f = _hist_file()
+    settle()
+    m = engine().minsky
+    m.save(str(f))
+    m.load(str(f))
+    return _topology_from_mky(str(f))
+
+
 def resync_wires():
     """Re-derive the wire topology from the document.
 
@@ -199,10 +244,7 @@ def resync_wires():
 
     Writing the document and reading its topology back is exactly the route a load takes.
     """
-    f = _hist_file()
-    settle()
-    engine().minsky.save(str(f))
-    _WIRES[:] = _topology_from_mky(str(f))
+    _WIRES[:] = _derive_topology()
 
 
 def restructuring(fn):
@@ -566,12 +608,22 @@ def _serialize() -> bytes:
 
 
 def _restore(entry: tuple[int, bytes, list]):
+    """Put a recorded state back, and re-derive its topology rather than trusting the
+    refs recorded with it.
+
+    The refs were recorded against the item order of the LIVE model at the time. Loading
+    the document does not reproduce that order -- a Godley table's variables are
+    regenerated at the END -- so the stored refs then named different items, and undo
+    followed by redo left the canvas drawing wires between two things that had never been
+    connected, with the counts still matching so nothing flagged it.
+    """
     global _PENDING
     _id, doc, wires = entry
     f = _hist_file()
     f.write_bytes(doc)
     engine().minsky.load(str(f))
-    _WIRES[:] = list(wires)
+    derived = _topology_from_mky(str(f))
+    _WIRES[:] = derived if derived else list(wires)
     _PENDING = False
 
 
@@ -1308,7 +1360,13 @@ def create_app() -> FastAPI:
             try:
                 m.wire(Item(m, int(spec.src), "?"), Item(m, int(spec.dst), "?"),
                        spec.port)
-            except WiringError:
+            except WiringError as ex:
+                if "second copy" in str(ex):
+                    # the engine cloned the target instead of connecting it, so the model
+                    # gained an item; put it back and say what happened, rather than let
+                    # the generic "those two ports cannot be connected" hide it
+                    rollback()
+                    raise HTTPException(409, str(ex))
                 if any(w[2] == str(spec.dst) and w[3] == spec.port for w in _WIRES):
                     raise HTTPException(
                         409, "that input already has a wire and accepts only one; "
@@ -1825,7 +1883,26 @@ def create_app() -> FastAPI:
                     400, f"deleting that wire would have removed {before - after} wires, "
                          f"not 1 -- it is entangled with a group's internal wiring. "
                          f"Nothing was changed.")
-            _WIRES.pop(index)
+
+            # Counting is not enough. The probe sweep can focus a DIFFERENT wire and
+            # delete that instead, and the count still falls by exactly one: measured
+            # against the engine's own saved document, 2 of 27 deletions on
+            # GoodwinLinear02 and 1 of 83 on LoanableFunds removed a wire the caller had
+            # not named. (The check that missed it compared the tracked record with
+            # itself, so it could not have caught this.) Read the topology back out of
+            # the engine and require that what went is what was asked for.
+            expect = _wire_descriptors(
+                [w for j, w in enumerate(_WIRES) if j != index])
+            derived = _derive_topology()
+            got = _wire_descriptors(derived)
+            if got != expect:
+                rollback()
+                raise HTTPException(
+                    409, "the engine could not tell that wire from another one crossing "
+                         "the same place, and deleted a different one -- so nothing was "
+                         "changed. Move the items apart, or delete one of the items the "
+                         "wire connects.")
+            _WIRES[:] = derived
 
         await call(_del)
         mark_dirty()

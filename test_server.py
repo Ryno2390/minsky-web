@@ -2352,5 +2352,100 @@ check("the lasso selects rather than grouping outright",
 check("grouping is an action on the selection", '$("#groupsel").onclick' in ui)
 
 
+print("\n52. the wire record agrees with the engine, not with itself")
+import xml.etree.ElementTree as _ET, tempfile as _tf
+
+def _engine_wires():
+    """The engine's own wire set, read out of a document it writes.
+
+    Ground truth. The previous checks here compared the tracked record with itself,
+    which cannot detect the record being wrong -- and it was: deleting a wire removed
+    a different one on 3 of 110 wires across two shipped models, and every check passed.
+    """
+    f = _tf.gettempdir() + "/gt.mky"
+    open(f, "wb").write(c.get("/api/download").content)
+    root = _ET.parse(f).getroot()
+    q = "{http://minsky.sf.net/minsky}"
+    owner, typ = {}, {}
+    for it in root.find(q + "items"):
+        iid = it.findtext(q + "id"); typ[iid] = it.findtext(q + "type")
+        ports = it.find(q + "ports")
+        if ports is None: continue
+        for k, pe in enumerate(ports): owner[pe.text] = (iid, k)
+    out = []
+    for w in root.find(q + "wires"):
+        a, b = owner.get(w.findtext(q + "from")), owner.get(w.findtext(q + "to"))
+        if a and b: out.append((typ[a[0]], a[1], typ[b[0]], b[1]))
+    return out
+
+EX = "/Users/ryneschultz/minsky/examples/GoodwinLinear02.mky"
+if os.path.exists(EX):
+    _st = c.post("/api/load", params={"path": EX}).json()
+    _n = len([w for w in _st["wires"] if not w.get("desync")])
+    _right = _wrong = _miss = 0
+    for _i in range(_n):
+        _s0 = c.post("/api/load", params={"path": EX}).json()
+        _items = {it["ref"]: it["classType"] for it in _s0["items"]}
+        _live = [w for w in _s0["wires"] if not w.get("desync")]
+        _want = (_items.get(_live[_i]["src"]), _live[_i]["src_port"],
+                 _items.get(_live[_i]["dst"]), _live[_i]["dst_port"])
+        _before = _engine_wires()
+        _r = c.delete(f"/api/wire/{_live[_i]['index']}")
+        if _r.status_code != 200:
+            _miss += 1; continue
+        _after = _engine_wires(); _b2 = list(_before)
+        for _x in _after:
+            if _x in _b2: _b2.remove(_x)
+        if len(_b2) == 1 and _b2[0] == _want: _right += 1
+        else: _wrong += 1
+    check("deleting a wire never removes a different one",
+          _wrong == 0, f"{_wrong} of {_n} removed the wrong wire")
+    check("and most still delete", _right >= _n * 0.75, f"{_right}/{_n} deleted")
+
+# _restore() used the refs recorded WITH the document, but loading reorders model.items,
+# so after undo/redo those refs named different items and the canvas drew wires between
+# things that had never been connected -- counts matching, nothing flagged.
+c.post("/api/clear")
+_g = c.post("/api/item", json={"kind":"godley","at":[200,200]}).json()["index"]
+for _row, _col, _v in ((0,1,"Reserves"), (2,0,"loan"), (2,1,"loan")):
+    c.post(f"/api/godley/{_g}/cell", json={"row":_row,"col":_col,"value":_v})
+_r1 = c.post("/api/item", json={"kind":"parameter","name":"rate","value":1,
+                                "at":[700,200]}).json()["index"]
+_o1 = c.post("/api/item", json={"kind":"variable","name":"out","var_type":"flow",
+                                "at":[900,200]}).json()["index"]
+c.post("/api/wire", json={"src":_r1,"dst":_o1,"port":1})
+
+def _ends():
+    st = c.get("/api/state").json()
+    m = {i["ref"]: (i["classType"], i.get("name")) for i in st["items"]}
+    return sorted((m.get(w["src"]), m.get(w["dst"]))
+                  for w in st["wires"] if not w.get("desync"))
+
+_was = _ends()
+check("the wire starts on the right items",
+      _was == [(("Variable:parameter", "rate"), ("Variable:flow", "out"))], str(_was))
+c.post("/api/item", json={"kind":"parameter","name":"tmp","value":1,"at":[300,600]})
+c.post("/api/undo")
+check("undo leaves it on the same items", _ends() == _was, str(_ends()))
+c.post("/api/redo")
+check("and so does redo", _ends() == _was, str(_ends()))
+
+# the engine answers a wire into a Godley table's own flow variable by CLONING it: the
+# model gains an item, the table's variable stays unconnected, and the record named the
+# original while the engine held the copy
+_st = c.get("/api/state").json()
+_n0 = len(_st["items"])
+_flow = next(i["ref"] for i in _st["items"] if i.get("name") == "loan")
+_rate = next(i["ref"] for i in _st["items"] if i.get("name") == "rate")
+_r = c.post("/api/wire", json={"src": _rate, "dst": _flow, "port": 1})
+check("wiring into a table's own variable is refused", _r.status_code == 409,
+      f"{_r.status_code}")
+check("and it says the engine would have copied it",
+      "copy" in _r.json().get("detail", ""), _r.text[:80])
+check("with no extra item left behind",
+      len(c.get("/api/state").json()["items"]) == _n0,
+      f'{_n0} -> {len(c.get("/api/state").json()["items"])}')
+
+
 print(f"\n{'ALL PASS' if not FAILED else 'FAILURES: ' + ', '.join(FAILED)}")
 sys.exit(1 if FAILED else 0)

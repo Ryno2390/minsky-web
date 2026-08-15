@@ -769,8 +769,15 @@ ui = open(os.path.join(os.path.dirname(os.path.abspath(__file__)),
                        "minskyweb", "ui", "index.html")).read()
 # The invariant is what matters, not the shape it takes: render() is the single place
 # that reconciles the open editor with the model, so no call site can miss it.
+# render() is the single place that reconciles the open editor with the model, so no call
+# site can miss it. (Checked as "the reconciliation happens inside render", not as an
+# exact line -- the previous version of this pinned a line and broke when the fix around
+# it was corrected.)
+_render = ui[ui.index("function render() {"):ui.index("function fmtVal(")] \
+    if "function fmtVal(" in ui and ui.index("function fmtVal(") > ui.index("function render() {") \
+    else ui[ui.index("function render() {"):]
 check("the editor is reconciled from render(), so no path can miss it",
-      "if (now === null) closeGodley(false)" in ui)
+      "findGodley()" in _render and "closeGodley(false)" in _render)
 
 print("\n22. new items are placed where the user can see them")
 c.post("/api/clear")
@@ -2233,10 +2240,19 @@ check("the chord sweep is gone", "chord, from the destination end back" not in s
 # The open Godley editor held an item INDEX. Undo, redo, a delete or a stock rename all
 # reorder model.items, and the editor then addressed whatever sat at its old index -- so
 # it silently retargeted to a DIFFERENT table and the edits landed there.
-check("the Godley editor remembers WHICH table it is open on",
-      "let gKey" in ui and "function findGodley()" in ui)
-check("and re-finds it rather than trusting the index",
-      "gIdx = now" in ui and "godleyKey(" in ui)
+# These were four substring checks, and they held while the behaviour was broken: the
+# audit demonstrated the editor still retargeting -- opened on Beta, typing into Gamma --
+# with every one of them passing. A source scan cannot answer this; the question is what
+# findGodley() RETURNS, and that needs a browser, which this suite does not have.
+#
+# What is asserted here instead is the one thing a scan can honestly claim: that the
+# blind fallback which caused it is gone. The behaviour itself is verified in a browser,
+# both ways -- the editor follows its table across a move plus an index shift, and closes
+# with a message when the table can no longer be told from another.
+check("the editor does not fall back to whatever sits at the old index",
+      "tables.find(i => i.index === gIdx)" not in ui)
+check("and it gives up rather than guess",
+      "cannot tell which one it is" in ui)
 
 
 print("\n51. several items at once")

@@ -759,8 +759,14 @@ function render() {
   // than at each call site, so no future path can miss it.
   if (gIdx !== null) {
     const now = findGodley();
-    if (now === null) closeGodley(false);
-    else { gIdx = now; gKey = godleyKey(state.items.find(i => i.index === now)) || gKey; }
+    if (now === null) {
+      closeGodley(false);
+      toast("The table you were editing can no longer be identified, so the editor was "
+            + "closed rather than left pointing at another one.");
+    } else {
+      gIdx = now;
+      gKey = godleyKey(state.items.find(i => i.index === now)) || gKey;
+    }
   }
   // The solver panel was hardcoded, so it claimed epsRel 1e-8 while a loaded model
   // actually carried 0.01 -- Minsky's own default, which produces NaN and reports
@@ -1346,10 +1352,22 @@ function findGodley(){
     i => i.index !== null && String(i.classType).includes("Godley"));
   const exact = tables.find(i => godleyKey(i) === gKey);
   if (exact) return exact.index;
-  // it may have been renamed or moved while the editor was open; fall back to the one
-  // still at the index we were using, but only if it really is a table
-  const atIdx = tables.find(i => i.index === gIdx);
-  return atIdx ? atIdx.index : null;
+
+  // The table may have been renamed or moved while the editor was open, so try each
+  // half of the key on its own -- but ONLY when it picks out exactly one table.
+  //
+  // The previous fallback took whatever now sat at the old index, and then re-keyed from
+  // it: open the editor on Beta, move Beta, delete an item so the indices shift, and the
+  // editor silently became Gamma's. Everything typed after that went into Gamma while
+  // Beta stayed empty.
+  const [title, where] = [gKey.slice(0, gKey.lastIndexOf("@")),
+                          gKey.slice(gKey.lastIndexOf("@") + 1)];
+  const byName = tables.filter(i => (i.name || "") === title);
+  if (byName.length === 1) return byName[0].index;
+  const byPlace = tables.filter(
+    i => `${Math.round(i.x)},${Math.round(i.y)}` === where);
+  if (byPlace.length === 1) return byPlace[0].index;
+  return null;        // cannot tell which one it is: close, rather than edit another
 }
 
 async function openGodley(i){

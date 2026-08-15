@@ -2775,6 +2775,49 @@ if Path(_gw).exists():
     check("with the wires intact",
           len([w for w in _s2["wires"] if not w.get("desync")]) == _w0)
 
+# A group's interior is laid out as its own scope, before the canvas that holds it.
+# Recording "a group carries its members" as a carrier relationship instead collapsed
+# every member onto the group and left the inside exactly as messy as it was.
+_g02 = "/Users/ryneschultz/minsky/examples/GoodwinLinear02.mky"
+if Path(_g02).exists():
+    _s0 = c.post(f"/api/load?path={_g02}").json()
+    _mem0 = {i["ref"]: (i["x"], i["y"]) for i in _s0["items"] if ":" in i["ref"]}
+    check("the example still has a group to arrange", len(_mem0) >= 2, str(len(_mem0)))
+    _r = c.post("/api/layout")
+    check("arranging a model with a group answers 200", _r.status_code == 200,
+          _r.text[:150])
+    _s1 = _r.json()
+    check("it says it went inside the group",
+          _s1.get("layout", {}).get("groups", 0) >= 1, str(_s1.get("layout")))
+    _mem1 = {i["ref"]: (i["x"], i["y"]) for i in _s1["items"] if ":" in i["ref"]}
+    check("and the group's contents were actually rearranged",
+          any(_mem0.get(r) != xy for r, xy in _mem1.items()),
+          "every member sat still, so the interior is as messy as it was")
+    check("no icon was lost from the group", set(_mem0) == set(_mem1),
+          f"{len(_mem0)} -> {len(_mem1)}")
+    check("wires survive arranging a group",
+          len([w for w in _s1["wires"] if not w.get("desync")])
+          == len([w for w in _s0["wires"] if not w.get("desync")]))
+    c.post("/api/undo")
+
+# A Godley table inside a group crashes the engine when the file is saved, so the layout
+# leaves such a group alone rather than tidy it into a prettier version of the same
+# damage. That state cannot be reached from here -- grouping refuses it up front -- so
+# what is checked is the refusal. The layout-side skip stays for files opened from disk,
+# which is where a grouped table can still arrive from.
+c.post("/api/clear")
+c.post("/api/item", json={"kind":"godley","at":[200,200]})
+c.post("/api/item", json={"kind":"parameter","name":"gp","value":1,"at":[260,200]})
+_gr = c.post("/api/group", json={"x0":150,"y0":150,"x1":400,"y1":300})
+check("a table cannot be grouped in the first place", _gr.status_code == 409,
+      f"{_gr.status_code}: grouping a table now succeeds, so Tidy can meet one")
+check("so Tidy never meets a grouped table through the UI",
+      "Godley" in _gr.json().get("detail", ""), _gr.text[:100])
+check("and the layout still guards files opened from disk",
+      "resizeOnContents" in (Path(__file__).parent / "minskyweb/server.py").read_text()
+      and "unsafe" in (Path(__file__).parent / "minskyweb/server.py").read_text())
+c.post("/api/clear")
+
 _ui = (Path(__file__).parent / "minskyweb/ui/index.html").read_text()
 # delimit by the NEXT handler: the body contains `api(..., {method:"POST"});`, so
 # splitting on "});" cut it off after two lines and the checks below always passed

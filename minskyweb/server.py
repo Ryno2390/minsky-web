@@ -1215,13 +1215,12 @@ def _carriers(m):
     would be far worse than a diagram left untidy.
     """
     dx, dy = _PROBE
-    anchors = []
-    for ref, it in _iter_items(m):
-        if ":" in ref:
-            continue
-        if any(k in it.classType() for k in ("Godley", "IntOp")):
-            anchors.append(ref)
-    anchors += [gref for gref, _g, parent in _iter_groups(m) if parent is None]
+    anchors = [ref for ref, it in _iter_items(m)
+               if any(k in it.classType() for k in ("Godley", "IntOp"))]
+    # Groups are deliberately NOT probed. A group does carry its members, but that is
+    # containment, not one glyph, and it is already handled by laying each group out as
+    # its own scope. Recording it here instead made every member map to the group, which
+    # collapsed the interior to a single box and left it exactly as messy as it was.
 
     carried: dict[str, list[str]] = {}
     for ref in anchors:
@@ -1257,35 +1256,45 @@ def _carriers(m):
     return carried
 
 
-def _layout_plan(m):
-    """Work out where everything should go. Returns (moves, report).
+def _scope_of(ref: str) -> str | None:
+    """Which container a ref sits directly in: None for the top level, else a group ref.
 
-    `moves` is [(anchor ref, dx, dy)] -- only anchors are moved, because whatever they
-    carry follows on its own and moving a carried item too would apply the offset twice.
+    "3" -> None, "g0:5" -> "g0", "g0.1:5" -> "g0.1". A group ref names a thing that lives
+    in ITS parent's scope, so "g0.1" is in scope "g0" and "g0" is in the top level.
+    """
+    if ":" in ref:
+        return ref.partition(":")[0]
+    if ref.startswith("g"):
+        head = ref[1:]
+        return f"g{head.rpartition('.')[0]}" if "." in head else None
+    return None
+
+
+def _plan_scope(m, scope, owner):
+    """Lay out one container. Returns (moves, report) for the things directly inside it.
+
+    Called for each group before the top level, so that by the time the outer canvas is
+    arranged each group's box is already the size of its tidied contents.
     """
     from .layout import arrange
 
-    settle_twice()
-    carried = _carriers(m)
-    settle_twice()
-
-    owner = {r: anchor for anchor, rs in carried.items() for r in rs}
-
     def node_of(ref: str) -> str:
-        """The layout box a ref belongs to."""
-        if ref in owner:
-            return owner[ref]
-        if ":" in ref:                      # a group member rides with its group
-            head = ref.partition(":")[0]
-            return node_of(head) if head in owner else head
+        """The layout box a ref belongs to, within this scope."""
+        while ref in owner:
+            ref = owner[ref]
+        while _scope_of(ref) != scope:
+            nxt = _scope_of(ref)
+            if nxt is None:
+                return ref
+            ref = nxt
         return ref
 
-    boxes: dict[str, list[float]] = {}      # key -> [l, t, r, b]
+    boxes: dict[str, list[float]] = {}
     kinds: dict[str, str] = {}
 
     def note(key, l, t, r, b, cls=None):
-        if key in boxes:
-            box = boxes[key]
+        box = boxes.get(key)
+        if box:
             box[0] = min(box[0], l); box[1] = min(box[1], t)
             box[2] = max(box[2], r); box[3] = max(box[3], b)
         else:
@@ -1293,13 +1302,22 @@ def _layout_plan(m):
         if cls:
             kinds[key] = cls
 
+    members = set()
     for ref, it in _iter_items(m):
         key = node_of(ref)
+        if _scope_of(key) != scope:
+            continue
+        members.add(key)
         note(key, it.left(), it.top(), it.right(), it.bottom(),
              it.classType() if key == ref else None)
-    for gref, grp, parent in _iter_groups(m):
-        if parent is None:
-            note(gref, grp.left(), grp.top(), grp.right(), grp.bottom(), "Group")
+    for gref, grp, _parent in _iter_groups(m):
+        if _scope_of(gref) != scope:
+            continue
+        members.add(gref)
+        note(gref, grp.left(), grp.top(), grp.right(), grp.bottom(), "Group")
+
+    if len(members) < 2:
+        return [], dict(boxes=len(members), layers=0, reversed=0, loose=0)
 
     sizes = {k: (v[2] - v[0], v[3] - v[1]) for k, v in boxes.items()}
     edges = []
@@ -1311,14 +1329,100 @@ def _layout_plan(m):
     integrals = {k for k, c in kinds.items() if "IntOp" in c}
     placed, report = arrange(sizes, edges, integrals)
 
+    # A group's contents keep their absolute coordinates, so the tidied block is put back
+    # where the group already was rather than at the canvas origin.
+    ox = oy = 0.0
+    if scope is not None:
+        ox = min(v[0] for v in boxes.values())
+        oy = min(v[1] for v in boxes.values())
+        ox -= min((x for x, _y in placed.values()), default=0.0)
+        oy -= min((y for _x, y in placed.values()), default=0.0)
+
     moves = []
     for key, (nx, ny) in placed.items():
-        l, t = boxes[key][0], boxes[key][1]
-        dx, dy = nx - l, ny - t
+        dx, dy = nx + ox - boxes[key][0], ny + oy - boxes[key][1]
         if abs(dx) > 0.01 or abs(dy) > 0.01:
             moves.append((key, dx, dy))
-    report["carried"] = sum(len(v) for v in carried.values())
     return moves, report
+
+
+def _apply_moves(m, moves):
+    """Move anchors by an offset and report how many actually travelled."""
+    for _key, dx, dy in moves:
+        check_at((dx, dy))
+    before = _all_positions(m)
+    for key, dx, dy in moves:
+        if key not in before:
+            continue
+        x, y = before[key]
+        try:
+            _move_ref(m, key, x + dx, y + dy)
+        except Exception:
+            pass
+    settle_twice()
+    # Judge by the offset achieved, the way a drag does: an anchor can be nudged off the
+    # exact point it was sent to and still have travelled correctly.
+    after = _all_positions(m)
+    placed, refused = 0, []
+    for key, dx, dy in moves:
+        if key not in before or key not in after:
+            continue
+        if (abs(after[key][0] - before[key][0] - dx) < 1.0
+                and abs(after[key][1] - before[key][1] - dy) < 1.0):
+            placed += 1
+        else:
+            refused.append(key)
+    return placed, refused
+
+
+def _layout_plan(m):
+    """Arrange every container, innermost first. Returns (moved, report, refused).
+
+    Group interiors are laid out before the canvas that holds them, so the outer pass
+    sees each group at the size of its tidied contents rather than its old one.
+    """
+    settle_twice()
+    carried = _carriers(m)
+    settle_twice()
+    owner = {r: anchor for anchor, rs in carried.items() for r in rs}
+
+    # A Godley table inside a group crashes the engine on save, so a group holding one is
+    # left exactly as it is -- tidying it would only make the damage prettier.
+    unsafe = set()
+    for gref, grp, _parent in _iter_groups(m):
+        for i in range(len(grp.items)):
+            if "Godley" in grp.items[i].classType():
+                unsafe.add(gref)
+                break
+
+    scopes = [g for g, _grp, _p in _iter_groups(m) if g not in unsafe]
+    scopes.sort(key=lambda g: -g.count("."))     # deepest first
+    scopes.append(None)                          # the top level, last
+
+    total, refused = 0, []
+    report = dict(layers=0, reversed=0, loose=0, groups=0)
+    for scope in scopes:
+        moves, rep = _plan_scope(m, scope, owner)
+        if not moves:
+            continue
+        n, bad = _apply_moves(m, moves)
+        total += n
+        refused += bad
+        if scope is None:
+            report.update(layers=rep.get("layers", 0),
+                          reversed=rep.get("reversed", 0),
+                          loose=rep.get("loose", 0))
+        else:
+            report["groups"] += 1
+            try:
+                _group_at(m, scope[1:]).resizeOnContents()
+            except Exception:
+                pass
+            settle_twice()
+
+    report["carried"] = sum(len(v) for v in carried.values())
+    report["skipped"] = len(unsafe)
+    return total, report, refused
 
 
 def snapshot() -> dict[str, Any]:
@@ -1699,48 +1803,14 @@ def create_app() -> FastAPI:
         require_idle()
         await call(checkpoint)
 
-        def _go():
-            m = engine()
-            moves, report = _layout_plan(m.minsky)
-            if not moves:
-                return 0, report, []
-
-            for _key, dx, dy in moves:
-                check_at((dx, dy))
-
-            before = _all_positions(m.minsky)
-            for key, dx, dy in moves:
-                if key not in before:
-                    continue
-                x, y = before[key]
-                try:
-                    _move_ref(m.minsky, key, x + dx, y + dy)
-                except Exception:
-                    pass
-            settle_twice()
-
-            # Judge by the offset achieved, the same way a drag does: an anchor can be
-            # nudged off the exact point it was sent to and still have travelled right.
-            after = _all_positions(m.minsky)
-            placed, refused = 0, []
-            for key, dx, dy in moves:
-                if key not in before or key not in after:
-                    continue
-                gx = after[key][0] - before[key][0]
-                gy = after[key][1] - before[key][1]
-                if abs(gx - dx) < 1.0 and abs(gy - dy) < 1.0:
-                    placed += 1
-                else:
-                    refused.append(key)
-            return placed, report, refused
-
-        placed, report, refused = await call(_go)
-        if placed == 0 and not report.get("boxes"):
-            rollback()
-            raise HTTPException(422, "there is nothing on the canvas to arrange")
+        placed, report, refused = await call(lambda: _layout_plan(engine().minsky))
         if placed == 0:
             rollback()
-            raise HTTPException(409, "nothing could be moved; the canvas is unchanged")
+            n = await call(lambda: sum(1 for _r, _i in _iter_items(engine().minsky)))
+            raise HTTPException(
+                422 if n < 2 else 409,
+                "there is nothing on the canvas to arrange" if n < 2
+                else "nothing could be moved; the canvas is unchanged")
 
         # A rearrangement must not change what is wired to what. If our record and the
         # engine's have drifted, say so and put it back rather than save a wrong model.
@@ -1756,10 +1826,21 @@ def create_app() -> FastAPI:
         out["layout"] = dict(moved=placed, layers=report.get("layers", 0),
                              feedback=report.get("reversed", 0),
                              carried=report.get("carried", 0),
-                             loose=report.get("loose", 0))
+                             loose=report.get("loose", 0),
+                             groups=report.get("groups", 0),
+                             skipped=report.get("skipped", 0))
+        notes = []
         if refused:
-            out["note"] = (f"arranged {placed} of {placed + len(refused)} icons; "
-                           f"{len(refused)} would not move")
+            notes.append(f"arranged {placed} of {placed + len(refused)} icons; "
+                         f"{len(refused)} would not move")
+        if report.get("skipped"):
+            # Not a failure to hide: the user can see the group is still a mess, and
+            # without the reason they would just press Tidy again.
+            notes.append(
+                f"{report['skipped']} group(s) left alone because they hold a Godley "
+                f"table, which crashes the engine when a grouped table is saved")
+        if notes:
+            out["note"] = ". ".join(notes)
         return out
 
     @app.post("/api/items/move")

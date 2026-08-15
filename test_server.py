@@ -2673,6 +2673,121 @@ check("Delete still refuses to reach past an overlay",
       "if (modalOpen()) return;" in ui)
 
 
+print("\n57. arranging the canvas")
+# The engine is the only thing that knows which items travel together, and it will not
+# volunteer it: an IntOp carries its integral variable, a Godley table carries the stocks
+# and flows it generates, a group carries its members. Moving BOTH an anchor and what it
+# carries applies the offset twice.
+from pathlib import Path
+from minskyweb.layout import arrange
+
+# --- the algorithm, without an engine ---
+_sizes = {"a": (40, 20), "b": (40, 20), "c": (40, 20)}
+_pos, _rep = arrange(_sizes, [("a", "b"), ("b", "c")])
+check("a chain is laid out in one layer per link", _rep["layers"] == 3, str(_rep))
+check("and runs left to right", _pos["a"][0] < _pos["b"][0] < _pos["c"][0],
+      str({k: round(v[0]) for k, v in _pos.items()}))
+
+# A cycle must not hang or lose a box, and where it is cut decides how deep the result
+# is: cutting at the integral's OUTPUT turned a 9-layer model into 17.
+_cyc = {"i": (40, 20), "x": (40, 20), "y": (40, 20)}
+_p1, _r1 = arrange(_cyc, [("i", "x"), ("x", "y"), ("y", "i")])
+check("a feedback loop still places every box", len(_p1) == 3, str(_p1))
+_p2, _r2 = arrange(_cyc, [("i", "x"), ("x", "y"), ("y", "i")], sources=["i"])
+check("naming the integral a source puts it leftmost",
+      _p2["i"][0] == min(v[0] for v in _p2.values()), str(_p2))
+check("so the edge that closes the loop points back leftward",
+      _p2["y"][0] > _p2["i"][0], str(_p2))
+
+_ovl = {"p": (60, 30), "q": (60, 30), "r": (60, 30)}
+_po, _ = arrange(_ovl, [("p", "q"), ("p", "r")])
+_boxes = [(_po[k][0], _po[k][1], _po[k][0] + _ovl[k][0], _po[k][1] + _ovl[k][1])
+          for k in _po]
+check("boxes placed in the same layer never overlap",
+      not any(a[0] < b[2] and a[2] > b[0] and a[1] < b[3] and a[3] > b[1]
+              for i, a in enumerate(_boxes) for b in _boxes[i + 1:]),
+      str(_boxes))
+
+_lp, _lr = arrange({"solo": (30, 30), "a": (30, 30), "b": (30, 30)}, [("a", "b")])
+check("an unwired icon is parked, not banked into layer 0",
+      _lr["loose"] == 1 and "solo" in _lp, str(_lr))
+
+# --- through the server, on a model with a real feedback loop ---
+c.post("/api/clear")
+check("arranging an empty canvas says so, and does not 500",
+      c.post("/api/layout").status_code in (409, 422),
+      str(c.post("/api/layout").status_code))
+
+_gw = "/Users/ryneschultz/minsky/examples/GoodwinLinear.mky"
+if Path(_gw).exists():
+    _s0 = c.post(f"/api/load?path={_gw}").json()
+    _before = {i["ref"]: (i["x"], i["y"]) for i in _s0["items"]}
+    _w0 = len([w for w in _s0["wires"] if not w.get("desync")])
+    _r = c.post("/api/layout")
+    check("arranging answers 200", _r.status_code == 200, _r.text[:120])
+    _s1 = _r.json()
+    check("it reports what it did", _s1.get("layout", {}).get("moved", 0) > 0,
+          str(_s1.get("layout")))
+    # Depth is the regression this guards. Letting a plain DFS pick the feedback arc set
+    # cut GoodwinLinear at the integral's OUTPUT and laid it out in 17 layers, 2110px
+    # wide for 22 icons. Cutting at the derivative gives 8.
+    check("the loop is cut at the derivative, not the integral's output",
+          _s1.get("layout", {}).get("layers", 99) <= 10,
+          f'{_s1.get("layout", {}).get("layers")} layers; a blind cut gives 17')
+    check("every icon is still there", len(_s1["items"]) == len(_s0["items"]),
+          f'{len(_s0["items"])} -> {len(_s1["items"])}')
+    check("no wire was gained or lost",
+          len([w for w in _s1["wires"] if not w.get("desync")]) == _w0,
+          f'{_w0} -> {len([w for w in _s1["wires"] if not w.get("desync")])}')
+    check("and our record still agrees with the engine",
+          not any(w.get("desync") for w in _s1["wires"]),
+          str([w for w in _s1["wires"] if w.get("desync")][:1]))
+    check("something actually moved",
+          any(_before.get(i["ref"]) != (i["x"], i["y"]) for i in _s1["items"]))
+
+    # An IntOp and its integral variable are drawn as ONE glyph, and the engine carries
+    # the variable when the operator moves. Move both and the offset lands twice, which
+    # flings them to opposite ends of the canvas -- so the test is that every integral
+    # variable still has an operator beside it, not that a particular pair is unchanged.
+    # (Pairing them by proximity does not work before a tidy: on GoodwinLinear the
+    # nearest integral variable to IntOp[16] is K, at 7px, and its own is WageRate at 66.)
+    def _orphan_integrals(state, reach):
+        ops = [i for i in state["items"] if i["classType"] == "IntOp"]
+        vs = [i for i in state["items"] if i["classType"] == "Variable:integral"]
+        return [v["ref"] for v in vs
+                if not any(abs(o["x"] - v["x"]) < reach and abs(o["y"] - v["y"]) < reach
+                           for o in ops)]
+    check("every integral variable keeps an operator beside it",
+          not _orphan_integrals(_s1, 150),
+          f'adrift: {_orphan_integrals(_s1, 150)}')
+    check("and the canvas is wide enough for that to mean something",
+          max(i["x"] for i in _s1["items"]) - min(i["x"] for i in _s1["items"]) > 300,
+          "the model is too small for the previous check to prove anything")
+
+    check("arranging is one undo step",
+          c.post("/api/undo").status_code == 200)
+    _s2 = c.get("/api/state").json()
+    check("and undo puts every icon back exactly",
+          all(abs(_before[i["ref"]][0] - i["x"]) < 0.5 and
+              abs(_before[i["ref"]][1] - i["y"]) < 0.5
+              for i in _s2["items"] if i["ref"] in _before),
+          "at least one icon did not return")
+    check("with the wires intact",
+          len([w for w in _s2["wires"] if not w.get("desync")]) == _w0)
+
+_ui = (Path(__file__).parent / "minskyweb/ui/index.html").read_text()
+# delimit by the NEXT handler: the body contains `api(..., {method:"POST"});`, so
+# splitting on "});" cut it off after two lines and the checks below always passed
+_tidy_body = _ui.split('$("#tidy").onclick')[1].split('$("#del").onclick')[0]
+check("the canvas is re-fitted after arranging, since every icon moved",
+      "fitView()" in _tidy_body,
+      "Tidy leaves the viewport looking at empty canvas")
+check("and the selection is dropped, since it points at new places",
+      "clearSelection()" in _tidy_body)
+check("the button says it is working, since a big model takes a moment",
+      "disabled = true" in _tidy_body and "finally" in _tidy_body)
+
+
 # Whatever any section forgot: the suite must not leave files among the user's models.
 # Minsky renames the old file to "<name>.mky;1" on every save, so both go.
 _left = [f for f in SAVE_DIR.iterdir()

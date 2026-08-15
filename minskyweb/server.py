@@ -1159,6 +1159,168 @@ def live_value_ids() -> set[str]:
     return out
 
 
+# ------------------------------------------------------------------------ auto-layout
+
+#: A probe offset no item can land on by coincidence, and small enough that the whole
+#: model stays inside COORD_LIMIT while it is displaced.
+_PROBE = (9973.0, 7919.0)
+
+
+def _all_positions(m):
+    """Every item AND group, by ref, as (x, y)."""
+    pos = {ref: (it.x(), it.y()) for ref, it in _iter_items(m)}
+    for gref, grp, _parent in _iter_groups(m):
+        pos[gref] = (grp.x(), grp.y())
+    return pos
+
+
+def _move_ref(m, ref: str, x: float, y: float):
+    """moveTo for an item ref, a group-member ref, or a group ref."""
+    if ref.startswith("g") and ":" not in ref:
+        _group_at(m, ref[1:]).moveTo(x, y)
+    else:
+        _resolve(m, ref).moveTo(x, y)
+
+
+def settle_twice():
+    """Settle until the geometry stops changing.
+
+    One pass is not enough, and that is measured rather than assumed: moving a Godley
+    table in LoanableFunds changed nothing on the first `settle()` and moved 16 of the
+    table's variables on the SECOND. A layout that settled once read the old positions
+    back and concluded its own moves had failed.
+    """
+    settle()
+    settle()
+
+
+def _carriers(m):
+    """Which refs travel when another is moved: {anchor ref: [carried refs]}.
+
+    Measured by moving each candidate and watching, because the engine is the only thing
+    that knows and it will not say otherwise:
+
+      * An IntOp carries its integral variable -- they are drawn as one glyph.
+      * A Godley table carries the stock and flow variables it generates.
+      * A group carries its members.
+
+    Guessing this from the document does not work. The obvious rule for a table -- the
+    variable's name appears in the table's cells and its icon is drawn on the table's box
+    -- finds 13 of the 43 that the engine actually carries, because column 0 holds a
+    human-readable row DESCRIPTION ("Hire workers (C)") and not the flow variable's name
+    ("C_W"). Position alone is no better: it over-selects by 10 on one LoanableFunds
+    table, whose box happens to sit under icons it does not own.
+
+    The probe restores what it moved and verifies the restoration; a model left displaced
+    would be far worse than a diagram left untidy.
+    """
+    dx, dy = _PROBE
+    anchors = []
+    for ref, it in _iter_items(m):
+        if ":" in ref:
+            continue
+        if any(k in it.classType() for k in ("Godley", "IntOp")):
+            anchors.append(ref)
+    anchors += [gref for gref, _g, parent in _iter_groups(m) if parent is None]
+
+    carried: dict[str, list[str]] = {}
+    for ref in anchors:
+        before = _all_positions(m)
+        if ref not in before:
+            continue
+        ax, ay = before[ref]
+        try:
+            _move_ref(m, ref, ax + dx, ay + dy)
+        except Exception:
+            continue
+        settle_twice()
+        after = _all_positions(m)
+        carried[ref] = [
+            r for r in before
+            if r != ref and r in after
+            and abs(after[r][0] - before[r][0] - dx) < 0.5
+            and abs(after[r][1] - before[r][1] - dy) < 0.5
+        ]
+        try:
+            _move_ref(m, ref, ax, ay)
+        except Exception:
+            pass
+        settle_twice()
+        back = _all_positions(m)
+        stray = [r for r in before if r in back
+                 and (abs(back[r][0] - before[r][0]) > 0.5
+                      or abs(back[r][1] - before[r][1]) > 0.5)]
+        if stray:
+            raise HTTPException(
+                500, f"could not put the model back after measuring {ref}: "
+                     f"{len(stray)} item(s) stayed moved. Nothing was rearranged.")
+    return carried
+
+
+def _layout_plan(m):
+    """Work out where everything should go. Returns (moves, report).
+
+    `moves` is [(anchor ref, dx, dy)] -- only anchors are moved, because whatever they
+    carry follows on its own and moving a carried item too would apply the offset twice.
+    """
+    from .layout import arrange
+
+    settle_twice()
+    carried = _carriers(m)
+    settle_twice()
+
+    owner = {r: anchor for anchor, rs in carried.items() for r in rs}
+
+    def node_of(ref: str) -> str:
+        """The layout box a ref belongs to."""
+        if ref in owner:
+            return owner[ref]
+        if ":" in ref:                      # a group member rides with its group
+            head = ref.partition(":")[0]
+            return node_of(head) if head in owner else head
+        return ref
+
+    boxes: dict[str, list[float]] = {}      # key -> [l, t, r, b]
+    kinds: dict[str, str] = {}
+
+    def note(key, l, t, r, b, cls=None):
+        if key in boxes:
+            box = boxes[key]
+            box[0] = min(box[0], l); box[1] = min(box[1], t)
+            box[2] = max(box[2], r); box[3] = max(box[3], b)
+        else:
+            boxes[key] = [l, t, r, b]
+        if cls:
+            kinds[key] = cls
+
+    for ref, it in _iter_items(m):
+        key = node_of(ref)
+        note(key, it.left(), it.top(), it.right(), it.bottom(),
+             it.classType() if key == ref else None)
+    for gref, grp, parent in _iter_groups(m):
+        if parent is None:
+            note(gref, grp.left(), grp.top(), grp.right(), grp.bottom(), "Group")
+
+    sizes = {k: (v[2] - v[0], v[3] - v[1]) for k, v in boxes.items()}
+    edges = []
+    for si, _sp, di, _dp in _WIRES:
+        a, b = node_of(si), node_of(di)
+        if a in sizes and b in sizes:
+            edges.append((a, b))
+
+    integrals = {k for k, c in kinds.items() if "IntOp" in c}
+    placed, report = arrange(sizes, edges, integrals)
+
+    moves = []
+    for key, (nx, ny) in placed.items():
+        l, t = boxes[key][0], boxes[key][1]
+        dx, dy = nx - l, ny - t
+        if abs(dx) > 0.01 or abs(dy) > 0.01:
+            moves.append((key, dx, dy))
+    report["carried"] = sum(len(v) for v in carried.values())
+    return moves, report
+
+
 def snapshot() -> dict[str, Any]:
     """Everything a client needs to draw the model."""
     m = engine().minsky
@@ -1525,6 +1687,80 @@ def create_app() -> FastAPI:
         mark_dirty()
         # indices shift after a delete -- the client must re-render from this snapshot
         return await call(snapshot)
+
+    @app.post("/api/layout")
+    async def tidy():
+        """Arrange the canvas left to right, as ONE undo step.
+
+        Only anchors are moved. A Godley table, an integral and a group each carry other
+        items with them, so moving both the anchor and what it carries applies the offset
+        twice -- and which items those are is measured from the engine, never guessed.
+        """
+        require_idle()
+        await call(checkpoint)
+
+        def _go():
+            m = engine()
+            moves, report = _layout_plan(m.minsky)
+            if not moves:
+                return 0, report, []
+
+            for _key, dx, dy in moves:
+                check_at((dx, dy))
+
+            before = _all_positions(m.minsky)
+            for key, dx, dy in moves:
+                if key not in before:
+                    continue
+                x, y = before[key]
+                try:
+                    _move_ref(m.minsky, key, x + dx, y + dy)
+                except Exception:
+                    pass
+            settle_twice()
+
+            # Judge by the offset achieved, the same way a drag does: an anchor can be
+            # nudged off the exact point it was sent to and still have travelled right.
+            after = _all_positions(m.minsky)
+            placed, refused = 0, []
+            for key, dx, dy in moves:
+                if key not in before or key not in after:
+                    continue
+                gx = after[key][0] - before[key][0]
+                gy = after[key][1] - before[key][1]
+                if abs(gx - dx) < 1.0 and abs(gy - dy) < 1.0:
+                    placed += 1
+                else:
+                    refused.append(key)
+            return placed, report, refused
+
+        placed, report, refused = await call(_go)
+        if placed == 0 and not report.get("boxes"):
+            rollback()
+            raise HTTPException(422, "there is nothing on the canvas to arrange")
+        if placed == 0:
+            rollback()
+            raise HTTPException(409, "nothing could be moved; the canvas is unchanged")
+
+        # A rearrangement must not change what is wired to what. If our record and the
+        # engine's have drifted, say so and put it back rather than save a wrong model.
+        n_engine = await call(lambda: _engine_wire_count(engine().minsky))
+        if n_engine != len(_WIRES):
+            rollback()
+            raise HTTPException(
+                500, f"arranging changed the wiring ({len(_WIRES)} tracked, {n_engine} "
+                     f"in the model). The canvas has been put back.")
+
+        mark_dirty()
+        out = await call(snapshot)
+        out["layout"] = dict(moved=placed, layers=report.get("layers", 0),
+                             feedback=report.get("reversed", 0),
+                             carried=report.get("carried", 0),
+                             loose=report.get("loose", 0))
+        if refused:
+            out["note"] = (f"arranged {placed} of {placed + len(refused)} icons; "
+                           f"{len(refused)} would not move")
+        return out
 
     @app.post("/api/items/move")
     async def move_items(spec: NudgeSpec):

@@ -235,6 +235,7 @@ svg#board.panning{cursor:grabbing}
   <button id="saveas">Save As…</button>
   <button id="download" title="Download a copy to your computer">↓</button>
   <button id="clear">Clear</button>
+  <button id="tidy" title="Arrange the canvas left to right (⌘L)">⌗ Tidy</button>
   <button id="del" class="danger" disabled>Delete</button>
   <span id="fname" style="font-size:12.5px;color:var(--ink-3);margin-left:4px"></span>
   <div class="spacer"></div>
@@ -991,6 +992,23 @@ $("#clear").onclick = guard(async () => {
   state = await api("/clear", {method:"POST"});
   clearSelection(); series = {}; tSeries = []; colors = {}; drawPlot(); render();
 });
+$("#tidy").onclick = guard(async () => {
+  const b = $("#tidy"); const was = b.textContent;
+  b.disabled = true; b.textContent = "Arranging…";
+  try {
+    state = await api("/layout", {method:"POST"});
+  } finally {
+    b.disabled = false; b.textContent = was;
+  }
+  // Every icon has moved, so a ref-keyed selection now points at the right items but the
+  // wrong places on screen, and the old viewport is looking at empty canvas.
+  clearSelection(); render(); fitView();
+  const L = state.layout || {};
+  toast(state.note || `Arranged ${L.moved} icons into ${L.layers} layers`
+        + (L.feedback ? `, ${L.feedback} feedback ${L.feedback === 1 ? "edge" : "edges"} `
+                        + "drawn returning" : "")
+        + ". Undo to put it back.", !state.note);
+});
 $("#del").onclick = guard(async () => {
   if (selWire !== null) {
     state = await api(`/wire/${selWire}`, {method:"DELETE"});
@@ -1688,6 +1706,11 @@ addEventListener("keydown", e => {
     // too late
     if (dialogOpen()) return;
     (e.shiftKey ? $("#saveas") : $("#save")).click();
+  }
+  if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "l") {
+    e.preventDefault();
+    if (dialogOpen() || modalOpen()) return;
+    $("#tidy").click();
   }
 });
 // leaving with unsaved edits should not be silent

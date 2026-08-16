@@ -3839,6 +3839,66 @@ check("and the same file can be picked twice",
       "a file input does not fire change for the same file twice")
 
 
+print("\n70. nothing on screen is light by accident")
+_ui = (Path(__file__).parent / "minskyweb/ui/index.html").read_text()
+_css = _ui.split("</style>")[0]
+
+# The one declaration that reaches the NATIVE widgets -- scrollbars, number spinners,
+# the checkbox, the file button, autofill. No rule on our own elements can style those.
+check("the document declares itself dark", "color-scheme:dark" in _css,
+      "native widgets keep their light defaults whatever else is styled")
+
+check("every text control has a dark ground by default",
+      "input,select,textarea{" in _css and "background:var(--bg)" in
+      _css.split("input,select,textarea{")[1].split("}")[0],
+      "anything added later comes out white")
+# the selector names ::placeholder twice, so splitting on it lands mid-selector
+_ph = re.findall(r"[^{}\n]*::placeholder[^{}]*\{([^}]*)\}", _css)
+check("placeholders are legible rather than invisible",
+      _ph and any("--ink-3" in r for r in _ph), str(_ph)[:110])
+check("focus is visible without a browser outline",
+      "input:focus,select:focus,textarea:focus" in _css)
+
+# Chrome paints autofilled fields pale yellow, and background alone does not override it
+check("autofill cannot repaint a field light",
+      "-webkit-autofill" in _css and "box-shadow:0 0 0 1000px var(--bg) inset" in _css,
+      "Chrome ignores background on an autofilled input")
+
+check("scrollbars are styled, not left to the browser",
+      "::-webkit-scrollbar-thumb" in _css and "::-webkit-scrollbar-track" in _css)
+check("the file button is styled too",
+      "::file-selector-button" in _css,
+      "it renders as a native light button otherwise")
+
+# accent-color tints the filled part and the thumb; the rest of the track stays light
+check("a slider's track is darkened, not just its accent",
+      "::-webkit-slider-runnable-track" in _css,
+      "accent-color leaves the unfilled track at the browser's light default")
+check("and its thumb is restyled with it",
+      "::-webkit-slider-thumb" in _css,
+      "-webkit-appearance:none on the input drops the native thumb as well")
+check("with a Firefox equivalent", "::-moz-range-track" in _css)
+
+check("the parameter value box is not left at the default",
+      "background:var(--bg)" in
+      _css.split(".parm input[type=number]{")[1].split("}")[0],
+      "it was the one white control on the panel")
+
+# The equations page is a deliberate light document when that theme is chosen, so its
+# own scrollbar should match the page and not the app.
+# there is more than one .eqbody rule, so look at all of them
+_eb = re.findall(r"\.eqbody\{([^}]*)\}", _css)
+check("a light document gets a light scrollbar",
+      any("color-scheme:light" in r for r in _eb), str(_eb)[:110])
+
+# nothing should be painting a control white
+import re as _re
+_white = [m for m in _re.findall(r"[^{}]*\{[^}]*\}", _css)
+          if _re.search(r"\b(input|select|textarea)\b", m.split("{")[0])
+          and _re.search(r"background(-color)?\s*:\s*(#fff|#ffffff|white)\b", m, _re.I)]
+check("no control is painted white anywhere", not _white, str(_white)[:140])
+
+
 # Whatever any section forgot: the suite must not leave files among the user's models.
 # Minsky renames the old file to "<name>.mky;1" on every save, so both go.
 _left = [f for f in SAVE_DIR.iterdir()

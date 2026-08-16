@@ -14,7 +14,57 @@
   --plot:#2BB7A8; --grp:#9B7CF5;
   --mono:"SF Mono","JetBrains Mono",ui-monospace,Menlo,Consolas,monospace;
 }
+/* Tell the browser this is a dark document. That is what makes the NATIVE widgets dark
+   -- scrollbars, number spinners, the checkbox, the file button, autofill -- none of
+   which CSS on our own elements can reach. */
+:root{color-scheme:dark}
+
 *{box-sizing:border-box}
+
+/* Every text control, so nothing added later comes out white by default. The specific
+   rules below (.field, .addform, .gtable) are more specific and still win. */
+input,select,textarea{
+  color:var(--ink);background:var(--bg);border:1px solid var(--line);
+  border-radius:6px;padding:4px 7px;font:inherit;font-size:12.5px}
+input:focus,select:focus,textarea:focus{outline:none;border-color:var(--accent)}
+input::placeholder,textarea::placeholder{color:var(--ink-3);opacity:1}
+/* controls that are not boxes: let them be themselves, tinted */
+input[type=checkbox],input[type=radio]{background:none;border:0;padding:0;width:auto;
+  accent-color:var(--accent)}
+/* accent-color tints the FILLED part and the thumb but leaves the rest of the track at
+   the browser's light default, which is then the brightest thing on the panel. Styling
+   the track means styling the thumb too: -webkit-appearance:none on the input drops the
+   native thumb along with the native track. */
+input[type=range]{background:none;border:0;padding:0;accent-color:var(--par);
+  -webkit-appearance:none;appearance:none;height:16px}
+input[type=range]::-webkit-slider-runnable-track{height:4px;border-radius:3px;
+  background:var(--line)}
+input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;appearance:none;
+  width:13px;height:13px;border-radius:50%;background:var(--par);
+  border:2px solid var(--panel);margin-top:-5px}
+input[type=range]::-moz-range-track{height:4px;border-radius:3px;background:var(--line)}
+input[type=range]::-moz-range-progress{height:4px;border-radius:3px;background:var(--par)}
+input[type=range]::-moz-range-thumb{width:11px;height:11px;border-radius:50%;
+  background:var(--par);border:2px solid var(--panel)}
+input[type=range]:focus-visible::-webkit-slider-thumb{box-shadow:0 0 0 3px var(--accent-dim)}
+input[type=file]{background:none;border:0;padding:0;color:var(--ink-2)}
+input[type=file]::file-selector-button{font:inherit;font-size:12px;color:var(--ink);
+  background:var(--panel-2);border:1px solid var(--line);border-radius:6px;
+  padding:4px 9px;margin-right:8px;cursor:pointer}
+input[type=file]::file-selector-button:hover{border-color:var(--line-2)}
+/* Chrome paints autofilled fields a pale yellow that no background rule overrides */
+input:-webkit-autofill,input:-webkit-autofill:focus{
+  -webkit-text-fill-color:var(--ink);
+  box-shadow:0 0 0 1000px var(--bg) inset;
+  caret-color:var(--ink)}
+
+/* Scrollbars. color-scheme already darkens the native ones; this makes them ours. */
+::-webkit-scrollbar{width:11px;height:11px}
+::-webkit-scrollbar-track{background:transparent}
+::-webkit-scrollbar-thumb{background:var(--line-2);border-radius:7px;
+  border:2px solid var(--bg);background-clip:padding-box}
+::-webkit-scrollbar-thumb:hover{background:var(--ink-3);background-clip:padding-box}
+::-webkit-scrollbar-corner{background:transparent}
 html,body{height:100%;margin:0}
 body{background:var(--bg);color:var(--ink);
   font:14px/1.5 -apple-system,BlinkMacSystemFont,"Inter","Segoe UI",sans-serif;
@@ -180,7 +230,8 @@ svg#board.panning{cursor:grabbing}
    them matches the background baked into the image rather than framing it. */
 .eqbody{flex:1;min-height:0;overflow:auto;background:#fff;border-radius:0 0 12px 12px;
   padding:20px}
-.eqbody.dark{background:#0E1113}
+.eqbody{color-scheme:light}
+.eqbody.dark{background:#0E1113;color-scheme:dark}
 .toggle2{display:inline-flex;border:1px solid var(--line);border-radius:7px;overflow:hidden}
 .toggle2 .gbtn{border:0;border-radius:0}
 .toggle2 .gbtn+.gbtn{border-left:1px solid var(--line)}
@@ -219,7 +270,9 @@ svg#board.panning{cursor:grabbing}
 .parm .top{display:flex;justify-content:space-between;align-items:center;gap:8px}
 .parm .nm{font-size:12.5px;color:var(--ink);overflow:hidden;text-overflow:ellipsis;
   white-space:nowrap}
-.parm input[type=number]{width:82px;text-align:right;font-size:12px;padding:2px 5px}
+.parm input[type=number]{width:82px;text-align:right;font-size:12px;padding:2px 6px;
+  font-family:var(--mono);color:var(--ink);background:var(--bg);
+  border:1px solid var(--line);border-radius:5px}
 .parm input[type=range]{width:100%;margin-top:5px;accent-color:var(--par)}
 .row{display:flex;justify-content:space-between;align-items:center;gap:8px;
   padding:4px 6px;border-radius:5px;font-family:var(--mono);font-size:12px}

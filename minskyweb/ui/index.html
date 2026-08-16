@@ -159,6 +159,28 @@ svg#board.panning{cursor:grabbing}
    item appeared to do nothing, because everything it changed was off screen. */
 #series{max-height:27vh;overflow-y:auto}
 #parms{max-height:26vh;overflow-y:auto;margin-bottom:4px}
+.ppanel{max-width:min(1500px,96vw);width:96vw;height:92vh;display:flex;flex-direction:column}
+.pgrid{flex:1;min-height:0;overflow-y:auto;display:grid;gap:12px;padding:12px;
+  grid-template-columns:repeat(var(--pcols,2),minmax(0,1fr));align-content:start}
+.pane{background:var(--bg);border:1px solid var(--line);border-radius:9px;
+  display:flex;flex-direction:column;min-width:0;overflow:hidden}
+.pane .phead{display:flex;align-items:center;gap:8px;padding:7px 10px;
+  border-bottom:1px solid var(--line);font-size:12px;color:var(--ink-2)}
+.pane .phead .ptitle{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.pane .phead .spacer{flex:1}
+.pane .pbtn{font-size:11px;padding:2px 7px;border-radius:5px;border:1px solid var(--line);
+  background:var(--panel);color:var(--ink-3);cursor:pointer}
+.pane .pbtn:hover{color:var(--ink)}
+.pane canvas{flex:1;width:100%;min-height:0;display:block}
+.pane .legend{display:flex;flex-wrap:wrap;gap:9px;padding:5px 10px 8px;font-size:11px;
+  color:var(--ink-3)}
+.pane .legend i{display:inline-block;width:9px;height:2.5px;vertical-align:middle;
+  margin-right:4px}
+/* Enlarge: one pane takes the grid, the rest step aside. */
+.pgrid.focused{grid-template-columns:1fr}
+.pgrid.focused .pane{display:none}
+.pgrid.focused .pane.focus{display:flex;height:calc(92vh - 90px)}
+.pane{height:var(--paneh,300px)}
 .parm{padding:5px 4px 7px;border-bottom:1px solid var(--line)}
 .parm:last-child{border-bottom:none}
 .parm .top{display:flex;justify-content:space-between;align-items:center;gap:8px}
@@ -302,6 +324,18 @@ svg#board.panning{cursor:grabbing}
     <button data-exp="anim">Record the model running…</button>
   </div>
 
+  <div class="gwrap" id="pwrap"><div class="gpanel ppanel">
+    <div class="ghead"><b>Plots</b>
+      <span id="pcount" style="font-size:12px;color:var(--ink-3)"></span>
+      <div class="spacer"></div>
+      <span style="font-size:11.5px;color:var(--ink-3)">columns</span>
+      <button class="gbtn pcol" data-col="1">1</button>
+      <button class="gbtn pcol" data-col="2">2</button>
+      <button class="gbtn pcol" data-col="3">3</button>
+      <button class="gbtn" id="pclose">Close</button></div>
+    <div id="pgrid" class="pgrid"></div>
+  </div></div>
+
   <div class="gwrap" id="animwrap"><div class="gpanel" style="max-width:430px">
     <div class="ghead"><b>Record the model running</b>
       <div class="spacer"></div><button class="gbtn" id="anim-cancel">Cancel</button></div>
@@ -327,6 +361,7 @@ svg#board.panning{cursor:grabbing}
   </div></div>
   <button id="clear">Clear</button>
   <button id="tidy" title="Arrange the canvas left to right (⌘L)">⌗ Tidy</button>
+  <button id="plots" title="Every plot in the model (⌘P)">◫ Plots</button>
   <button id="del" class="danger" disabled>Delete</button>
   <span id="fname" style="font-size:12.5px;color:var(--ink-3);margin-left:4px"></span>
   <div class="spacer"></div>
@@ -622,7 +657,7 @@ function clearSelection(){ selSet = new Set(); sel = null; selWire = null; selGr
 // of these: it is an editor, and blocking undo inside it left a cell edit that could not
 // be taken back at all, because the overlay also covers the Undo button.
 function modalOpen(){
-  return ["#cfwrap", "#sawrap", "#fwrap", "#gwrap", "#animwrap"].some(
+  return ["#cfwrap", "#sawrap", "#fwrap", "#gwrap", "#animwrap", "#pwrap"].some(
     id => $(id) && $(id).classList.contains("open"));
 }
 function dialogOpen(){
@@ -1560,40 +1595,86 @@ board.addEventListener("pointerup", guard(async e => {
 }));
 
 /* ---------- plot ---------- */
-function drawPlot(){
-  const cv = $("#plot"), dpr = devicePixelRatio || 1;
+// One painter for every chart on screen: the small pane in the sidebar, and each pane in
+// the plots workspace. A spec says WHAT to draw, so the same code serves a time series,
+// a two-axis plot and a phase portrait.
+//   keys  : valueIds on the left axis
+//   right : valueIds on the right axis, scaled independently
+//   x     : a valueId to plot against instead of time -- a phase portrait
+function paintPlot(cv, spec){
+  const dpr = devicePixelRatio || 1;
   const w = cv.clientWidth, h = cv.clientHeight;
+  if (!w || !h) return;
   cv.width = w*dpr; cv.height = h*dpr;
   const g = cv.getContext("2d"); g.scale(dpr,dpr); g.clearRect(0,0,w,h);
-  const keys = Object.keys(series).filter(k => series[k].some(v => v !== null));
-  if (!keys.length || tSeries.length < 2){
+
+  const live = k => series[k] && series[k].some(v => v !== null);
+  const L = (spec.keys  || []).filter(live);
+  const R = (spec.right || []).filter(live);
+  const xk = spec.x && live(spec.x) ? spec.x : null;
+  const small = h < 150;
+  if ((!L.length && !R.length) || tSeries.length < 2){
     g.fillStyle = "#6B7C86"; g.font = "12px -apple-system,sans-serif";
-    g.textAlign = "center"; g.fillText("Run the model to plot", w/2, h/2); return;
+    g.textAlign = "center";
+    g.fillText(spec.empty || "Run the model to plot", w/2, h/2);
+    return;
   }
-  let lo = Infinity, hi = -Infinity;
-  for (const k of keys) for (const v of series[k])
-    if (v !== null && isFinite(v)) { lo = Math.min(lo,v); hi = Math.max(hi,v); }
-  if (!isFinite(lo)) return;
-  if (hi - lo < 1e-12) { hi = lo + 1; lo -= 1; }
-  const pad = (hi-lo)*0.08; lo -= pad; hi += pad;
-  const t0 = tSeries[0], t1 = tSeries[tSeries.length-1] || t0+1;
-  const X = t => 34 + (t-t0)/((t1-t0)||1) * (w-44);
-  const Y = v => h-20 - (v-lo)/(hi-lo) * (h-30);
+
+  const span = ks => {
+    let lo = Infinity, hi = -Infinity;
+    for (const k of ks) for (const v of series[k])
+      if (v !== null && isFinite(v)) { lo = Math.min(lo,v); hi = Math.max(hi,v); }
+    if (!isFinite(lo)) return null;
+    if (hi - lo < 1e-12) { hi = lo + 1; lo -= 1; }
+    const pad = (hi-lo)*0.08;
+    return [lo-pad, hi+pad];
+  };
+  const ly = span(L), ry = span(R);
+  const padL = small ? 34 : 46, padR = (R.length ? (small ? 34 : 46) : 12);
+  const padT = 10, padB = small ? 20 : 26;
+  const iw = Math.max(w - padL - padR, 1), ih = Math.max(h - padT - padB, 1);
+
+  // horizontal axis: time, or the x variable in a phase portrait
+  const xs = xk ? span([xk]) : [tSeries[0], tSeries[tSeries.length-1] || tSeries[0]+1];
+  const X = v => padL + (v - xs[0])/((xs[1]-xs[0])||1) * iw;
+  const Yof = sp => v => padT + ih - (v - sp[0])/((sp[1]-sp[0])||1) * ih;
+
   g.strokeStyle = "#2A3237"; g.lineWidth = 1;
-  for (let i=0;i<=3;i++){ const y = 10 + i*(h-30)/3;
-    g.beginPath(); g.moveTo(34,y); g.lineTo(w-10,y); g.stroke(); }
-  g.fillStyle = "#6B7C86"; g.font = "9px ui-monospace,monospace"; g.textAlign = "right";
-  g.fillText(hi.toPrecision(3), 30, 13); g.fillText(lo.toPrecision(3), 30, h-18);
-  for (const k of keys){
-    g.strokeStyle = colors[k] || "#4C9AFF"; g.lineWidth = 1.6;
+  for (let i=0;i<=3;i++){ const y = padT + i*ih/3;
+    g.beginPath(); g.moveTo(padL,y); g.lineTo(w-padR,y); g.stroke(); }
+  g.font = (small ? "9px " : "10px ") + "ui-monospace,monospace";
+  g.fillStyle = "#6B7C86";
+  if (ly){ g.textAlign = "right";
+    g.fillText(ly[1].toPrecision(3), padL-4, padT+9);
+    g.fillText(ly[0].toPrecision(3), padL-4, padT+ih); }
+  if (ry){ g.textAlign = "left";
+    g.fillText(ry[1].toPrecision(3), w-padR+4, padT+9);
+    g.fillText(ry[0].toPrecision(3), w-padR+4, padT+ih); }
+  if (!small){ g.textAlign = "center"; g.fillStyle = "#6B7C86";
+    g.fillText(spec.xlabel || (xk ? pretty(xk) : "t"), padL + iw/2, h-6); }
+
+  const line = (k, Y, dash) => {
+    g.strokeStyle = colors[k] || "#4C9AFF";
+    g.lineWidth = 1.6; g.setLineDash(dash ? [4,3] : []);
     g.beginPath(); let started = false;
-    series[k].forEach((v,i) => {
-      if (v === null || !isFinite(v)) { started = false; return; }
-      const x = X(tSeries[i]), y = Y(v);
-      started ? g.lineTo(x,y) : g.moveTo(x,y); started = true;
-    });
-    g.stroke();
-  }
+    const n = series[k].length;
+    for (let i=0;i<n;i++){
+      const v = series[k][i];
+      const xv = xk ? (series[xk] || [])[i] : tSeries[i];
+      if (v === null || !isFinite(v) || xv === null || xv === undefined || !isFinite(xv))
+        { started = false; continue; }
+      const px = X(xv), py = Y(v);
+      started ? g.lineTo(px,py) : g.moveTo(px,py); started = true;
+    }
+    g.stroke(); g.setLineDash([]);
+  };
+  if (ly) for (const k of L) line(k, Yof(ly), false);
+  if (ry) for (const k of R) line(k, Yof(ry), true);   // dashed = the other axis
+}
+
+function drawPlot(){
+  paintPlot($("#plot"), {keys: Object.keys(series)});
+  paintWorkspace();
 }
 addEventListener("resize", drawPlot);
 
@@ -2044,6 +2125,103 @@ $("#sa-name").addEventListener("keydown", e => {
 // All this menu does is reach them.
 function closeExport(){ $("#expmenu").classList.remove("open"); }
 
+/* ---------- the plots workspace ---------- */
+// A model carries its own plots -- EndogenousMoney has five -- and only one small pane
+// in the sidebar ever showed anything. Each PlotWidget becomes a pane here, drawing the
+// series actually wired into it, with the same colours the canvas uses.
+let pFocus = null;
+
+function planePanes(){
+  const out = [];
+  for (const it of state.items) {
+    if (!it.classType.startsWith("Plot") || !it.plot) continue;
+    const pick = a => (a || []).map(v => v.valueId).filter(Boolean);
+    const keys = pick(it.plot.left), right = pick(it.plot.right);
+    const x = (it.plot.x || [])[0];
+    if (!keys.length && !right.length) continue;
+    out.push({
+      id: `plot:${it.ref}`, ref: it.ref,
+      title: it.plot.title || pretty(it.name || "") || `plot ${it.ref}`,
+      xlabel: it.plot.xlabel, ylabel: it.plot.ylabel, y1label: it.plot.y1label,
+      keys, right, x: x ? x.valueId : null,
+      sub: x ? `${keys.map(pretty).join(", ")} against ${pretty(x.valueId)}`
+             : [...keys, ...right].map(pretty).join(", "),
+    });
+  }
+  // whatever is selected, so a part of the model can be looked at on its own
+  const chosen = state.items.filter(i => selSet.has(i.ref) && i.valueId);
+  const uniq = [...new Set(chosen.map(i => i.valueId))];
+  if (uniq.length) out.unshift({
+    id: "sel", title: `Selection — ${uniq.length} variable${uniq.length===1?"":"s"}`,
+    keys: uniq, right: [], x: null, sub: uniq.map(pretty).join(", "),
+  });
+  out.push({id: "all", title: "Every variable", keys: Object.keys(series), right: [],
+            x: null, sub: "everything the run tracked"});
+  return out;
+}
+
+function paintWorkspace(){
+  if (!$("#pwrap").classList.contains("open")) return;
+  for (const cv of $("#pgrid").querySelectorAll("canvas")) {
+    const spec = cv.__spec;
+    if (spec) paintPlot(cv, spec);
+  }
+}
+
+function drawWorkspace(){
+  const panes = planePanes();
+  const grid = $("#pgrid");
+  $("#pcount").textContent =
+    `${panes.length} pane${panes.length === 1 ? "" : "s"}`;
+  grid.innerHTML = "";
+  grid.classList.toggle("focused", pFocus !== null);
+  for (const sp of panes) {
+    const el = document.createElement("div");
+    el.className = "pane" + (pFocus === sp.id ? " focus" : "");
+    el.innerHTML =
+      `<div class="phead"><span class="ptitle" title="${esc(sp.sub)}">${esc(sp.title)}</span>
+        <span class="spacer"></span>
+        <button class="pbtn" data-act="zoom">${esc(pFocus === sp.id ? "Back" : "Enlarge")}</button>
+        <button class="pbtn" data-act="svg">SVG</button>
+      </div><canvas></canvas>
+      <div class="legend"></div>`;
+    const cv = el.querySelector("canvas");
+    cv.__spec = sp;
+    el.querySelector(".legend").innerHTML =
+      [...sp.keys.map(k => [k, false]), ...sp.right.map(k => [k, true])]
+        .map(([k, r]) => `<span><i style="background:${esc(colors[k] || "#4C9AFF")}"></i>`
+                       + `${esc(pretty(k))}${esc(r ? " (right)" : "")}</span>`).join("");
+    el.querySelector('[data-act="zoom"]').onclick = () => {
+      pFocus = pFocus === sp.id ? null : sp.id; drawWorkspace();
+    };
+    // only a plot that exists on the canvas can be drawn by the engine; the selection
+    // and all-variables panes have nothing for it to render
+    const svg = el.querySelector('[data-act="svg"]');
+    if (!sp.ref) svg.remove();
+    else svg.onclick = () => {
+      location.href = `/api/export/plot/${encodeURIComponent(sp.ref)}?format=svg`;
+    };
+    grid.appendChild(el);
+  }
+  paintWorkspace();
+}
+
+function openPlots(){
+  $("#pwrap").classList.add("open");
+  drawWorkspace();
+}
+function closePlots(){ $("#pwrap").classList.remove("open"); pFocus = null; }
+$("#plots").onclick = () => openPlots();
+$("#pclose").onclick = closePlots;
+$("#pwrap").addEventListener("click", e => { if (e.target === $("#pwrap")) closePlots(); });
+for (const b of document.querySelectorAll(".pcol")) b.onclick = () => {
+  $("#pgrid").style.setProperty("--pcols", b.dataset.col);
+  // taller panes when there are fewer of them across
+  $("#pgrid").style.setProperty("--paneh", ({1:"460px",2:"300px",3:"240px"})[b.dataset.col]);
+  paintWorkspace();
+};
+addEventListener("resize", paintWorkspace);
+
 /* ---------- recording the canvas ---------- */
 function openAnim(){
   $("#animwrap").classList.add("open");
@@ -2134,6 +2312,11 @@ addEventListener("keydown", e => {
     // too late
     if (dialogOpen()) return;
     (e.shiftKey ? $("#saveas") : $("#save")).click();
+  }
+  if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "p") {
+    e.preventDefault();
+    if (dialogOpen() && !$("#pwrap").classList.contains("open")) return;
+    $("#pwrap").classList.contains("open") ? closePlots() : openPlots();
   }
   if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "l") {
     e.preventDefault();

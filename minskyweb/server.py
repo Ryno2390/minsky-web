@@ -1548,6 +1548,50 @@ def snapshot() -> dict[str, Any]:
                               src=si, src_port=sp, dst=di, dst_port=dp))
         except Exception:
             continue
+    # What each plot on the canvas actually draws.
+    #
+    # A PlotWidget's ports are not interchangeable. From plotWidget.cc: ports 0..5 are
+    # AXIS BOUNDS (xmin/xmax, ymin/ymax, y1min/y1max), then 2*numLines y-data ports --
+    # the first numLines on the left axis and the next on the right -- then 2*numLines
+    # x-data ports. numLines is therefore (ports - 6) / 4.
+    #
+    # Getting this wrong is not subtle: the bounds ports carry constants, so treating
+    # every wire as a series plots the axis limits as data. And a wired x port means the
+    # plot is a PHASE PORTRAIT, not a time series -- MinskyNonLinear draws lambda against
+    # w_s that way.
+    by_ref = {e["ref"]: e for e in items}
+    N_BOUNDS = 6
+    for e in items:
+        if "Plot" not in e["classType"]:
+            continue
+        n = max((len(e["ports"]) - N_BOUNDS) // 4, 0)
+        left, right, xs = [], [], {}
+        for si, _sp, di, dp in _WIRES:
+            if di != e["ref"] or dp < N_BOUNDS or not n:
+                continue
+            src = by_ref.get(si)
+            if not src:
+                continue
+            who = dict(ref=si, name=src.get("name"), valueId=src.get("valueId"))
+            k = dp - N_BOUNDS
+            if k < n:
+                who["line"] = k; left.append(who)
+            elif k < 2 * n:
+                who["line"] = k - n; right.append(who)
+            else:
+                xs[(k - 2 * n) % n] = who
+        raw = _resolve(m, e["ref"])
+        def _lbl(meth):
+            try:
+                return (getattr(raw, meth)() or "").strip()
+            except Exception:
+                return ""
+        e["plot"] = dict(lines=n, left=left, right=right,
+                         x=[dict(line=k, **v) for k, v in sorted(xs.items())],
+                         # a modeller titles these; "plot 122" is our name, not theirs
+                         title=_lbl("title"), xlabel=_lbl("xlabel"),
+                         ylabel=_lbl("ylabel"), y1label=_lbl("y1label"))
+
     n_engine = _engine_wire_count(m)
     if len(_WIRES) != n_engine:
         # our record and the engine disagree -- say so rather than draw a wrong picture

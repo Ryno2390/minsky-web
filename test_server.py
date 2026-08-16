@@ -3248,6 +3248,88 @@ check("the recording dialog counts as an overlay",
       "Delete and Save would fire through it")
 
 
+print("\n64. what each plot on the canvas draws")
+# A PlotWidget's ports are not interchangeable. From plotWidget.cc: 0..5 are AXIS BOUNDS,
+# then 2*numLines y-data ports (first numLines left axis, next right), then 2*numLines
+# x-data ports. Treating every wire as a series plots the axis limits as data, and a
+# wired x port means a phase portrait rather than a time series.
+_ml = "/Users/ryneschultz/minsky/examples/MinskyNonLinear.mky"
+if Path(_ml).exists():
+    _st = c.post(f"/api/load?path={_ml}").json()
+    _plots = [i for i in _st["items"] if i["classType"].startswith("Plot")]
+    check("every plot is described", _plots and all("plot" in p for p in _plots),
+          f"{sum('plot' in p for p in _plots)} of {len(_plots)}")
+    check("the line count comes from the port count",
+          all(p["plot"]["lines"] == (len(p["ports"]) - 6) // 4 for p in _plots),
+          str([(p["plot"]["lines"], len(p["ports"])) for p in _plots[:3]]))
+
+    _named = lambda L: sorted((x.get("name") or "").lstrip(":") for x in L)
+    _by = {p["ref"]: p for p in _plots}
+    # this model wires constants into the bounds ports of most of its plots
+    _bound_srcs = set()
+    for w in _st["wires"]:
+        if w.get("dst") in _by and w.get("dst_port", 99) < 6:
+            _bound_srcs.add(w["src"])
+    check("the model does wire its axis bounds, so this is a real test",
+          len(_bound_srcs) > 0, "no bounds ports are wired; the check proves nothing")
+    _series_refs = {x["ref"] for p in _plots
+                    for k in ("left", "right", "x") for x in p["plot"][k]}
+    check("and none of those constants is treated as a series",
+          not (_bound_srcs & _series_refs),
+          str(sorted(_bound_srcs & _series_refs)[:4]))
+
+    _phase = [p for p in _plots if p["plot"]["x"]]
+    check("a wired x port is reported as one", len(_phase) == 1, str(len(_phase)))
+    if _phase:
+        check("and it is the phase portrait, y against x",
+              _named(_phase[0]["plot"]["left"]) == ["\\lambda"]
+              and _named(_phase[0]["plot"]["x"]) == ["w_s"],
+              f'{_named(_phase[0]["plot"]["left"])} vs {_named(_phase[0]["plot"]["x"])}')
+    check("a plot's own title is reported, not invented",
+          any(p["plot"].get("title") for p in _plots),
+          "every plot came back untitled")
+    check("and so are its axis labels",
+          any(p["plot"].get("xlabel") or p["plot"].get("ylabel") for p in _plots))
+
+_em = "/Users/ryneschultz/minsky/examples/EndogenousMoney.mky"
+if Path(_em).exists():
+    _st = c.post(f"/api/load?path={_em}").json()
+    _plots = [i for i in _st["items"] if i["classType"].startswith("Plot")]
+    check("a model with several plots describes them all",
+          len(_plots) >= 5 and all(p["plot"]["left"] for p in _plots),
+          f"{len(_plots)} plots, "
+          f"{sum(1 for p in _plots if p['plot']['left'])} with series")
+    check("each draws its own variables, not the same ones",
+          len({tuple(sorted(x["valueId"] or "" for x in p["plot"]["left"]))
+               for p in _plots}) > 1,
+          "every plot reported an identical series list")
+c.post("/api/clear")
+
+_ui = (Path(__file__).parent / "minskyweb/ui/index.html").read_text()
+check("there is one painter, not one per chart",
+      "function paintPlot(" in _ui
+      and _ui.count("getContext(\"2d\")") == 1,
+      "the sidebar and the workspace would drift apart")
+check("the workspace makes a pane per plot", "function planePanes" in _ui
+      and 'id="pgrid"' in _ui)
+check("a pane can be enlarged and put back",
+      'data-act="zoom"' in _ui and ".pgrid.focused" in _ui)
+check("the grid's column count can be changed", 'class="gbtn pcol"' in _ui)
+# delimit on the next function: drawPlot's body contains an object literal, so splitting
+# on "}" cut it off after the first line
+check("panes redraw while the model runs",
+      "paintWorkspace()" in
+      _ui.split("function drawPlot()")[1].split("function ")[0],
+      "the workspace would freeze at whatever was drawn when it opened")
+check("a selection gets a pane of its own",
+      'id: "sel"' in _ui, "there is no way to plot part of a model")
+check("the right axis is scaled separately from the left",
+      "const ly = span(L), ry = span(R)" in _ui,
+      "two axes sharing one scale is not two axes")
+check("and a phase portrait plots against its x variable, not time",
+      "xk ? (series[xk] || [])[i] : tSeries[i]" in _ui)
+
+
 # Whatever any section forgot: the suite must not leave files among the user's models.
 # Minsky renames the old file to "<name>.mky;1" on every save, so both go.
 _left = [f for f in SAVE_DIR.iterdir()

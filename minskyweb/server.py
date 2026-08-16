@@ -34,6 +34,7 @@ import atexit
 import math
 import os
 import shutil
+import subprocess
 import tempfile
 import threading
 from pathlib import Path
@@ -42,6 +43,7 @@ from typing import Any
 from fastapi import FastAPI, File, HTTPException, UploadFile, WebSocket, WebSocketDisconnect
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
+from starlette.background import BackgroundTask
 from pydantic import BaseModel, Field
 from starlette.concurrency import run_in_threadpool
 
@@ -1088,6 +1090,19 @@ class SolverSpec(BaseModel):
 class InitSpec(BaseModel):
     name: str
     value: float
+
+
+class AnimSpec(BaseModel):
+    """Must live at module level. `from __future__ import annotations` makes the
+    handler's annotation a STRING, which FastAPI resolves in the module namespace -- a
+    class nested inside create_app() is invisible there, so the body model was silently
+    treated as a query parameter and every request 422'd for a missing field."""
+    format: str = "mp4"
+    steps: int = 400          # solver steps to run in total
+    every: int = 4            # render one frame every N steps
+    fps: int = 25
+    width: int = 960
+    height: int = 640
 
 
 class AttrSpec(BaseModel):
@@ -2935,6 +2950,141 @@ def create_app() -> FastAPI:
         stem = Path(_CURRENT).stem if _CURRENT else "model"
         return FileResponse(str(out), media_type=media,
                             filename=f"{stem}-plot{ref.replace(':', '-')}.{fmt}")
+
+    def _ink_bounds(mk, probe_dir, zoom=1.0, off=400.0, w=2600.0, h=2000.0):
+        """Where the drawing actually is, in canvas coordinates.
+
+        Canvas coordinates are not model coordinates and part of the picture sits at
+        NEGATIVE ones, so a probe at the origin clips the top-left corner off and reports
+        a bounding box that starts at (0,0) whatever the model looks like. Shifting the
+        probe by `off` first is what makes the measurement honest.
+        """
+        from PIL import Image
+        p = probe_dir / "probe.png"
+        mk.renderCanvasToPNG(str(p), {"zoom": zoom, "left": -off, "top": -off,
+                                      "width": w, "height": h})
+        with Image.open(p) as im:
+            box = im.split()[-1].getbbox() if im.mode == "RGBA" else im.convert("L").getbbox()
+        if not box:
+            return None
+        return tuple(v - off for v in box)
+
+    @app.post("/api/export/animation")
+    async def export_animation(spec: AnimSpec):
+        """The whole canvas running, with the values on the icons updating.
+
+        Frames come from the engine's own renderer, so this is Minsky's picture -- real
+        glyphs, curved wires, live values -- rather than a capture of our canvas.
+        """
+        require_idle()
+        fmt = spec.format.lower()
+        if fmt not in ("mp4", "gif"):
+            raise HTTPException(422, f"unknown format {spec.format!r}. Use mp4 or gif")
+        if not shutil.which("ffmpeg"):
+            raise HTTPException(
+                503, "ffmpeg is not installed, so frames cannot be encoded. The canvas "
+                     "and plots can still be exported as SVG, PNG or PDF.")
+        if spec.every < 1 or spec.steps < 1:
+            raise HTTPException(422, "steps and every must be positive")
+        frames = spec.steps // spec.every
+        if not 2 <= frames <= 900:
+            raise HTTPException(
+                422, f"that is {frames} frames; ask for between 2 and 900 "
+                     f"(steps / every)")
+        # yuv420p needs even dimensions, and h264 will not encode odd ones
+        W = max(320, min(1920, spec.width) // 2 * 2)
+        H = max(240, min(1200, spec.height) // 2 * 2)
+        fps = max(1, min(60, spec.fps))
+
+        work = Path(tempfile.mkdtemp(dir=_SCRATCH, prefix="anim-"))
+        out = work / f"animation.{fmt}"
+
+        def _render():
+            from PIL import Image
+            mk = engine().minsky
+            mk.reset()
+            settle()
+
+            # Frame the shot ONCE, from the union of the drawing at the start and at the
+            # end: value text grows as the numbers do, and a box measured only at t=0
+            # crops the digits off later in the run.
+            first = _ink_bounds(mk, work)
+            for _ in range(spec.steps):
+                mk.step()
+            last = _ink_bounds(mk, work)
+            mk.reset()
+            settle()
+            if not first and not last:
+                raise HTTPException(422, "there is nothing on the canvas to animate")
+            boxes = [b for b in (first, last) if b]
+            x0 = min(b[0] for b in boxes); y0 = min(b[1] for b in boxes)
+            x1 = max(b[2] for b in boxes); y1 = max(b[3] for b in boxes)
+            pad = 20.0
+            zoom = min((W - 2*pad) / max(x1 - x0, 1), (H - 2*pad) / max(y1 - y0, 1))
+            crop = {"zoom": zoom, "left": x0*zoom - pad, "top": y0*zoom - pad,
+                    "width": float(W), "height": float(H)}
+
+            white = Image.new("RGB", (W, H), "white")
+            n = 0
+            for k in range(frames):
+                for _ in range(spec.every):
+                    mk.step()
+                raw = work / "raw.png"
+                mk.renderCanvasToPNG(str(raw), crop)
+                with Image.open(raw) as im:
+                    # MP4 has no alpha; an unflattened frame encodes as solid black
+                    flat = white.copy()
+                    flat.paste(im, mask=im.split()[-1] if im.mode == "RGBA" else None)
+                    flat.save(work / f"f{k:05d}.png")
+                n += 1
+            return n, mk.t()
+
+        _RUNNING.set()
+        try:
+            n, t_end = await run_in_threadpool(locked, _render)
+        finally:
+            _RUNNING.clear()
+
+        pat = str(work / "f%05d.png")
+        if fmt == "mp4":
+            cmd = ["ffmpeg", "-y", "-loglevel", "error", "-framerate", str(fps),
+                   "-i", pat, "-c:v", "libx264", "-preset", "medium", "-crf", "18",
+                   "-pix_fmt", "yuv420p", "-movflags", "+faststart", str(out)]
+            r = subprocess.run(cmd, capture_output=True, text=True)
+        else:
+            # one shared palette, or a GIF of a line drawing bands badly
+            pal = work / "palette.png"
+            r = subprocess.run(
+                ["ffmpeg", "-y", "-loglevel", "error", "-i", pat,
+                 "-vf", "palettegen=stats_mode=diff", str(pal)],
+                capture_output=True, text=True)
+            if r.returncode == 0:
+                r = subprocess.run(
+                    ["ffmpeg", "-y", "-loglevel", "error", "-framerate", str(fps),
+                     "-i", pat, "-i", str(pal),
+                     "-lavfi", "paletteuse=dither=bayer:bayer_scale=3", str(out)],
+                    capture_output=True, text=True)
+        if r.returncode != 0 or not out.exists() or out.stat().st_size == 0:
+            raise HTTPException(
+                500, f"ffmpeg could not encode the {fmt}: "
+                     f"{(r.stderr or '').strip()[:200] or 'no output'}")
+
+        # The frames have served their purpose; a 900-frame render is hundreds of
+        # megabytes of PNG and the scratch dir only empties when the process exits.
+        for f in work.glob("*.png"):
+            try:
+                f.unlink()
+            except OSError:
+                pass
+
+        stem = Path(_CURRENT).stem if _CURRENT else "model"
+        media = "video/mp4" if fmt == "mp4" else "image/gif"
+        resp = FileResponse(str(out), media_type=media, filename=f"{stem}.{fmt}",
+                            # and the film itself goes once it has been sent
+                            background=BackgroundTask(shutil.rmtree, work, True))
+        resp.headers["X-Frames"] = str(n)
+        resp.headers["X-Sim-Time"] = f"{t_end:.4f}"
+        return resp
 
     @app.websocket("/ws/sim")
     async def ws_sim(ws: WebSocket):

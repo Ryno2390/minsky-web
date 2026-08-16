@@ -298,7 +298,33 @@ svg#board.panning{cursor:grabbing}
     <button data-exp="plot:svg" id="expplotsvg">Plot as SVG</button>
     <button data-exp="plot:pdf" id="expplotpdf">Plot as PDF</button>
     <button data-exp="plot:png" id="expplotpng">Plot as PNG</button>
+    <div class="sep">Animation</div>
+    <button data-exp="anim">Record the model running…</button>
   </div>
+
+  <div class="gwrap" id="animwrap"><div class="gpanel" style="max-width:430px">
+    <div class="ghead"><b>Record the model running</b>
+      <div class="spacer"></div><button class="gbtn" id="anim-cancel">Cancel</button></div>
+    <div style="padding:14px 16px;display:flex;flex-direction:column;gap:9px">
+      <div style="font-size:12.5px;color:var(--ink-3);line-height:1.5">
+        The whole canvas, drawn by Minsky, with the value on every icon updating as it
+        runs. The model is reset first and left at the end of the run.</div>
+      <div class="field"><label>format</label>
+        <select id="anim-fmt" style="width:100%">
+          <option value="mp4">MP4 — smaller, better quality</option>
+          <option value="gif">GIF — plays anywhere</option>
+        </select></div>
+      <div class="field"><label>steps</label><input id="anim-steps" value="400"></div>
+      <div class="field"><label>every</label><input id="anim-every" value="4"></div>
+      <div class="field"><label>fps</label><input id="anim-fps" value="25"></div>
+      <div class="field"><label>size</label>
+        <input id="anim-w" value="960"><span style="color:var(--ink-3)">×</span>
+        <input id="anim-h" value="640"></div>
+      <div style="font-size:11.5px;color:var(--ink-3)" id="anim-note"></div>
+      <div class="btns" style="justify-content:flex-end;margin-top:2px">
+        <button id="anim-go" class="primary">Record</button></div>
+    </div>
+  </div></div>
   <button id="clear">Clear</button>
   <button id="tidy" title="Arrange the canvas left to right (⌘L)">⌗ Tidy</button>
   <button id="del" class="danger" disabled>Delete</button>
@@ -596,7 +622,7 @@ function clearSelection(){ selSet = new Set(); sel = null; selWire = null; selGr
 // of these: it is an editor, and blocking undo inside it left a cell edit that could not
 // be taken back at all, because the overlay also covers the Undo button.
 function modalOpen(){
-  return ["#cfwrap", "#sawrap", "#fwrap", "#gwrap"].some(
+  return ["#cfwrap", "#sawrap", "#fwrap", "#gwrap", "#animwrap"].some(
     id => $(id) && $(id).classList.contains("open"));
 }
 function dialogOpen(){
@@ -2017,6 +2043,61 @@ $("#sa-name").addEventListener("keydown", e => {
 // picture than ours: it has Minsky's real glyphs, curved wires and value annotations.
 // All this menu does is reach them.
 function closeExport(){ $("#expmenu").classList.remove("open"); }
+
+/* ---------- recording the canvas ---------- */
+function openAnim(){
+  $("#animwrap").classList.add("open");
+  animNote();
+  $("#anim-steps").focus(); $("#anim-steps").select();
+}
+function closeAnim(){ $("#animwrap").classList.remove("open"); }
+function animNote(){
+  const n = Math.floor((+$("#anim-steps").value || 0) / (+$("#anim-every").value || 1));
+  const fps = +$("#anim-fps").value || 1;
+  $("#anim-note").textContent = n < 2 || n > 900
+    ? `${n} frames — ask for between 2 and 900`
+    : `${n} frames, about ${(n / fps).toFixed(1)}s of video`;
+}
+for (const id of ["#anim-steps", "#anim-every", "#anim-fps"])
+  $(id).addEventListener("input", animNote);
+$("#anim-cancel").onclick = closeAnim;
+$("#animwrap").addEventListener("click", e => { if (e.target === $("#animwrap")) closeAnim(); });
+$("#anim-go").onclick = guard(async () => {
+  const btn = $("#anim-go"), was = btn.textContent;
+  const body = {
+    format: $("#anim-fmt").value,
+    steps: +$("#anim-steps").value, every: +$("#anim-every").value,
+    fps: +$("#anim-fps").value,
+    width: +$("#anim-w").value, height: +$("#anim-h").value,
+  };
+  btn.disabled = true; btn.textContent = "Recording…";
+  try {
+    // fetched rather than navigated to, so the button can say it is working: this runs
+    // the model and encodes it, which takes seconds rather than milliseconds
+    const r = await fetch("/api/export/animation", {
+      method: "POST", headers: {"content-type": "application/json"},
+      body: JSON.stringify(body)});
+    if (!r.ok) {
+      let d; try { d = (await r.json()).detail; } catch { d = `HTTP ${r.status}`; }
+      throw new Error(d);
+    }
+    const blob = await r.blob();
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `${(state.currentFile || "model")}.${body.format}`;
+    document.body.appendChild(a); a.click(); a.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 10000);
+    closeAnim();
+    toast(`Recorded ${r.headers.get("X-Frames") || "?"} frames. `
+        + `The model was reset and run to t=${(+r.headers.get("X-Sim-Time")).toFixed(2)}.`,
+          true);
+  } finally {
+    btn.disabled = false; btn.textContent = was;
+  }
+  // the run left the model somewhere else; show where
+  state = await api("/state"); render(); drawPlot();
+});
 $("#download").onclick = e => {
   e.stopPropagation();
   const open = $("#expmenu").classList.toggle("open");
@@ -2041,6 +2122,7 @@ $("#expmenu").addEventListener("click", e => {
   if (what === "mky") { location.href = "/api/download"; return; }
   const [kind, fmt] = what.split(":");
   if (kind === "canvas") { location.href = `/api/export/canvas?format=${fmt}`; return; }
+  if (what === "anim") { openAnim(); return; }
   if (sel === null) return;
   location.href = `/api/export/plot/${encodeURIComponent(sel)}?format=${fmt}`;
 });

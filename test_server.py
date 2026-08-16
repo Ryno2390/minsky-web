@@ -3177,6 +3177,77 @@ check("a divider goes when its pane does",
       "#gut-side{display:none}" in _ui and "#gut-pal,#gut-side{display:none}" in _ui)
 
 
+print("\n63. recording the canvas as it runs")
+import shutil as _sh
+_gw = "/Users/ryneschultz/minsky/examples/GoodwinLinear.mky"
+if not _sh.which("ffmpeg"):
+    check("ffmpeg is present to encode with", False, "install ffmpeg to test recording")
+elif Path(_gw).exists():
+    c.post(f"/api/load?path={_gw}")
+
+    _r = c.post("/api/export/animation",
+                json={"format":"mp4","steps":40,"every":4,"fps":10,
+                      "width":480,"height":320})
+    check("the canvas records as mp4", _r.status_code == 200, _r.text[:160])
+    check("and the bytes are a real MP4",
+          _r.content[4:8] == b"ftyp", str(_r.content[:12]))
+    check("with the frames asked for", _r.headers.get("X-Frames") == "10",
+          _r.headers.get("X-Frames"))
+    check("and the model ran", float(_r.headers.get("X-Sim-Time", 0)) > 0,
+          _r.headers.get("X-Sim-Time"))
+
+    _r = c.post("/api/export/animation",
+                json={"format":"gif","steps":24,"every":4,"fps":8,
+                      "width":400,"height":300})
+    check("and as gif", _r.status_code == 200, _r.text[:160])
+    check("with a real GIF header", _r.content[:6] in (b"GIF87a", b"GIF89a"),
+          str(_r.content[:8]))
+
+    # h264 refuses odd dimensions, so they are rounded rather than failed on
+    _r = c.post("/api/export/animation",
+                json={"format":"mp4","steps":16,"every":4,"fps":8,
+                      "width":481,"height":321})
+    check("an odd frame size is made even rather than refused",
+          _r.status_code == 200, _r.text[:160])
+
+    check("a format that is neither is refused",
+          c.post("/api/export/animation", json={"format":"avi"}).status_code == 422)
+    check("too few frames is refused, with the count",
+          c.post("/api/export/animation",
+                 json={"steps":4,"every":4}).status_code == 422)
+    check("and so is a run longer than the cap",
+          c.post("/api/export/animation",
+                 json={"steps":100000,"every":1}).status_code == 422)
+    check("a zero step is refused rather than dividing by it",
+          c.post("/api/export/animation", json={"every":0}).status_code == 422)
+
+    # It resets first, so the recording always starts from the same place.
+    c.post("/api/reset")
+    _t0 = c.get("/api/state").json()["t"]
+    c.post("/api/export/animation",
+           json={"format":"gif","steps":20,"every":4,"fps":8,"width":360,"height":240})
+    check("recording leaves the model at the end of the run, not where it started",
+          c.get("/api/state").json()["t"] > _t0,
+          "the run did not advance t")
+c.post("/api/clear")
+check("recording an empty canvas is refused, not a blank film",
+      c.post("/api/export/animation",
+             json={"format":"gif","steps":20,"every":4}).status_code in (422, 500))
+
+_ui = (Path(__file__).parent / "minskyweb/ui/index.html").read_text()
+check("the dialog says the model will be reset",
+      "reset first and left at the end" in _ui,
+      "a recording moves the model and the user should know before pressing it")
+check("it estimates the length before recording",
+      "of video" in _ui and 'id="anim-note"' in _ui)
+check("the button says it is working, since this runs the model",
+      '"Recording…"' in _ui)
+check("the recording dialog counts as an overlay",
+      '"#animwrap"' in _ui.split("function dialogOpen")[0].split("function modalOpen")[1]
+      if "function modalOpen" in _ui else False,
+      "Delete and Save would fire through it")
+
+
 # Whatever any section forgot: the suite must not leave files among the user's models.
 # Minsky renames the old file to "<name>.mky;1" on every save, so both go.
 _left = [f for f in SAVE_DIR.iterdir()

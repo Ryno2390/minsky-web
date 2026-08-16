@@ -248,12 +248,15 @@ svg#board.panning{cursor:grabbing}
   grid-template-columns:repeat(var(--pcols,2),minmax(0,1fr));align-content:start}
 .pane{background:var(--bg);border:1px solid var(--line);border-radius:9px;
   display:flex;flex-direction:column;min-width:0;overflow:hidden}
-.pane .phead{display:flex;align-items:center;gap:8px;padding:7px 10px;
+.pane .phead{display:flex;align-items:center;gap:6px;padding:7px 10px;
   border-bottom:1px solid var(--line);font-size:12px;color:var(--ink-2)}
-.pane .phead .ptitle{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+/* min-width:0 is what actually lets the title ellipsise: a flex item will not shrink
+   below its content width without it, so the title would otherwise push the export
+   buttons out of the pane and .pane{overflow:hidden} would silently clip them */
+.pane .phead .ptitle{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-width:0}
 .pane .phead .spacer{flex:1}
 .pane .pbtn{font-size:11px;padding:2px 7px;border-radius:5px;border:1px solid var(--line);
-  background:var(--panel);color:var(--ink-3);cursor:pointer}
+  background:var(--panel);color:var(--ink-3);cursor:pointer;flex:none;white-space:nowrap}
 .pane .pbtn:hover{color:var(--ink)}
 .pane canvas{flex:1;width:100%;min-height:0;display:block}
 .pane .legend{display:flex;flex-wrap:wrap;gap:9px;padding:5px 10px 8px;font-size:11px;
@@ -408,6 +411,7 @@ svg#board.panning{cursor:grabbing}
     <button data-exp="plot:svg" id="expplotsvg">Plot as SVG</button>
     <button data-exp="plot:pdf" id="expplotpdf">Plot as PDF</button>
     <button data-exp="plot:png" id="expplotpng">Plot as PNG</button>
+    <button data-exp="plot:ps" id="expplotps">Plot as PostScript</button>
     <div class="sep">Animation</div>
     <button data-exp="anim">Record the model running…</button>
   </div>
@@ -440,6 +444,7 @@ svg#board.panning{cursor:grabbing}
       </div>
       <button class="gbtn" id="eqsvg">SVG</button>
       <button class="gbtn" id="eqpng">PNG</button>
+      <button class="gbtn" id="eqpdf">PDF</button>
       <button class="gbtn" id="eqclose">Close</button></div>
     <div class="eqbody" id="eqbody"></div>
   </div></div>
@@ -2583,6 +2588,7 @@ const eqQuery = f => eqView === "pubtabs"
     + (eqView === "phillips" ? `&layout=${eqLayout}` : "");
 $("#eqsvg").onclick = () => { location.href = eqQuery("svg"); };
 $("#eqpng").onclick = () => { location.href = eqQuery("png"); };
+$("#eqpdf").onclick = () => { location.href = eqQuery("pdf"); };
 function markEqTheme(){
   for (const b of document.querySelectorAll(".eqth"))
     b.setAttribute("aria-pressed", String(b.dataset.th === eqTheme));
@@ -2731,7 +2737,9 @@ function drawWorkspace(){
       `<div class="phead"><span class="ptitle" title="${esc(sp.sub)}">${esc(sp.title)}</span>
         <span class="spacer"></span>
         <button class="pbtn" data-act="zoom">${esc(pFocus === sp.id ? "Back" : "Enlarge")}</button>
-        <button class="pbtn" data-act="svg">SVG</button>
+        <button class="pbtn" data-exp="svg">SVG</button>
+        <button class="pbtn" data-exp="png">PNG</button>
+        <button class="pbtn" data-exp="pdf">PDF</button>
       </div><canvas></canvas>
       <div class="legend"></div>`;
     const cv = el.querySelector("canvas");
@@ -2745,11 +2753,14 @@ function drawWorkspace(){
     };
     // only a plot that exists on the canvas can be drawn by the engine; the selection
     // and all-variables panes have nothing for it to render
-    const svg = el.querySelector('[data-act="svg"]');
-    if (!sp.ref) svg.remove();
-    else svg.onclick = () => {
-      location.href = `/api/export/plot/${encodeURIComponent(sp.ref)}?format=svg`;
-    };
+    for (const b of el.querySelectorAll("[data-exp]")) {
+      if (!sp.ref) { b.remove(); continue; }
+      b.title = `Export this plot as ${b.dataset.exp.toUpperCase()}`;
+      b.onclick = () => {
+        location.href = `/api/export/plot/${encodeURIComponent(sp.ref)}`
+                      + `?format=${encodeURIComponent(b.dataset.exp)}`;
+      };
+    }
     grid.appendChild(el);
   }
   paintWorkspace();
@@ -2850,7 +2861,8 @@ $("#download").onclick = e => {
   // Plot export needs a plot chosen; say so by disabling rather than by failing later.
   const it = sel === null ? null : state.items.find(i => i.ref === sel);
   const isPlot = !!it && (it.classType.startsWith("Plot") || it.classType.startsWith("Sheet"));
-  for (const id of ["#expplotsvg", "#expplotpdf", "#expplotpng"]) $(id).disabled = !isPlot;
+  for (const b of document.querySelectorAll('#expmenu [data-exp^="plot:"]'))
+    b.disabled = !isPlot;
   $("#expplotsep").textContent = isPlot
     ? `Selected plot` : `Selected plot — select one first`;
 };

@@ -844,3 +844,44 @@ unchanged, with no error to say why.
 canvas is currently pointed at, sharing its valueId. That is Minsky's "copy item", and
 it is what `/api/item/{ref}/copy` uses. Point the canvas first with
 `canvas.getItemAt(x, y)`, or it copies whatever was last touched.
+
+## A publication tab silently skips what it cannot draw
+
+`PubTab::redraw` (`model/pubTab.cc`) draws each item inside `try { ... } catch (...) {}`.
+An item whose draw throws is skipped without a word: the add succeeded, the tab reports
+it holds the item, and the figure comes out empty.
+
+A **Godley table** is such an item. `addCanvasItemToPublicationTab` takes it, `len(tab.items)`
+goes up, and `renderToSVG` then writes a 0x0 document -- because `renderNativeWindow`
+sizes its output to what was actually drawn, and nothing was.
+
+```
+tab.items after adding a GodleyIcon   1
+tab.renderToSVG()                     width="0" height="0", 3 tags
+same tab with a flow variable         width="58" height="28", 49 tags
+```
+
+It is not destructive: `EnsureEditorMode` toggles `variableDisplay` off before the draw
+and its destructor puts it back, and the model is unchanged (155 items before and
+after). The throw is in the Godley's own draw, not in the setup.
+
+Measuring the file the engine wrote is the only way to tell. `/api/pubtabs/{i}/items`
+renders the tab before and after each add and refuses the add if the output did not
+grow, so a figure that would be blank is reported instead of handed over.
+
+## getItemAt returns the topmost item, which is not always the one you asked for
+
+`Canvas::getItemAt` sets `canvas.item` from `itemAt(x,y)`, and
+`addCanvasItemToPublicationTab` takes whatever `canvas.item` points at. A Godley table's
+stock variables are drawn ON the table, so hit-testing a stock's own anchor returns the
+**table**:
+
+```
+Variable:stock 'Reserves' anchor=(554,414)  ->  canvas.item = GodleyIcon at (642,117)
+```
+
+Parking the variable somewhere empty and hit-testing it there does not help: a
+Godley-owned variable's position is recomputed from the table, so the move does not
+stick long enough to be hit. The endpoint compares the picked item's class and anchor
+against the one that was asked for and refuses on a mismatch, rather than putting
+something the user did not choose on their figure.

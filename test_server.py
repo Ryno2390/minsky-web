@@ -770,11 +770,11 @@ r = c.post("/api/save", json={})
 check("omitting the name still means save-to-current",
       r.status_code == 200 and r.json()["name"] == "namecheck2", r.text[:70])
 
-import os
-for f in ("namecheck", "namecheck2"):
-    for suffix in (".mky", ".mky;1"):
-        try: os.remove(os.path.expanduser(f"~/minsky-models/{f}{suffix}"))
-        except OSError: pass
+# _rm() clears the file AND the ".mky;1" backup from wherever the server is actually
+# saving. This used to name ~/minsky-models directly, so with MINSKYWEB_SAVE_DIR set the
+# saves went to the test directory while the cleanup deleted from the user's models --
+# leaking in the one place the variable exists to protect.
+_rm("namecheck", "namecheck2")
 
 print("\n21. a vanished Godley table is reported in plain language")
 c.post("/api/clear")
@@ -4067,6 +4067,126 @@ check("the last tab cannot be deleted",
       "a model with no tab at all")
 check("adding with nothing selected explains itself rather than failing",
       "Select something on the canvas first" in _ui)
+
+
+print("\n73. every export offers every format the engine can actually write")
+# The Plots workspace offered SVG alone, the equations panel SVG and PNG, while the
+# server could already write all four -- so the user could only get out a fraction of
+# what Minsky draws. Each format is checked by its magic bytes, because a 200 with an
+# error page in it would otherwise read as a pass.
+_SIG = {"svg": (b"<?xml", b"<svg"), "png": (b"\x89PNG",),
+        "pdf": (b"%PDF",), "ps": (b"%!PS",)}
+
+def _is_real(fmt, body):
+    ok = any(body.startswith(x) for x in _SIG[fmt])
+    if fmt == "svg":
+        ok = ok and b"<svg" in body[:400]
+    return ok and len(body) > 300
+
+_gw = "/Users/ryneschultz/minsky/examples/GoodwinLinear.mky"
+if Path(_gw).exists():
+    c.post(f"/api/load?path={_gw}")
+    _plot = next((i["ref"] for i in c.get("/api/state").json()["items"]
+                  if "Plot" in i["classType"]), None)
+    check("the model has a plot to export", _plot is not None)
+    if _plot:
+        for _f in ("svg", "png", "pdf", "ps"):
+            _r = c.get(f"/api/export/plot/{_plot}?format={_f}")
+            check(f"a plot exports as {_f}", _r.status_code == 200, _r.text[:90])
+            check(f"and the plot {_f} is a real {_f}", _is_real(_f, _r.content),
+                  f"{len(_r.content)} bytes starting {_r.content[:8]!r}")
+
+    for _f in ("svg", "png", "pdf", "ps"):
+        for _th in ("dark", "light"):
+            _r = c.get(f"/api/equations?format={_f}&theme={_th}")
+            check(f"the equations render as {_f} in {_th}", _r.status_code == 200,
+                  _r.text[:90])
+            check(f"and the {_th} equations {_f} is a real {_f}",
+                  _is_real(_f, _r.content),
+                  f"{len(_r.content)} bytes starting {_r.content[:8]!r}")
+
+    # A PDF is produced by converting the THEMED svg, not by asking the engine for a PDF
+    # -- the engine draws black on transparency and would ignore the theme entirely. So
+    # the two themes must differ, and by more than a rounding error.
+    _dark = c.get("/api/equations?format=pdf&theme=dark").content
+    _light = c.get("/api/equations?format=pdf&theme=light").content
+    check("a dark PDF is not the same file as a light one", _dark != _light,
+          "the theme is being dropped on the way to PDF")
+
+    check("an unknown format is still refused, and names the ones that work",
+          c.get("/api/equations?format=tiff").status_code == 422
+          and all(f in c.get("/api/equations?format=tiff").text
+                  for f in ("svg", "png", "pdf", "ps")),
+          c.get("/api/equations?format=tiff").text[:120])
+
+_lf = "/Users/ryneschultz/minsky/examples/LoanableFunds.mky"
+if Path(_lf).exists():
+    c.post(f"/api/load?path={_lf}")
+    for _f in ("svg", "png", "pdf", "ps"):
+        _r = c.get(f"/api/phillips?format={_f}&theme=dark")
+        check(f"the Phillips diagram renders as {_f}", _r.status_code == 200,
+              _r.text[:90])
+        check(f"and the Phillips {_f} is a real {_f}", _is_real(_f, _r.content),
+              f"{len(_r.content)} bytes starting {_r.content[:8]!r}")
+
+    # figures: a plot is something the tab's renderer can actually draw
+    c.post("/api/pubtabs", json={"name": "Fmt"})
+    _fi = len(c.get("/api/pubtabs").json()["tabs"]) - 1
+    _p = next((i["ref"] for i in c.get("/api/state").json()["items"]
+               if "Plot" in i["classType"]), None)
+    if _p:
+        check("a plot goes on a figure tab",
+              c.post(f"/api/pubtabs/{_fi}/items", json={"refs": [_p]}).status_code == 200)
+        for _f in ("svg", "png", "pdf", "ps"):
+            _r = c.get(f"/api/pubtabs/{_fi}/render?format={_f}&theme=dark")
+            check(f"a figure renders as {_f}", _r.status_code == 200, _r.text[:90])
+            check(f"and the figure {_f} is a real {_f}", _is_real(_f, _r.content),
+                  f"{len(_r.content)} bytes starting {_r.content[:8]!r}")
+
+    # Found while adding the formats: the tab's renderer throws on a Godley table and
+    # PubTab::redraw swallows it (catch (...) {} in model/pubTab.cc), so the add
+    # succeeded, the tab reported holding the item, and the figure came out blank with
+    # nothing anywhere saying why.
+    _g = next((i["ref"] for i in c.get("/api/state").json()["items"]
+               if i["classType"] == "GodleyIcon"), None)
+    if _g:
+        c.post("/api/pubtabs", json={"name": "Godley"})
+        _gi = len(c.get("/api/pubtabs").json()["tabs"]) - 1
+        _r = c.post(f"/api/pubtabs/{_gi}/items", json={"refs": [_g]})
+        check("a Godley table is refused rather than added as a blank figure",
+              _r.status_code == 422 and "blank" in _r.text, f"{_r.status_code}: {_r.text[:110]}")
+        check("and the refusal leaves the tab empty",
+              c.get("/api/pubtabs").json()["tabs"][_gi]["items"] == 0,
+              "a rejected add still went on the tab")
+
+    # A Godley's stock variables are drawn ON the table, so the hit test that points the
+    # canvas at an item resolves them to the table -- the tab would have received the
+    # table instead of the variable the user picked.
+    _sv = next((i["ref"] for i in c.get("/api/state").json()["items"]
+                if i["classType"] == "Variable:stock"), None)
+    if _sv:
+        c.post("/api/pubtabs", json={"name": "Stock"})
+        _si = len(c.get("/api/pubtabs").json()["tabs"]) - 1
+        _r = c.post(f"/api/pubtabs/{_si}/items", json={"refs": [_sv]})
+        check("a variable the hit test cannot reach is refused, not swapped",
+              _r.status_code == 422 and "resolves to" in _r.text,
+              f"{_r.status_code}: {_r.text[:110]}")
+c.post("/api/clear")
+
+check("the plots workspace offers all three formats, not just SVG",
+      all(f'data-exp="{f}"' in _ui for f in ("svg", "png", "pdf")),
+      "a pane still exports only one way")
+check("and each pane's buttons are wired to the plot endpoint",
+      "/api/export/plot/${encodeURIComponent(sp.ref)}" in _ui
+      and "format=${encodeURIComponent(b.dataset.exp)}" in _ui,
+      "the buttons are drawn but do nothing")
+check("the equations panel offers PDF too",
+      'id="eqpdf"' in _ui and 'eqQuery("pdf")' in _ui)
+check("the export menu offers PostScript for a plot, as it does for the canvas",
+      'data-exp="plot:ps"' in _ui)
+check("and the menu gates plot entries by what they are, not by a list to keep in sync",
+      '#expmenu [data-exp^="plot:"]' in _ui,
+      "adding a format would silently leave it enabled with no plot selected")
 
 
 # Whatever any section forgot: the suite must not leave files among the user's models.

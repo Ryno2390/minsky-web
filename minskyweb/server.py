@@ -3146,16 +3146,25 @@ def create_app() -> FastAPI:
     _FALLBACK_PNG = [lambda _p: None]
 
     def _render_out(raw: Path, out: Path, fmt: str, th: str):
-        """Theme the render, and for a raster go via the SVG so it comes out crisp."""
+        """Theme the render, and convert from the themed SVG for every other format.
+
+        Everything goes through the SVG because that is the only form the theming can
+        rewrite: the recolour is a substitution in the markup. A PDF asked of the engine
+        directly would be correct but always black on transparency.
+        """
         if fmt == "svg":
             _themed(raw, out, "svg", th)
             return
         tmp = out.with_suffix(".viasvg.svg")
         _themed(raw, tmp, "svg", th)
-        if _rasterise(tmp, out):
+        if _convert(tmp, out, fmt):
             return
-        # No rasteriser available. Fall back to the engine's own PNG, which is correct
-        # at scale 1 -- just small.
+        if fmt != "png":
+            raise HTTPException(
+                503, f"rsvg-convert is not installed, so {fmt} cannot be produced. SVG "
+                     f"and PNG are still available.")
+        # No converter. Fall back to the engine's own PNG, which is correct at scale 1
+        # -- just small -- and can still be themed because it carries an alpha channel.
         eng_png = raw.with_name(raw.stem + "-fallback.png")
         _FALLBACK_PNG[0](str(eng_png))
         _themed(eng_png, out, "png", th)
@@ -3213,18 +3222,34 @@ def create_app() -> FastAPI:
             st[k].moveTo(pos[k][0] - ox + 40.0, pos[k][1] - oy + 40.0)
         return n
 
-    def _rasterise(svg: Path, png: Path, scale: float = RENDER_SCALE) -> bool:
-        """SVG -> PNG at `scale`. False if there is no rasteriser to do it with."""
+    def _convert(svg: Path, out: Path, fmt: str,
+                 scale: float = RENDER_SCALE) -> bool:
+        """SVG -> fmt. False if there is no converter to do it with.
+
+        Only a raster is scaled: PDF and PS are vector, so enlarging them would just
+        inflate the coordinates for no gain.
+        """
         if not shutil.which("rsvg-convert"):
             return False
-        r = subprocess.run(["rsvg-convert", "-z", str(scale), "-o", str(png), str(svg)],
-                           capture_output=True)
-        return r.returncode == 0 and png.exists() and png.stat().st_size > 0
+        cmd = ["rsvg-convert", "-f", fmt]
+        if fmt == "png":
+            cmd += ["-z", str(scale)]
+        cmd += ["-o", str(out), str(svg)]
+        r = subprocess.run(cmd, capture_output=True)
+        return r.returncode == 0 and out.exists() and out.stat().st_size > 0
+
+    #: What a themed render can be handed back as, and the type to send it with. PDF and
+    #: PS come from the THEMED SVG through rsvg-convert rather than from the engine's own
+    #: renderToPDF: the engine draws black on transparency, so a direct PDF would ignore
+    #: the theme entirely. Converting the themed SVG keeps the output vector AND themed.
+    RENDER_TYPES = {"svg": "image/svg+xml", "png": "image/png",
+                    "pdf": "application/pdf", "ps": "application/postscript"}
 
     def _check_render_args(fmt: str, theme: str):
         f, t = fmt.lower(), theme.lower()
-        if f not in ("svg", "png"):
-            raise HTTPException(422, f"unknown format {fmt!r}. Use svg or png")
+        if f not in RENDER_TYPES:
+            raise HTTPException(
+                422, f"unknown format {fmt!r}. Use {', '.join(RENDER_TYPES)}")
         if t not in EQ_THEME:
             raise HTTPException(422, f"unknown theme {theme!r}. "
                                      f"Use {' or '.join(EQ_THEME)}")
@@ -3267,8 +3292,7 @@ def create_app() -> FastAPI:
                 f"first.")
         await run_in_threadpool(_render_out, raw, out, fmt, th)
         stem = Path(_CURRENT).stem if _CURRENT else "model"
-        return FileResponse(str(out),
-                            media_type="image/svg+xml" if fmt == "svg" else "image/png",
+        return FileResponse(str(out), media_type=RENDER_TYPES[fmt],
                             filename=f"{stem}-equations-{th}.{fmt}")
 
     def _pub_tabs():
@@ -3337,6 +3361,50 @@ def create_app() -> FastAPI:
             tab.items[k].y(y + ay)
             x += w + PUB_GAP
             row_h = max(row_h, h)
+
+    def _pub_drawn(tab) -> int:
+        """How much the tab actually draws, in bytes of SVG.
+
+        `PubTab::redraw` wraps every item's draw in `catch (...) {}` (model/pubTab.cc),
+        so an item the renderer cannot handle is skipped in total silence: the add
+        succeeds, the tab reports it holds the item, and the figure comes out blank with
+        no error anywhere. A Godley table is one such item -- its draw throws, and the
+        tab renders a 0x0 document. Measuring the file the engine wrote is the only way
+        to find out whether an item drew at all.
+        """
+        p = _SCRATCH / "pub-probe.svg"
+        try:
+            if p.exists():
+                p.unlink()
+            tab.renderToSVG(str(p))
+            return p.stat().st_size if p.exists() else 0
+        except Exception:
+            return 0
+
+    #: What the interface calls each kind of item. A message that says "GodleyIcon" is
+    #: naming a C++ class at someone who is looking at a thing labelled "Godley table".
+    ITEM_WORDS = {"GodleyIcon": "Godley table", "PlotWidget": "plot",
+                  "Variable:flow": "flow variable", "Variable:stock": "stock variable",
+                  "Variable:integral": "integral", "Variable:parameter": "parameter",
+                  "Variable:constant": "constant", "IntOp": "integral",
+                  "Group": "group", "Sheet": "sheet", "SwitchIcon": "switch",
+                  "DataOp": "data block", "UserFunction": "user function",
+                  "Item": "note"}
+
+    def _describe(it) -> str:
+        """A name for an item that a person can match to something on the canvas."""
+        try:
+            ct = it.classType()
+        except Exception:
+            return "that item"
+        word = ITEM_WORDS.get(ct) or (
+            f"{ct.split(':')[1]} variable" if ct.startswith("Variable:")
+            else ct.replace("Operation:", "") if ct.startswith("Operation:") else ct)
+        try:
+            nm = it.name()
+        except Exception:
+            nm = ""
+        return f"the {word} {nm!r}" if nm else f"the {word}"
 
     @app.get("/api/pubtabs")
     async def pub_tabs():
@@ -3419,11 +3487,43 @@ def create_app() -> FastAPI:
             mk = engine().minsky
             tab = _pub_at(i)
             before = len(tab.items)
+            wrong, blank = [], []
             for r in refs:
                 raw = _resolve(mk, r)
                 raw.updateBoundingBox()
-                mk.canvas.getItemAt(raw.x(), raw.y())
+                want = _describe(raw)
+                if not mk.canvas.getItemAt(raw.x(), raw.y()):
+                    wrong.append(f"{want} (the canvas hit test found nothing there)")
+                    continue
+                got = mk.canvas.item
+                # The hit test returns the TOPMOST item at that point, and a Godley
+                # table's stock variables are drawn ON the table -- so their anchor
+                # resolves to the table and the tab would quietly receive the wrong
+                # thing. Saying so beats adding something the user did not pick.
+                if (got.classType() != raw.classType()
+                        or abs(got.x() - raw.x()) > 0.5 or abs(got.y() - raw.y()) > 0.5):
+                    wrong.append(f"{want} (that point on the canvas resolves to "
+                                 f"{_describe(got)}, which is drawn over it)")
+                    continue
+                size0 = _pub_drawn(tab)
+                n0 = len(tab.items)
                 mk.addCanvasItemToPublicationTab(i)
+                if len(tab.items) == n0:
+                    wrong.append(f"{want} (the engine did not take it)")
+                elif _pub_drawn(tab) <= size0:
+                    blank.append(want)
+            if wrong or blank:
+                msgs = []
+                if wrong:
+                    msgs.append("Could not add " + "; ".join(wrong))
+                if blank:
+                    msgs.append(
+                        "Minsky's figure renderer draws nothing for "
+                        + "; ".join(blank) + ", so the figure would come out blank")
+                    if any("Godley" in b for b in blank):
+                        msgs.append("A Godley table cannot go on a figure; export the "
+                                    "canvas, or add a plot of its variables instead")
+                raise HTTPException(422, ". ".join(msgs) + ".")
             added = len(tab.items) - before
             _pub_arrange(tab)
             return added
@@ -3465,8 +3565,7 @@ def create_app() -> FastAPI:
         await run_in_threadpool(_render_out, raw, out, fmt, th)
         stem = Path(_CURRENT).stem if _CURRENT else "model"
         safe = re.sub(r"[^A-Za-z0-9._-]+", "-", nm).strip("-") or f"tab{i}"
-        return FileResponse(str(out),
-                            media_type="image/svg+xml" if fmt == "svg" else "image/png",
+        return FileResponse(str(out), media_type=RENDER_TYPES[fmt],
                             filename=f"{stem}-{safe}-{th}.{fmt}")
 
     @app.get("/api/phillips")
@@ -3519,8 +3618,7 @@ def create_app() -> FastAPI:
                    if tables else "no Godley tables."))
         await run_in_threadpool(_render_out, raw, out, fmt, th)
         stem = Path(_CURRENT).stem if _CURRENT else "model"
-        return FileResponse(str(out),
-                            media_type="image/svg+xml" if fmt == "svg" else "image/png",
+        return FileResponse(str(out), media_type=RENDER_TYPES[fmt],
                             filename=f"{stem}-phillips-{th}.{fmt}")
 
     @app.post("/api/analysis/units")

@@ -34,12 +34,25 @@ is born with, so `a*b + c` was accepted, echoed back verbatim, and computed 0.
 
 The endpoint now takes either form: a bare body, or `f(a,b) = body`.
 
-## 3. Two arguments is the hard limit — fixed
+## 3. Two arguments was the hard limit — fixed in the engine
 
-`UserFunction::evaluate(double in1, double in2)` sets every argument after the second to
-zero, and the icon only ever grows two input ports. `f(a,b,c) = a*100+b*10+c` fed 1 and 2
-returns **120**, not 123, at reset and throughout a run. Declaring a third is now refused
-rather than silently zeroed.
+`UserFunction::evaluate(double in1, double in2)` set every argument after the second to
+zero, and the icon only ever grew two input ports. `f(a,b,c) = a*100+b*10+c` fed 1 and 2
+returned **120**, not 123, at reset and throughout a run, with nothing reported.
+
+This one is fixed in Minsky's own C++ rather than guarded around: the arity is now a
+property of the item, so a function takes as many arguments as its name declares. The
+patch is in `engine-patches/`, with the build flags this machine needs.
+
+    f(a,b,c) = a*100 + b*10 + c   fed 1,2,3   ->  123
+    k(a,b,c,d,e) = a+10b+100c+1000d+10000e   ->  54321
+    a 4-argument function driving K' = (a+b+c)K  ->  9.5e-16 against the closed form
+
+Ports spread down the icon's left edge and are labelled with the argument each carries,
+the icon grows to fit them, and editing an argument list keeps the wires that still have
+somewhere to land. The output port is deliberately left alone: its wire cannot be re-made
+once the model has been reset, because `addWire` refuses to wire the input of a variable
+the equations already define.
 
 ## 4. Godley table rows must balance in exact floating point — worth knowing
 

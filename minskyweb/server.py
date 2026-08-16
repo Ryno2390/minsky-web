@@ -3767,6 +3767,11 @@ def create_app() -> FastAPI:
                              filename=file.filename)
         return out
 
+    #: How many arguments a user function may declare. The engine has no limit of its
+    #: own now; this is about the icon staying readable, since every argument is a port
+    #: down its left edge.
+    MAX_FUNCTION_ARGS = 12
+
     #: Names an expression may use that are not its own arguments. Minsky's
     #: `addTimeVariables` puts the first four in the symbol table; the rest are exprtk's.
     EXPR_BUILTINS = {
@@ -3837,17 +3842,16 @@ def create_app() -> FastAPI:
                          f"give the body on its own to keep the arguments as they are.")
             if len(set(names)) != len(names):
                 raise HTTPException(422, f"{head!r} repeats an argument name")
-            # `UserFunction::evaluate(double in1, double in2)` takes two arguments and
-            # sets every one after them to zero, and the icon only ever grows two input
-            # ports. Declaring three is accepted by the engine and then computes with the
-            # third as 0: f(a,b,c)=a*100+b*10+c fed 1 and 2 returns 120, not 123, at reset
-            # and throughout a run, with nothing reported.
-            if len(names) > 2:
+            # A user function used to be stuck at two arguments: evaluate() took two and
+            # zeroed the rest, and the icon only grew two input ports, so f(a,b,c) fed 1
+            # and 2 returned 120 rather than 123 with nothing reported. That is fixed in
+            # the engine now -- the arity follows the declared argument list -- so the
+            # only limit left is one that keeps the icon legible.
+            if len(names) > MAX_FUNCTION_ARGS:
                 raise HTTPException(
-                    422, f"a user function takes at most 2 arguments; {head!r} declares "
-                         f"{len(names)}. Minsky evaluates the third and beyond as 0 "
-                         f"rather than refusing them. Split the calculation across "
-                         f"blocks, or wire the extra values in through operations.")
+                    422, f"{head!r} declares {len(names)} arguments; "
+                         f"{MAX_FUNCTION_ARGS} is the most an icon can show legibly. "
+                         f"Split the calculation across blocks.")
         await call(checkpoint)
 
         def _go():
@@ -3887,7 +3891,18 @@ def create_app() -> FastAPI:
             if got != body:
                 raise HTTPException(
                     409, f"the engine kept {got!r} rather than {body!r}")
-            return got, raw.name(), list(raw.argNames())
+            # Everything is read off the item BEFORE the resync. Re-deriving the topology
+            # writes the document and loads it back, which replaces every item in the
+            # engine -- so `raw` is a pointer into freed memory the moment it returns, and
+            # reading a name off it segfaulted the process.
+            out = (got, raw.name(), list(raw.argNames()))
+            # Changing the argument list changes the number of input ports, and the engine
+            # drops any wire whose argument has gone -- without going through this API, so
+            # our record of the topology would be a wire out, and the canvas would draw
+            # one that is no longer there.
+            if head:
+                resync_wires()
+            return out
 
         try:
             expr, name, args = await call(_go)

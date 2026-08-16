@@ -4229,11 +4229,16 @@ _r = c.post(f"/api/item/{_uf}/expression", json={"name": "p + zzz"})
 check("a name that is nothing at all is refused too",
       _r.status_code == 422 and "zzz" in _r.text, _r.text[:150])
 
-# `evaluate(double in1, double in2)` zeroes every argument after the second, and the icon
-# only ever grows two input ports: f(a,b,c) fed 1 and 2 returns 120, not 123.
+# `evaluate(double in1, double in2)` used to zero every argument after the second, and
+# the icon only ever grew two input ports, so f(a,b,c) fed 1 and 2 returned 120 rather
+# than 123. Fixed in the engine: the arity now follows the declared argument list.
 _r = c.post(f"/api/item/{_uf}/expression", json={"name": "f(a,b,cc) = a*100+b*10+cc"})
-check("a third argument is refused rather than evaluated as zero",
-      _r.status_code == 422 and "2 arguments" in _r.text, _r.text[:150])
+check("a third argument is accepted now that the engine evaluates it",
+      _r.status_code == 200 and _r.json()["args"] == ["a", "b", "cc"], _r.text[:150])
+_r = c.post(f"/api/item/{_uf}/expression",
+            json={"name": "w(" + ",".join(f"a{i}" for i in range(13)) + ") = a0"})
+check("but an unreadable number of arguments is still refused",
+      _r.status_code == 422 and "legibly" in _r.text, _r.text[:150])
 for _bad, _why in (("h(a b) = a", "arguments not separated by commas"),
                    ("h(a,a) = a", "an argument repeated"),
                    ("h(a,b) = ", "a heading with no body"),
@@ -4247,6 +4252,45 @@ _v = str(c.post("/api/item",
 _r = c.post(f"/api/item/{_v}/expression", json={"name": "x+1"})
 check("a variable has no expression to set", _r.status_code == 422
       and "user function" in _r.text, _r.text[:110])
+
+# THREE arguments, wired and run. This is the case the engine used to get wrong: it
+# evaluated the third as zero, at reset and throughout a run, and said nothing.
+c.post("/api/clear")
+_uf3 = str(c.post("/api/item",
+                  json={"kind": "operation", "op": "userFunction"}).json()["index"])
+c.post(f"/api/item/{_uf3}/expression", json={"name": "f(a,b,cc) = a*100 + b*10 + cc"})
+_it3 = next(i for i in c.get("/api/state").json()["items"] if i["ref"] == _uf3)
+check("a three-argument function has three input ports",
+      sum(1 for p in _it3["ports"] if p["role"] == "input") == 3,
+      str([p["role"] for p in _it3["ports"]]))
+check("and they are at distinct positions, so each can be wired",
+      len({p["y"] for p in _it3["ports"] if p["role"] == "input"}) == 3,
+      str([p["y"] for p in _it3["ports"] if p["role"] == "input"]))
+for _k, _v in enumerate((1.0, 2.0, 3.0)):
+    _cc = str(c.post("/api/item", json={"kind": "variable", "var_type": "constant",
+                                        "value": _v}).json()["index"])
+    _w = c.post("/api/wire", json={"src": _cc, "dst": _uf3, "port": _k + 1})
+    check(f"input {_k+1} takes a wire", _w.status_code == 200, _w.text[:90])
+_o3 = str(c.post("/api/item", json={"kind": "variable", "name": "out3",
+                                    "var_type": "flow"}).json()["index"])
+c.post("/api/wire", json={"src": _uf3, "dst": _o3, "port": 1})
+c.post("/api/solver", json={"implicit": False, "tmax": 2.0})
+c.post("/api/reset")
+check("and it computes on all three, not the first two",
+      abs(c.get("/api/state").json()["values"][":out3"] - 123.0) < 1e-9,
+      str(c.get("/api/state").json()["values"].get(":out3")))
+_fr3 = []
+with c.websocket_connect("/ws/sim") as ws:
+    ws.send_json({"cmd": "run", "steps": 200, "tmax": 2.0})
+    while True:
+        _m = ws.receive_json()
+        if "error" in _m:
+            check("three-arg run streamed", False, _m["error"]); break
+        if _m.get("done") or _m.get("stopped"): break
+        _fr3.append(_m)
+check("through a whole run, not just at reset",
+      _fr3 and all(abs(f["values"][":out3"] - 123.0) < 1e-9 for f in _fr3),
+      f"{len(_fr3)} frames, last {_fr3[-1]['values'][':out3'] if _fr3 else None}")
 
 # A two-argument function still computes what it says, wired and run.
 c.post("/api/clear")
@@ -4435,6 +4479,73 @@ check("a plot watching a run does not change it",
       _fr and abs(_fr[-1]["values"][":S"] - math.exp(0.1 * _fr[-1]["t"]))
       / math.exp(0.1 * _fr[-1]["t"]) < 1e-8,
       f"S={_fr[-1]['values'][':S'] if _fr else None}")
+c.post("/api/clear")
+
+
+print("\n77. editing a function's argument list")
+# The arity is a property of the item now, so changing it changes the ports. Rebuilding
+# ports DELETES the wires that end at them (~Port calls deleteWires), so this is where
+# wires get silently lost if the engine change is only half done.
+c.post("/api/clear")
+_uf = str(c.post("/api/item", json={"kind": "operation", "op": "userFunction",
+                                    "at": [600, 400]}).json()["index"])
+c.post(f"/api/item/{_uf}/expression", json={"name": "f(a,b,cc) = a*100 + b*10 + cc"})
+for _k, _v in enumerate((1.0, 2.0, 3.0)):
+    _cc = str(c.post("/api/item", json={"kind": "variable", "var_type": "constant",
+                                        "value": _v,
+                                        "at": [200, 200 + 90 * _k]}).json()["index"])
+    c.post("/api/wire", json={"src": _cc, "dst": _uf, "port": _k + 1})
+_o = str(c.post("/api/item", json={"kind": "variable", "name": "o7",
+                                   "var_type": "flow",
+                                   "at": [820, 400]}).json()["index"])
+c.post("/api/wire", json={"src": _uf, "dst": _o, "port": 1})
+c.post("/api/solver", json={"implicit": False, "tmax": 2.0})
+
+def _look():
+    c.post("/api/reset")
+    st = c.get("/api/state").json()
+    uf = next(i for i in st["items"] if i["classType"] == "UserFunction")
+    return (len([w for w in st["wires"] if not w.get("desync")]),
+            sum(1 for p in uf["ports"] if p["role"] == "input"),
+            st["values"].get(":o7"),
+            any(w.get("desync") for w in st["wires"]),
+            uf["ref"])
+
+_w, _n, _v, _d, _r = _look()
+check("three arguments, three wires in, and it computes on all three",
+      (_w, _n, _v, _d) == (4, 3, 123.0, False), f"wires={_w} inputs={_n} out={_v}")
+
+c.post(f"/api/item/{_r}/expression",
+       json={"name": "f(a,b,cc,d) = a*100 + b*10 + cc + d"})
+_w, _n, _v, _d, _r = _look()
+check("growing the argument list keeps every wire",
+      (_w, _n, _v, _d) == (4, 4, 123.0, False), f"wires={_w} inputs={_n} out={_v}")
+
+c.post(f"/api/item/{_r}/expression", json={"name": "f(a,b) = a*100 + b*10"})
+_w, _n, _v, _d, _r = _look()
+check("shrinking it drops only the wire whose argument has gone",
+      (_w, _n, _v, _d) == (3, 2, 120.0, False), f"wires={_w} inputs={_n} out={_v}")
+
+c.post(f"/api/item/{_r}/expression", json={"name": "f(a,b,cc) = a*100 + b*10 + cc"})
+_w, _n, _v, _d, _r = _look()
+check("and growing it again leaves the new argument unwired, not stale",
+      (_w, _n, _v, _d) == (3, 3, 120.0, False), f"wires={_w} inputs={_n} out={_v}")
+
+# The output does not depend on the argument list, so its wire must survive every change.
+# It is the one that cannot simply be re-made: once the model has been reset, the engine
+# refuses to wire the input of a variable its equations already define.
+check("the output stays connected throughout",
+      c.get("/api/state").json()["values"].get(":o7") == 120.0,
+      str(c.get("/api/state").json()["values"].get(":o7")))
+
+# and the whole thing survives a save/load, arity and wires together
+c.post("/api/save", json={"name": "arity-roundtrip"})
+_before = _look()[:3]
+c.post("/api/clear")
+c.post(f"/api/load?path={SAVE_DIR}/arity-roundtrip.mky")
+check("arity and wires survive save and load", _look()[:3] == _before,
+      f"{_look()[:3]} vs {_before}")
+_rm("arity-roundtrip")
 c.post("/api/clear")
 
 

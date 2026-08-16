@@ -1,0 +1,391 @@
+diff --git a/engine/equationDisplayRender.cc b/engine/equationDisplayRender.cc
+index 55c0015c..9b07e517 100644
+--- a/engine/equationDisplayRender.cc
++++ b/engine/equationDisplayRender.cc
+@@ -330,17 +330,22 @@ namespace MathDAG
+   template <>
+   void OperationDAG<OperationType::userFunction>::render(Surface& surf) const 
+   {
+-    print(surf.cairo(),"<i>"+dynamic_cast<UserFunction&>(*state).description()+"</i>",Anchor::nw);
+-    if (arguments.empty() || arguments[0].empty() || !arguments[0][0])
+-      print(surf.cairo(),"(0,0)",Anchor::nw);
++    auto& uf=dynamic_cast<UserFunction&>(*state);
++    print(surf.cairo(),"<i>"+uf.description()+"</i>",Anchor::nw);
++    // as many arguments as the function declares, not always two
++    const size_t n=std::min(uf.argNames.size(), arguments.size());
++    if (n==0)
++      print(surf.cairo(),"()",Anchor::nw);
+     else
+       parenthesise(surf, [&](Surface& surf){
+-        arguments[0][0]->render(surf);
+-        print(surf.cairo(),",",Anchor::nw);
+-        if (arguments.size()>1 && !arguments[1].empty() && arguments[1][0])
+-          arguments[1][0]->render(surf);
+-        else
+-          print(surf.cairo(),"0",Anchor::nw);
++        for (size_t i=0; i<n; ++i)
++          {
++            if (i) print(surf.cairo(),",",Anchor::nw);
++            if (arguments[i].empty() || !arguments[i][0])
++              print(surf.cairo(),"0",Anchor::nw);
++            else
++              arguments[i][0]->render(surf);
++          }
+         });
+   }
+ 
+diff --git a/engine/equations.cc b/engine/equations.cc
+index 5186e18e..48bad904 100644
+--- a/engine/equations.cc
++++ b/engine/equations.cc
+@@ -392,13 +392,34 @@ namespace MathDAG
+                 ev.push_back(EvalOpPtr(type(), state, result, *argIdx[0][0], *argIdx[1][0])); 
+                 break;
+               case userFunction:
+-                for (size_t i=0; i<arguments.size(); ++i)
+-                  if (arguments[i].empty())
+-                    {
+-                      argIdx[i].emplace_back(VariableType::tempFlow);
+-                      argIdx[i].back()->allocValue();
+-                    }
+-                ev.push_back(EvalOpPtr(type(), state, result, *argIdx[0][0], *argIdx[1][0])); 
++                {
++                  // A user function takes as many arguments as its name declares, not
++                  // two. `arguments` holds one entry per input port, plus a final entry
++                  // listing the variables the expression names -- that one is there to
++                  // order the evaluation and is not an input, so it is not counted here.
++                  size_t nArgs=0;
++                  if (auto uf=dynamic_cast<UserFunction*>(state.get()))
++                    nArgs=std::min(uf->argNames.size(), arguments.size());
++                  for (size_t i=0; i<arguments.size(); ++i)
++                    if (arguments[i].empty())
++                      {
++                        argIdx[i].emplace_back(VariableType::tempFlow);
++                        argIdx[i].back()->allocValue();
++                      }
++                  // VariableValue is non-copyable, so the unused slots need a real
++                  // object to refer to rather than a temporary
++                  const VariableValue noArg;
++                  EvalOpPtr e(type(), state, result,
++                              nArgs>0? *argIdx[0][0]: noArg,
++                              nArgs>1? *argIdx[1][0]: noArg);
++                  // the first two travel in in1/in2 like every other operation; the rest
++                  // have nowhere else to go
++                  if (auto s=dynamic_cast<ScalarEvalOp*>(e.get()))
++                    for (size_t i=2; i<nArgs; ++i)
++                      s->inExtra.emplace_back(unsigned(argIdx[i][0]->idx()),
++                                              argIdx[i][0]->isFlowVar());
++                  ev.push_back(e);
++                }
+                 break;
+               case data:
+                 if (!argIdx.empty() && argIdx[0].size()==1)
+@@ -905,7 +926,7 @@ namespace MathDAG
+     o << "\\begin{eqnarray*}\n";
+     // output user defined functions
+     for (auto& i: userDefinedFunctions)
+-      o<<i.first<<"(x,y)&=&"<<i.second<<"\\\\\n";
++      o<<i.first<<"&=&"<<i.second<<"\\\\\n";
+     for (const VariableDAG* i: variables)
+       {
+         if (dynamic_cast<const IntegralInputVariableDAG*>(i) ||
+diff --git a/engine/evalOp.cc b/engine/evalOp.cc
+index 64c3e3a2..c0964716 100644
+--- a/engine/evalOp.cc
++++ b/engine/evalOp.cc
+@@ -62,6 +62,29 @@ namespace minsky
+             fv[out+i]=evaluate(flow1? fv[in1[i]]: sv[in1[i]], x2);
+           }
+         break;
++      default:
++        // More than two arguments: a user function with a longer argument list. Every
++        // argument is gathered and passed; the third onwards used to be evaluated as
++        // zero, silently.
++        assert(out+in1.size()<=n);
++        for (unsigned i=0; i<in1.size(); ++i)
++          {
++            vector<double> args;
++            args.reserve(2+inExtra.size());
++            args.push_back(flow1? fv[in1[i]]: sv[in1[i]]);
++            if (i<in2.size())
++              {
++                double x2=0;
++                const double* v=flow2? fv: sv;
++                for (auto& j: in2[i])
++                  x2+=j.weight*v[j.idx];
++                args.push_back(x2);
++              }
++            for (auto& j: inExtra)
++              args.push_back(j.second? fv[j.first]: sv[j.first]);
++            fv[out+i]=evaluateN(args);
++          }
++        break;
+       }
+ 
+     // This check may well be obsolete. ecolab::Plot will now elide
+@@ -347,6 +370,16 @@ namespace minsky
+   double EvalOp<OperationType::userFunction>::evaluate(double in1, double in2) const
+   {return state? dynamic_cast<UserFunction&>(*state).evaluate(in1,in2): 0;}
+   template <>
++  int EvalOp<OperationType::userFunction>::numArgs() const
++  {
++    if (auto f=dynamic_cast<UserFunction*>(state.get()))
++      return f->argNames.size();
++    return OperationTypeInfo::numArguments<OperationType::userFunction>();
++  }
++  template <>
++  double EvalOp<OperationType::userFunction>::evaluateN(const vector<double>& args) const
++  {return state? dynamic_cast<UserFunction&>(*state)(args): 0;}
++  template <>
+   double EvalOp<OperationType::userFunction>::d1(double x1, double x2) const
+   {throw error("user functions cannot be used with an implicit method");}
+   template <>
+diff --git a/engine/evalOp.h b/engine/evalOp.h
+index e90247d7..b7116d6d 100644
+--- a/engine/evalOp.h
++++ b/engine/evalOp.h
+@@ -66,6 +66,11 @@ namespace minsky
+       Support(double weight, unsigned idx): weight(weight), idx(idx) {}
+     };
+     std::vector<std::vector<Support>> in2;
++    /** arguments beyond the second, as (index, isFlowVariable). Every built-in operation
++        takes at most two, so this is empty for all of them; a user function takes as many
++        as its name declares. Before it existed, the third argument onwards was evaluated
++        as zero. **/
++    std::vector<std::pair<unsigned,bool>> inExtra;
+     ///indicate whether in1/in2 are flow variables (out is always a flow variable)
+     bool flow1=true, flow2=true, xflow=true; 
+ 
+@@ -127,6 +132,11 @@ namespace minsky
+     virtual double d1(double x1=0, double x2=0) const=0;
+     virtual double d2(double x1=0, double x2=0) const=0;
+     /// @}
++
++    /// evaluate on every argument, for operations taking more than two. The default
++    /// keeps the two-argument behaviour, so only the operations that need it override it.
++    virtual double evaluateN(const std::vector<double>& args) const
++    {return evaluate(args.size()>0? args[0]: 0, args.size()>1? args[1]: 0);}
+   };
+   
+   /// represents the operation when evaluating the equations
+@@ -140,8 +150,16 @@ namespace minsky
+     double evaluate(double in1=0, double in2=0) const override;
+     double d1(double x1=0, double x2=0) const override;
+     double d2(double x1=0, double x2=0) const override;
++    double evaluateN(const std::vector<double>& args) const override
++    {return evaluate(args.size()>0? args[0]: 0, args.size()>1? args[1]: 0);}
+   };
+ 
++  /// A user function takes as many arguments as its name declares, so its arity is a
++  /// property of the item rather than of the operation type.
++  template <> int EvalOp<minsky::OperationType::userFunction>::numArgs() const;
++  template <> double EvalOp<minsky::OperationType::userFunction>::evaluateN
++  (const std::vector<double>& args) const;
++
+  struct ConstantEvalOp: public EvalOp<minsky::OperationType::constant>
+   {
+     double value;
+diff --git a/engine/node_latex.cc b/engine/node_latex.cc
+index 43bb358c..7e170da4 100644
+--- a/engine/node_latex.cc
++++ b/engine/node_latex.cc
+@@ -697,12 +697,20 @@ namespace MathDAG
+   template <>
+   ostream& OperationDAG<OperationType::userFunction>::latex(ostream& o) const
+   {
+-    auto desc=mathrm(dynamic_cast<UserFunction&>(*state).description());
+-    if (arguments.empty() || arguments[0].empty())
+-      return o<<desc<<"()";
+-    if (arguments.size()<2 || arguments[1].empty())
+-      return o<<desc<<"\\left("<<arguments[0][0]->latex()<<"\\right)";
+-    return o<<desc<<"\\left("<<arguments[0][0]->latex()<<","<<arguments[1][0]->latex()<<"\\right)";
++    auto& uf=dynamic_cast<UserFunction&>(*state);
++    auto desc=mathrm(uf.description());
++    // as many arguments as the function declares -- the trailing entry of `arguments`
++    // lists the variables the expression names and is not one of them
++    const size_t n=std::min(uf.argNames.size(), arguments.size());
++    if (n==0) return o<<desc<<"()";
++    o<<desc<<"\\left(";
++    for (size_t i=0; i<n; ++i)
++      {
++        if (i) o<<",";
++        if (arguments[i].empty() || !arguments[i][0]) o<<"0";
++        else o<<arguments[i][0]->latex();
++      }
++    return o<<"\\right)";
+   }    
+ 
+   template <>
+diff --git a/engine/node_matlab.cc b/engine/node_matlab.cc
+index 23d33628..c84ba939 100644
+--- a/engine/node_matlab.cc
++++ b/engine/node_matlab.cc
+@@ -660,11 +660,17 @@ namespace MathDAG
+   template <>
+   ostream& OperationDAG<OperationType::userFunction>::matlab(ostream& o) const
+   {
+-    if (arguments.empty() || arguments[0].empty())
+-      return o<<dynamic_cast<UserFunction*>(state.get())->name()<<"()";
+-    if (arguments.size()<2 || arguments[1].empty())
+-      return o<<dynamic_cast<UserFunction*>(state.get())->name()<<"("<<arguments[0][0]->matlab()<<")";
+-    return o<<dynamic_cast<UserFunction*>(state.get())->name()<<"("<<arguments[0][0]->matlab()<<","<<arguments[1][0]->matlab()<<")";
++    auto& uf=*dynamic_cast<UserFunction*>(state.get());
++    const size_t n=std::min(uf.argNames.size(), arguments.size());
++    if (n==0) return o<<uf.name()<<"()";
++    o<<uf.name()<<"(";
++    for (size_t i=0; i<n; ++i)
++      {
++        if (i) o<<",";
++        if (arguments[i].empty() || !arguments[i][0]) o<<"0";
++        else o<<arguments[i][0]->matlab();
++      }
++    return o<<")";
+   }    
+ 
+   
+diff --git a/model/operation.cc b/model/operation.cc
+index 527556ba..fafcf5ce 100644
+--- a/model/operation.cc
++++ b/model/operation.cc
+@@ -170,10 +170,17 @@ namespace minsky
+     w=0.5*bbox.width+2*z; 
+     h=0.5*bbox.height+4*z;        
+     hoffs=bbox.top/z;
++    const float hText=h;
++    // A user function has one input port per declared argument, so beyond a couple of
++    // them the box has to be taller than its label or the ports crowd into a few pixels
++    // and nobody can drag a wire to the one they meant. The label keeps its own offset,
++    // so it stays centred as the box grows.
++    if (numPorts()>3)
++      h=std::max(h, float(4.0*z*(numPorts()-1)));
+     
+     {
+       cairoShim.save();
+-      cairoShim.moveTo(r.x(-w+1,-h-hoffs+2*z), r.y(-w+1,-h-hoffs+2*z));
++      cairoShim.moveTo(r.x(-w+1,-hText-hoffs+2*z), r.y(-w+1,-hText-hoffs+2*z));
+       cairoShim.showText(tp);
+       cairoShim.restore();
+     }
+@@ -206,17 +213,38 @@ namespace minsky
+       case 2: 
+         m_ports[1]->moveTo(x()+rr.x(-w,0), y()+rr.y(-w,0));
+         break;
+-      case 3: default:
++      case 3:
+         m_ports[1]->moveTo(x()+rr.x(-w,0), y()+rr.y(-w,textFlipped? h-3: -h+3));
+         m_ports[2]->moveTo(x()+rr.x(-w,0), y()+rr.y(-w,textFlipped? -h+3: h-3));
+         break;
++      default:
++        // A user function declares as many arguments as it likes, so spread its inputs
++        // evenly down the left edge. Without this every port past the second kept the
++        // icon's own coordinates and they all sat on top of one another in the middle,
++        // where the hit test could not tell them apart and nothing could be wired.
++        for (size_t i=1; i<numPorts(); ++i)
++          {
++            double f=double(i-1)/(numPorts()-2);   // 0 at the top, 1 at the bottom
++            if (textFlipped) f=1-f;
++            m_ports[i]->moveTo(x()+rr.x(-w,0), y()+rr.y(-w,(h-3)*(2*f-1)));
++          }
++        break;
+       }
+     if (type()==OperationType::userFunction)
+       {
+         cairoShim.setSourceRGB(0,0,0);
+         DrawBinOpShim drawBinOp(cairoShim, zoomFactor());
+-        drawBinOp.drawPort([&](){drawBinOp.drawSymbol("x");},-1.1*w,-1.1*h,rotation());
+-        drawBinOp.drawPort([&](){drawBinOp.drawSymbol("y");},-1.1*w,1.1*h,rotation());
++        // label each input with the argument it carries. These were always "x" and "y",
++        // which is only right for a function that happens to be called f(x,y).
++        const auto* uf=dynamic_cast<const UserFunction*>(this);
++        const size_t nIn=numPorts()>1? numPorts()-1: 0;
++        for (size_t i=0; i<nIn; ++i)
++          {
++            const double f=nIn>1? double(i)/(nIn-1): 0.5;
++            const std::string nm=(uf && i<uf->argNames.size())? uf->argNames[i]: "";
++            drawBinOp.drawPort([&](){drawBinOp.drawSymbol(nm.c_str());},
++                               -1.1*w, 1.1*h*(2*f-1), rotation());
++          }
+       }
+     if (mouseFocus)
+       {
+diff --git a/model/userFunction.cc b/model/userFunction.cc
+index bd24621c..aa74c2dc 100644
+--- a/model/userFunction.cc
++++ b/model/userFunction.cc
+@@ -243,9 +243,57 @@ namespace minsky
+     for (; end!=string::npos; begin=end+1, end=argList.find(',',begin))
+       argNames.push_back(argList.substr(begin,end-begin));
+     argNames.push_back(argList.substr(begin));
++    // an empty argument list parses to one empty name, which is no argument at all
++    if (argNames.size()==1 && argNames[0].empty()) argNames.clear();
++    updatePorts();
+     return nm;
+   }
+ 
++  void UserFunction::updatePorts()
++  {
++    const size_t want=numPorts();
++    if (portsSize()==want) return;
++
++    // The OUTPUT port is deliberately kept rather than rebuilt. Destroying a port deletes
++    // the wires that end at it (~Port calls deleteWires), and the output wire cannot
++    // simply be put back: once the model has been reset, addWire refuses to wire the
++    // input of a variable the equations already define, so the function would silently
++    // lose whatever it fed. The output does not depend on the argument list anyway.
++    auto out=portsSize()>0? m_ports[0]: nullptr;
++
++    // Inputs do have to be rebuilt, so remember what fed each one -- the wire objects
++    // themselves are gone by the time the new ports exist.
++    vector<vector<shared_ptr<Port>>> suppliers;
++    for (size_t i=1; i<portsSize(); ++i)
++      {
++        suppliers.emplace_back();
++        if (auto p=ports(i).lock())
++          for (auto w: p->wires())
++            if (auto f=w->from())
++              suppliers.back().push_back(f);
++      }
++
++    m_ports.clear();
++    if (out)
++      m_ports.push_back(out);
++    else if (want>0)
++      m_ports.emplace_back(make_shared<Port>(*this));
++    for (size_t i=1; i<want; ++i)
++      m_ports.emplace_back(make_shared<InputPort>(*this));
++
++    // put back every input that still has an argument to land on. The ones whose argument
++    // has gone stay gone, which is the only honest thing to do with them.
++    if (auto g=group.lock())
++      for (size_t i=0; i+1<portsSize() && i<suppliers.size(); ++i)
++        if (auto to=ports(i+1).lock())
++          for (auto& from: suppliers[i])
++            g->addWire(from, to);
++
++    // The icon's size and its port positions are both worked out by drawing it, so
++    // without this it keeps the shape the function had before the argument list changed.
++    updateBoundingBox();
++  }
++
+   string UserFunction::name() const
+   {
+     static const regex extractName(R"(([^(]*).*)");
+diff --git a/model/userFunction.h b/model/userFunction.h
+index 85806f57..708d8a6a 100644
+--- a/model/userFunction.h
++++ b/model/userFunction.h
+@@ -41,6 +41,14 @@ namespace  minsky
+     void compile();
+     double evaluate(double x, double y);
+ 
++    /// One input port per declared argument, plus the output. Every other operation has
++    /// a fixed arity, but a user function's is whatever its name declares, so this
++    /// cannot come from OperationTypeInfo::numArguments.
++    std::size_t numPorts() const override {return argNames.size()+1;}
++    /// Rebuild the ports after the argument list changes, keeping the wires that still
++    /// have a port to land on.
++    void updatePorts();
++
+     /// evaluate function on arbitrary number of arguments (exprtk support)
+     double operator()(const std::vector<double>& p) override;
+ 

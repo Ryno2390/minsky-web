@@ -116,7 +116,15 @@ svg#board.panning{cursor:grabbing}
 /* A model can have forty-odd variables, and an unbounded list of them pushed the Solver
    and Selection panels 300 and 500px below the bottom of the window -- so clicking an
    item appeared to do nothing, because everything it changed was off screen. */
-#series{max-height:34vh;overflow-y:auto}
+#series{max-height:27vh;overflow-y:auto}
+#parms{max-height:26vh;overflow-y:auto;margin-bottom:4px}
+.parm{padding:5px 4px 7px;border-bottom:1px solid var(--line)}
+.parm:last-child{border-bottom:none}
+.parm .top{display:flex;justify-content:space-between;align-items:center;gap:8px}
+.parm .nm{font-size:12.5px;color:var(--ink);overflow:hidden;text-overflow:ellipsis;
+  white-space:nowrap}
+.parm input[type=number]{width:82px;text-align:right;font-size:12px;padding:2px 5px}
+.parm input[type=range]{width:100%;margin-top:5px;accent-color:var(--par)}
 .row{display:flex;justify-content:space-between;align-items:center;gap:8px;
   padding:4px 6px;border-radius:5px;font-family:var(--mono);font-size:12px}
 .row:nth-child(odd){background:#12171A}
@@ -385,6 +393,34 @@ svg#board.panning{cursor:grabbing}
     </div>
     <div style="font-size:11.5px;color:var(--ink-3);padding:0 2px" id="initnote"></div>
   </div>
+  <div id="attrwrap" style="display:none;margin-top:10px">
+    <div class="field" style="gap:6px">
+      <label style="white-space:nowrap">units</label>
+      <input id="units" style="width:100%" autocomplete="off" spellcheck="false"
+             placeholder="m/s, $, 1/yr">
+      <button id="unitsok" style="font-size:12px;padding:4px 10px">Set</button>
+    </div>
+    <div style="font-size:11.5px;color:var(--ink-3);padding:0 2px" id="unitsnote"></div>
+    <div id="sliderwrap" style="margin-top:8px">
+      <div class="field" style="gap:6px">
+        <label style="white-space:nowrap">slider</label>
+        <input id="smin" style="width:100%" placeholder="min" autocomplete="off">
+        <input id="smax" style="width:100%" placeholder="max" autocomplete="off">
+        <input id="sstep" style="width:100%" placeholder="step" autocomplete="off">
+        <button id="sliderok" style="font-size:12px;padding:4px 10px">Set</button>
+      </div>
+      <div style="font-size:11.5px;color:var(--ink-3);padding:0 2px">
+        the range the Parameters slider covers</div>
+    </div>
+    <div class="field" style="gap:6px;margin-top:8px">
+      <label style="white-space:nowrap">rotation</label>
+      <input id="rot" style="width:100%" placeholder="degrees" autocomplete="off">
+      <button id="rotok" style="font-size:12px;padding:4px 10px">Set</button>
+    </div>
+    <div style="font-size:11.5px;color:var(--ink-3);padding:0 2px" id="rotnote"></div>
+  </div>
+<h3 id="parmhead" style="display:none">Parameters</h3>
+  <div id="parms" style="display:none"></div>
 <h3>Simulation</h3>
   <canvas class="plot" id="plot"></canvas>
   <div id="series" style="margin-top:8px"></div>
@@ -420,7 +456,12 @@ const GREEK = {alpha:"α",beta:"β",gamma:"γ",delta:"δ",epsilon:"ε",zeta:"ζ"
   theta:"θ",iota:"ι",kappa:"κ",lambda:"λ",mu:"μ",nu:"ν",xi:"ξ",pi:"π",rho:"ρ",
   sigma:"σ",tau:"τ",upsilon:"υ",phi:"φ",chi:"χ",psi:"ψ",omega:"ω",
   Gamma:"Γ",Delta:"Δ",Theta:"Θ",Lambda:"Λ",Xi:"Ξ",Pi:"Π",Sigma:"Σ",
-  Upsilon:"Υ",Phi:"Φ",Psi:"Ψ",Omega:"Ω"};
+  Upsilon:"Υ",Phi:"Φ",Psi:"Ψ",Omega:"Ω",
+  // Not Greek, but they arrive by the same backslash escape and are common in these
+  // models: EndogenousMoney has a parameter that read `τ_{M\rightarrow M+}` on screen.
+  rightarrow:"→",leftarrow:"←",Rightarrow:"⇒",Leftarrow:"⇐",leftrightarrow:"↔",
+  to:"→",times:"×",cdot:"·",pm:"±",leq:"≤",geq:"≥",neq:"≠",approx:"≈",
+  infty:"∞",partial:"∂",sum:"Σ",prod:"Π",int:"∫",sqrt:"√"};
 
 function pretty(name){
   return String(name)
@@ -924,6 +965,93 @@ function render() {
     $("#initnote").textContent = ct === "Variable:integral"
       ? "where the integral starts" : "";
   }
+
+  // Units, slider bounds and rotation -- the rest of Minsky's variable dialog.
+  const isVar = !!selItem && (ct.startsWith("Variable") || ct === "VarConstant");
+  $("#attrwrap").style.display = isVar ? "" : "none";
+  // Slider bounds only where a slider is the point: they are what the Parameters panel
+  // draws its range from, and a stock has no slider to bound.
+  const TUNABLE = ct === "Variable:parameter" || ct === "VarConstant";
+  $("#sliderwrap").style.display = TUNABLE ? "" : "none";
+  if (isVar) {
+    if (document.activeElement !== $("#units")) $("#units").value = selItem.units || "";
+    // Minsky rewrites what it is given -- "m/s" is stored as "m s^-1" -- so saying so
+    // beforehand stops the rewritten form reading as a bug.
+    const others = state.items.filter(i => i.name && i.name === selItem.name).length;
+    $("#unitsnote").textContent = others > 1
+      ? `units and slider bounds belong to the variable — all ${others} icons share them`
+      : "Minsky normalises these: m/s is stored as m s^-1";
+    const sl = selItem.slider || {};
+    for (const [id, v] of [["#smin", sl.min], ["#smax", sl.max], ["#sstep", sl.step]]) {
+      if (document.activeElement !== $(id)) $(id).value = v === undefined ? "" : String(v);
+    }
+    if (document.activeElement !== $("#rot")) {
+      $("#rot").value = selItem.rotation === undefined ? "" : String(selItem.rotation);
+    }
+    $("#rotnote").textContent = others > 1
+      ? "rotation belongs to this icon alone" : "";
+  }
+
+  renderParams();
+}
+
+// Every parameter in the model, with the slider its bounds describe. They used to be
+// mixed alphabetically into the read-only values list, so the handful of numbers a
+// modeller actually turns were scattered among forty they only read.
+function renderParams(){
+  const seen = new Set();
+  const parms = state.items.filter(i => {
+    if (i.classType !== "Variable:parameter" && i.classType !== "VarConstant") return false;
+    const k = i.valueId || i.name;               // one row per VARIABLE, not per icon
+    if (!k || seen.has(k)) return false;
+    seen.add(k); return true;
+  });
+  $("#parmhead").style.display = parms.length ? "" : "none";
+  $("#parms").style.display = parms.length ? "" : "none";
+  if (!parms.length) { $("#parms").innerHTML = ""; return; }
+
+  // Do not rebuild under a slider being dragged: it would jump back on every frame.
+  if ($("#parms").contains(document.activeElement)) return;
+
+  $("#parms").innerHTML = parms.map(p => {
+    const vid = p.valueId || (":" + p.name);
+    const cur = Number(state.inits?.[vid] ?? state.values?.[vid] ?? 0);
+    const sl = p.slider || {};
+    let lo = Number.isFinite(sl.min) ? sl.min : -1, hi = Number.isFinite(sl.max) ? sl.max : 1;
+    // A value outside its own slider range pins the handle at one end and looks broken;
+    // widen the drawn range to hold it rather than silently clamping the value.
+    if (cur < lo) lo = cur; if (cur > hi) hi = cur;
+    if (!(hi > lo)) { lo = cur - 1; hi = cur + 1; }
+    let step = Number.isFinite(sl.step) && sl.step > 0 ? sl.step : (hi - lo) / 100;
+    // A range input SNAPS its handle to the step, so a value that is not a multiple of
+    // it draws in the wrong place: 12.5 against a step of 1 showed the handle at 13
+    // while the number beside it read 12.5. Quantise the drag only while the value it
+    // starts from can actually be represented.
+    const onStep = Math.abs(cur - lo - Math.round((cur - lo) / step) * step) < step * 1e-6;
+    const rstep = onStep ? String(step) : "any";
+    return `<div class="parm" data-ref="${esc(p.ref)}" data-name="${esc(p.name)}">
+      <div class="top"><span class="nm" title="${esc(pretty(p.name))}">${esc(pretty(p.name))}</span>
+      <input type="number" class="pnum" value="${esc(cur)}" step="${esc(step)}"></div>
+      <input type="range" class="prange" min="${esc(lo)}" max="${esc(hi)}"
+             step="${esc(rstep)}" value="${esc(cur)}"></div>`;
+  }).join("");
+
+  $("#parms").querySelectorAll(".parm").forEach(row => {
+    const num = row.querySelector(".pnum"), rng = row.querySelector(".prange");
+    const name = row.dataset.name;
+    // `input` only moves the other control -- one request per pixel of drag would
+    // queue hundreds of edits and one undo step each. The value is committed on change.
+    rng.addEventListener("input", () => { num.value = rng.value; });
+    num.addEventListener("input", () => { rng.value = num.value; });
+    const commit = guard(async () => {
+      const v = Number(num.value);
+      if (!Number.isFinite(v)) return;
+      state = await api("/init", {method:"POST", body: JSON.stringify({name, value: v})});
+      render();
+    });
+    rng.addEventListener("change", commit);
+    num.addEventListener("change", commit);
+  });
 }
 async function refresh(){ state = await api("/state"); render(); }
 
@@ -1042,6 +1170,33 @@ $("#clear").onclick = guard(async () => {
   state = await api("/clear", {method:"POST"});
   clearSelection(); series = {}; tSeries = []; colors = {}; drawPlot(); render();
 });
+// units / slider bounds / rotation all go to the same endpoint; send only the field
+// being changed, so setting a rotation cannot clobber units typed a moment earlier
+const setAttrs = body => guard(async () => {
+  if (sel === null) return;
+  const r = await api(`/item/${encodeURIComponent(sel)}/attrs`,
+                      {method:"POST", body: JSON.stringify(body)});
+  state = r; render();
+  if (r.note) toast(r.note, true);
+});
+$("#unitsok").onclick = () => setAttrs({units: $("#units").value.trim()})();
+$("#rotok").onclick   = () => setAttrs({rotation: Number($("#rot").value)})();
+$("#sliderok").onclick = () => {
+  const b = {};
+  for (const [k, id] of [["sliderMin","#smin"], ["sliderMax","#smax"], ["sliderStep","#sstep"]]) {
+    const v = $(id).value.trim();
+    if (v !== "") b[k] = Number(v);
+  }
+  if (!Object.keys(b).length) { toast("Give the slider a minimum, maximum or step."); return; }
+  setAttrs(b)();
+};
+for (const [id, btn] of [["#units","#unitsok"], ["#rot","#rotok"],
+                         ["#smin","#sliderok"], ["#smax","#sliderok"], ["#sstep","#sliderok"]]) {
+  $(id).addEventListener("keydown", e => {
+    if (e.key === "Enter") { e.preventDefault(); $(btn).click(); }
+    if (e.key === "Escape") { e.preventDefault(); $(id).blur(); render(); }
+  });
+}
 $("#editgodley").onclick = guard(async () => {
   // Double-clicking the icon opens this too, but nothing on screen said so.
   const it = sel === null ? null : state.items.find(i => i.ref === sel);

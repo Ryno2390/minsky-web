@@ -2962,6 +2962,110 @@ check("and renaming it is undoable like any other edit",
 c.post("/api/clear")
 
 
+print("\n60. units, slider bounds and rotation")
+# The rest of Minsky's variable dialog. Two of the three are shared by every icon of a
+# variable and one is not, which the UI has to say or changing one icon looks like a bug.
+c.post("/api/clear")
+c.post("/api/item", json={"kind":"parameter","name":"alpha","value":2.5,"at":[200,200]})
+c.post("/api/item", json={"kind":"variable","name":"alpha","var_type":"parameter",
+                          "at":[200,400]})
+_st = c.get("/api/state").json()
+check("a model can hold two icons of one parameter", len(_st["items"]) == 2)
+
+_r = c.post("/api/item/0/attrs", json={"units":"m/s"})
+check("units can be set", _r.status_code == 200, _r.text[:140])
+_st = c.get("/api/state").json()
+check("and are stored NORMALISED, not as typed",
+      _st["items"][0].get("units") == "m s^-1", str(_st["items"][0].get("units")))
+check("units belong to the variable, so every icon of it shows them",
+      _st["items"][0].get("units") == _st["items"][1].get("units"),
+      str([i.get("units") for i in _st["items"]]))
+
+_r = c.post("/api/item/0/attrs", json={"sliderMin":-10,"sliderMax":10,"sliderStep":0.5})
+check("slider bounds can be set", _r.status_code == 200, _r.text[:140])
+_st = c.get("/api/state").json()
+check("and are reported back",
+      _st["items"][0].get("slider", {}).get("min") == -10
+      and _st["items"][0].get("slider", {}).get("max") == 10
+      and _st["items"][0].get("slider", {}).get("step") == 0.5,
+      str(_st["items"][0].get("slider")))
+check("slider bounds are shared by every icon too",
+      _st["items"][0].get("slider") == _st["items"][1].get("slider"))
+
+_r = c.post("/api/item/0/attrs", json={"rotation":45})
+check("rotation can be set", _r.status_code == 200, _r.text[:120])
+_st = c.get("/api/state").json()
+check("rotation belongs to the ICON, not the variable",
+      _st["items"][0].get("rotation") == 45 and _st["items"][1].get("rotation") == 0,
+      str([i.get("rotation") for i in _st["items"]]))
+
+# The engine stores 999 and -30 verbatim, which reads back as a rotation nobody typed.
+c.post("/api/item/0/attrs", json={"rotation":999})
+check("a rotation is folded into one turn",
+      c.get("/api/state").json()["items"][0].get("rotation") == 279,
+      str(c.get("/api/state").json()["items"][0].get("rotation")))
+c.post("/api/item/0/attrs", json={"rotation":-30})
+check("including a negative one",
+      c.get("/api/state").json()["items"][0].get("rotation") == 330,
+      str(c.get("/api/state").json()["items"][0].get("rotation")))
+
+# setUnits RAISES on some input. That is a complaint about the input, not a fault.
+_r = c.post("/api/item/0/attrs", json={"units":"m^2 kg / s^3"})
+check("units the engine refuses give 422, not 500", _r.status_code == 422,
+      f"{_r.status_code}: {_r.text[:120]}")
+check("and the refusal repeats what the engine said",
+      "unit" in _r.text.lower(), _r.text[:120])
+_st = c.get("/api/state").json()
+check("a refused unit leaves the old one alone",
+      _st["items"][0].get("units") == "m s^-1", str(_st["items"][0].get("units")))
+
+_r = c.post("/api/item/0/attrs", json={"sliderMin":5,"sliderMax":1})
+check("a slider whose minimum is above its maximum is refused",
+      _r.status_code == 422, f"{_r.status_code}: {_r.text[:100]}")
+check("and it says which way round they go", "maximum" in _r.text, _r.text[:120])
+check("an empty request is refused rather than treated as a no-op",
+      c.post("/api/item/0/attrs", json={}).status_code == 422)
+# json.dumps cannot encode inf, so send it the way a client would: 1e999 parses to inf
+check("a non-finite value is refused",
+      c.post("/api/item/0/attrs", content='{"rotation": 1e999}',
+             headers={"content-type": "application/json"}).status_code == 422)
+
+check("setting attributes is undoable", c.post("/api/undo").status_code == 200)
+
+# They must survive a round trip, or the dialog is decoration.
+c.post("/api/item/0/attrs", json={"units":"1/yr","sliderMin":-3,"sliderMax":3,
+                                  "sliderStep":0.25,"rotation":90})
+_saved = c.post("/api/save", json={"name":"attrs-probe"}).json()["saved"]
+c.post(f"/api/load?path={_saved}")
+_st = c.get("/api/state").json()
+_i0 = _st["items"][0]
+check("units survive save and reload", _i0.get("units") == "yr^-1", str(_i0.get("units")))
+check("slider bounds survive save and reload",
+      (_i0.get("slider", {}).get("min"), _i0.get("slider", {}).get("max")) == (-3, 3),
+      str(_i0.get("slider")))
+check("rotation survives save and reload", _i0.get("rotation") == 90,
+      str(_i0.get("rotation")))
+_rm("attrs-probe")
+c.post("/api/clear")
+
+_ui = (Path(__file__).parent / "minskyweb/ui/index.html").read_text()
+_side = _ui.split('<div class="side">')[1].split("<script>")[0]
+check("the parameters you tune sit above the values you only read",
+      _side.index("Parameters") < _side.index("Simulation"),
+      "they were mixed alphabetically into the read-only list")
+check("and the parameter list cannot grow without bound either",
+      "#parms{max-height" in _ui)
+check("a parameter row commits on change, not on every pixel of a drag",
+      'addEventListener("change", commit)' in _ui and '"input"' in _ui,
+      "one request per drag frame would queue hundreds of undo steps")
+check("the slider is not allowed to misreport a value it cannot land on",
+      "onStep" in _ui, "12.5 against a step of 1 drew the handle at 13")
+check("rotation is described as belonging to the icon",
+      "rotation belongs to this icon alone" in _ui)
+check("and units as belonging to the variable",
+      "belong to the variable" in _ui)
+
+
 # Whatever any section forgot: the suite must not leave files among the user's models.
 # Minsky renames the old file to "<name>.mky;1" on every save, so both go.
 _left = [f for f in SAVE_DIR.iterdir()

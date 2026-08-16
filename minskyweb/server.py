@@ -1090,6 +1090,19 @@ class InitSpec(BaseModel):
     value: float
 
 
+class AttrSpec(BaseModel):
+    """Everything on the variable dialog that is not the name or the value.
+
+    All optional: a client sends only what it is changing, so setting the rotation does
+    not have to restate the units and risk clobbering them.
+    """
+    units: str | None = None
+    sliderMin: float | None = None
+    sliderMax: float | None = None
+    sliderStep: float | None = None
+    rotation: float | None = None
+
+
 class MoveSpec(BaseModel):
     x: float
     y: float
@@ -1458,6 +1471,23 @@ def snapshot() -> dict[str, Any]:
             entry["name"] = it.name()
         except Exception:
             pass
+        try:
+            entry["rotation"] = it.rotation()
+        except Exception:
+            pass
+        if entry["classType"].startswith("Variable") or entry["classType"] == "VarConstant":
+            # Units and slider bounds belong to the VARIABLE, so every icon of it reports
+            # the same thing; rotation belongs to the ICON. The UI has to say which is
+            # which, or changing one icon's units looks like a bug when the others follow.
+            try:
+                entry["units"] = it.unitsStr()
+            except Exception:
+                pass
+            try:
+                entry["slider"] = dict(min=it.sliderMin(), max=it.sliderMax(),
+                                       step=it.sliderStep(), visible=bool(it.sliderVisible()))
+            except Exception:
+                pass
         if "Godley" in entry["classType"]:
             # a table's name is its TITLE, which lives on the table not the icon --
             # without this a renamed table still read "godley" on the canvas
@@ -1799,6 +1829,103 @@ def create_app() -> FastAPI:
         mark_dirty()
         # indices shift after a delete -- the client must re-render from this snapshot
         return await call(snapshot)
+
+    @app.post("/api/item/{ref}/attrs")
+    async def set_attrs(ref: str, spec: AttrSpec):
+        """Units, slider bounds and rotation -- the rest of the variable dialog.
+
+        Every write is read back. `setUnits` NORMALISES what it is given -- "m/s" comes
+        back as "m s^-1", "1/yr" as "yr^-1" -- and it reorders terms it does not
+        understand rather than refusing them, so echoing the request would tell the user
+        their input was stored verbatim when it was not. The response carries what the
+        engine actually holds.
+        """
+        require_idle()
+        await call(check_ref, ref)
+
+        given = {k: v for k, v in spec.model_dump().items() if v is not None}
+        if not given:
+            raise HTTPException(422, "nothing to set")
+        for k in ("sliderMin", "sliderMax", "sliderStep", "rotation"):
+            if k in given and not math.isfinite(given[k]):
+                raise HTTPException(422, f"{k} must be a finite number")
+        if "sliderMin" in given and "sliderMax" in given \
+                and given["sliderMin"] >= given["sliderMax"]:
+            raise HTTPException(
+                422, f"the slider's minimum ({given['sliderMin']:g}) must be below its "
+                     f"maximum ({given['sliderMax']:g})")
+        if "sliderStep" in given and given["sliderStep"] < 0:
+            raise HTTPException(422, "a slider step cannot be negative")
+
+        await call(checkpoint)
+
+        def _apply():
+            raw = _resolve(engine().minsky, ref)
+            if "units" in given:
+                # The engine raises on some malformed input and silently mangles other
+                # input; only the first is worth refusing.
+                raw.setUnits(given["units"])
+            if "sliderMin" in given:
+                raw.sliderMin(given["sliderMin"])
+            if "sliderMax" in given:
+                raw.sliderMax(given["sliderMax"])
+            if "sliderStep" in given:
+                raw.sliderStep(given["sliderStep"])
+            if "rotation" in given:
+                # 999 and -30 are both accepted and stored verbatim, which then reads
+                # back as a rotation nobody typed. Fold it into one turn.
+                raw.rotation(given["rotation"] % 360)
+            settle()
+
+            out = {}
+            try:
+                out["units"] = raw.unitsStr()
+            except Exception:
+                pass
+            try:
+                out["slider"] = dict(min=raw.sliderMin(), max=raw.sliderMax(),
+                                     step=raw.sliderStep())
+            except Exception:
+                pass
+            try:
+                out["rotation"] = raw.rotation()
+            except Exception:
+                pass
+            return out
+
+        try:
+            got = await call(_apply)
+        except HTTPException:
+            raise
+        except Exception as ex:
+            # setUnits rejects "m^2 kg / s^3" with "empty unit name" -- a complaint about
+            # the input, not a fault, so it must not surface as a 500.
+            rollback()
+            raise HTTPException(422, f"{ex}".strip() or "the engine refused that value")
+
+        # Did the write land? Nothing here reports failure on its own.
+        stale = []
+        if "rotation" in given and abs(got.get("rotation", 1e9)
+                                       - given["rotation"] % 360) > 0.01:
+            stale.append("rotation")
+        for key, field in (("sliderMin", "min"), ("sliderMax", "max"),
+                           ("sliderStep", "step")):
+            if key in given and abs(got.get("slider", {}).get(field, 1e9)
+                                    - given[key]) > 1e-9:
+                stale.append(key)
+        if stale:
+            rollback()
+            raise HTTPException(
+                409, f"the engine did not keep {', '.join(stale)}. Nothing was changed.")
+
+        mark_dirty()
+        out = await call(snapshot)
+        out["attrs"] = got
+        if "units" in given and got.get("units", "") != given["units"]:
+            # not an error: "m/s" really is stored as "m s^-1"
+            out["note"] = (f"units stored as {got.get('units') or 'none'!r}"
+                           if got.get("units") != given["units"] else None)
+        return out
 
     @app.post("/api/layout")
     async def tidy():

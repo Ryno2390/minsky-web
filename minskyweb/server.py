@@ -1094,6 +1094,11 @@ class InitSpec(BaseModel):
     value: float
 
 
+class PubSpec(BaseModel):
+    name: str | None = None
+    refs: list[str] | None = None
+
+
 class AnimSpec(BaseModel):
     """Must live at module level. `from __future__ import annotations` makes the
     handler's annotation a STRING, which FastAPI resolves in the module namespace -- a
@@ -3252,6 +3257,204 @@ def create_app() -> FastAPI:
         return FileResponse(str(out),
                             media_type="image/svg+xml" if fmt == "svg" else "image/png",
                             filename=f"{stem}-equations-{th}.{fmt}")
+
+    def _pub_tabs():
+        return engine().minsky.publicationTabs
+
+    def _pub_at(i: int):
+        tabs = _pub_tabs()
+        if not 0 <= i < len(tabs):
+            raise HTTPException(
+                404, f"there is no publication tab {i}; the model has {len(tabs)}")
+        return tabs[i]
+
+    def _pub_list():
+        tabs = _pub_tabs()
+        out = []
+        for i in range(len(tabs)):
+            t = tabs[i]
+            try:
+                nm = t.name()
+            except Exception:
+                nm = f"tab {i}"
+            out.append(dict(index=i, name=nm, items=len(t.items)))
+        return out
+
+    #: How wide a publication tab's rows are allowed to get before wrapping.
+    PUB_ROW_WIDTH = 900.0
+    PUB_GAP = 56.0
+
+    def _pub_arrange(tab):
+        """Lay a tab's items out in packed rows.
+
+        Every item added lands at (100,100), so the second one hides the first. Rows are
+        packed by each item's OWN width rather than a single cell size: a plot is 150px
+        and a variable 40, so one cell size for both leaves the small ones adrift in
+        acres of space.
+        """
+        n = len(tab.items)
+        if not n:
+            return
+        sizes = []
+        for k in range(n):
+            try:
+                it = tab.items[k].itemRef
+                it.updateBoundingBox()
+                # An item's anchor is NOT the centre of its box: an IntOp's box spans the
+                # integral variable drawn beside it while the anchor stays on the
+                # operator. Placing by the box centre therefore bled the composite into
+                # its neighbour. Record where the anchor sits inside the box and place by
+                # the box's EDGE instead.
+                w = max(it.right() - it.left(), 40.0)
+                ax = it.x() - it.left()
+                # The tab draws an attached variable at ITS own offset from the operator,
+                # which is not the offset the canvas box was measured at -- so an IntOp
+                # needs room on whichever side its anchor is not on, in both directions.
+                w = max(w, 2 * max(ax, w - ax))
+                sizes.append((w, max(it.bottom() - it.top(), 26.0),
+                              ax, it.y() - it.top()))
+            except Exception:
+                sizes.append((80.0, 40.0, 40.0, 20.0))
+        x, y, row_h = PUB_GAP, PUB_GAP, 0.0
+        for k in range(n):
+            w, h, ax, ay = sizes[k]
+            if x > PUB_GAP and x + w > PUB_ROW_WIDTH:
+                x, y, row_h = PUB_GAP, y + row_h + PUB_GAP, 0.0
+            tab.items[k].x(x + ax)
+            tab.items[k].y(y + ay)
+            x += w + PUB_GAP
+            row_h = max(row_h, h)
+
+    @app.get("/api/pubtabs")
+    async def pub_tabs():
+        """The publication tabs: curated arrangements of items, for figures."""
+        return dict(tabs=await call(_pub_list))
+
+    @app.post("/api/pubtabs")
+    async def pub_add(spec: PubSpec):
+        require_idle()
+        nm = (spec.name or "").strip()
+        if not nm:
+            raise HTTPException(422, "a publication tab needs a name")
+        await call(checkpoint)
+        await call(lambda: engine().minsky.addNewPublicationTab(nm))
+        mark_dirty()
+        return dict(tabs=await call(_pub_list))
+
+    @app.post("/api/pubtabs/{i}/rename")
+    async def pub_rename(i: int, spec: PubSpec):
+        require_idle()
+        nm = (spec.name or "").strip()
+        if not nm:
+            raise HTTPException(422, "a publication tab needs a name")
+        await call(checkpoint)
+
+        def _go():
+            t = _pub_at(i)
+            t.name(nm)
+            if t.name() != nm:
+                raise HTTPException(409, f"the engine kept {t.name()!r}")
+        try:
+            await call(_go)
+        except HTTPException:
+            rollback()
+            raise
+        mark_dirty()
+        return dict(tabs=await call(_pub_list))
+
+    @app.delete("/api/pubtabs/{i}")
+    async def pub_remove(i: int):
+        require_idle()
+        await call(checkpoint)
+
+        def _go():
+            before = len(_pub_tabs())
+            _pub_at(i).removeSelf()
+            if len(_pub_tabs()) >= before:
+                raise HTTPException(409, "the engine did not remove that tab")
+        try:
+            await call(_go)
+        except HTTPException:
+            rollback()
+            raise
+        mark_dirty()
+        return dict(tabs=await call(_pub_list))
+
+    @app.post("/api/pubtabs/{i}/items")
+    async def pub_add_items(i: int, spec: PubSpec):
+        """Put canvas items on a tab.
+
+        `addCanvasItemToPublicationTab` takes whatever the CANVAS is pointed at, not a
+        ref, so each item is focused with getItemAt() first. That hit test never descends
+        into a group -- it resolves to the group itself -- so a group member cannot be
+        added, and saying so beats adding the wrong thing.
+        """
+        require_idle()
+        refs = spec.refs or []
+        if not refs:
+            raise HTTPException(422, "no items given")
+        inside = [r for r in refs if ":" in r]
+        if inside:
+            raise HTTPException(
+                422, f"{len(inside)} of these are inside a group, which the canvas hit "
+                     f"test cannot reach. Ungroup first, or add the group itself.")
+        for r in refs:
+            await call(check_ref, r)
+        await call(checkpoint)
+
+        def _go():
+            mk = engine().minsky
+            tab = _pub_at(i)
+            before = len(tab.items)
+            for r in refs:
+                raw = _resolve(mk, r)
+                raw.updateBoundingBox()
+                mk.canvas.getItemAt(raw.x(), raw.y())
+                mk.addCanvasItemToPublicationTab(i)
+            added = len(tab.items) - before
+            _pub_arrange(tab)
+            return added
+
+        try:
+            added = await call(_go)
+        except HTTPException:
+            rollback()
+            raise
+        if not added:
+            rollback()
+            raise HTTPException(409, "nothing was added to the tab")
+        mark_dirty()
+        out = dict(tabs=await call(_pub_list))
+        out["added"] = added
+        return out
+
+    @app.get("/api/pubtabs/{i}/render")
+    async def pub_render(i: int, format: str = "svg", theme: str = "dark"):
+        require_idle()
+        fmt, th = _check_render_args(format, theme)
+        raw = _SCRATCH / "pub-raw.svg"
+        out = _SCRATCH / f"pub-{th}.{fmt}"
+
+        def _draw():
+            settle()
+            t = _pub_at(i)
+            n = len(t.items)
+            t.renderToSVG(str(raw))
+            _FALLBACK_PNG[0] = t.renderToPNG
+            return n, (t.name() if hasattr(t, "name") else f"tab {i}")
+        n, nm = await call(_draw)
+        if not n:
+            raise HTTPException(
+                422, f"{nm!r} is empty. Select something on the canvas and add it to "
+                     f"this tab first.")
+        if not raw.exists() or raw.stat().st_size == 0:
+            raise HTTPException(500, "the engine drew nothing for that tab")
+        await run_in_threadpool(_render_out, raw, out, fmt, th)
+        stem = Path(_CURRENT).stem if _CURRENT else "model"
+        safe = re.sub(r"[^A-Za-z0-9._-]+", "-", nm).strip("-") or f"tab{i}"
+        return FileResponse(str(out),
+                            media_type="image/svg+xml" if fmt == "svg" else "image/png",
+                            filename=f"{stem}-{safe}-{th}.{fmt}")
 
     @app.get("/api/phillips")
     async def phillips(format: str = "svg", theme: str = "dark",

@@ -417,6 +417,15 @@ svg#board.panning{cursor:grabbing}
       <div class="toggle2">
         <button class="gbtn eqview" data-view="equations">Equations</button>
         <button class="gbtn eqview" data-view="phillips">Phillips</button>
+        <button class="gbtn eqview" data-view="pubtabs">Figures</button>
+      </div>
+      <div id="pubctl" style="display:none;align-items:center;gap:6px">
+        <select id="pubsel" style="max-width:190px"></select>
+        <button class="gbtn" id="pubadd" title="Put the selected items on this figure">
+          + Selection</button>
+        <button class="gbtn" id="pubnew">New</button>
+        <button class="gbtn" id="pubren">Rename</button>
+        <button class="gbtn" id="pubdel">Delete</button>
       </div>
       <span id="eqnote" style="font-size:12px;color:var(--ink-3)"></span>
       <div class="spacer"></div>
@@ -2492,7 +2501,23 @@ let eqLayout = (() => {
   try { return localStorage.getItem("minsky.eqLayout") || "upright"; }
   catch { return "upright"; }
 })();
-const EQ_VIEWS = {equations: "Equations", phillips: "Phillips diagram"};
+const EQ_VIEWS = {equations: "Equations", phillips: "Phillips diagram",
+                  pubtabs: "Figures"};
+// A publication tab is a curated arrangement of items -- the parts of a model worth
+// showing, without the wiring around them. Which one is being looked at.
+let pubTabs = [], pubIdx = 0;
+
+async function loadPubTabs(){
+  try {
+    pubTabs = (await api("/pubtabs")).tabs || [];
+  } catch { pubTabs = []; }
+  if (pubIdx >= pubTabs.length) pubIdx = Math.max(0, pubTabs.length - 1);
+  $("#pubsel").innerHTML = pubTabs.map((t, i) =>
+    `<option value="${esc(i)}">${esc(t.name)} — ${esc(t.items)} item${esc(t.items === 1 ? "" : "s")}</option>`
+  ).join("");
+  $("#pubsel").value = String(pubIdx);
+  $("#pubdel").disabled = pubTabs.length < 2;
+}
 
 async function openEqns(view){
   if (view) eqView = view;
@@ -2503,10 +2528,13 @@ async function openEqns(view){
   $("#eqbody").classList.toggle("dark", eqTheme === "dark");
   $("#eqnote").textContent = "";
   try {
-    // cache-busted: both views follow the wiring, so they change as the model does
+    // cache-busted: every view follows the wiring, so they change as the model does
+    if (eqView === "pubtabs") await loadPubTabs();
     const q = eqView === "phillips" ? `&layout=${eqLayout}` : "";
-    const r = await fetch(
-      `/api/${eqView}?format=svg&theme=${eqTheme}${q}&at=${Date.now()}`);
+    const url = eqView === "pubtabs"
+      ? `/api/pubtabs/${pubIdx}/render?format=svg&theme=${eqTheme}&at=${Date.now()}`
+      : `/api/${eqView}?format=svg&theme=${eqTheme}${q}&at=${Date.now()}`;
+    const r = await fetch(url);
     if (!r.ok) {
       let d; try { d = (await r.json()).detail; } catch { d = `HTTP ${r.status}`; }
       throw new Error(d);
@@ -2528,8 +2556,10 @@ function closeEqns(){ $("#eqwrap").classList.remove("open"); }
 $("#eqns").onclick = () => openEqns();
 $("#eqclose").onclick = closeEqns;
 $("#eqwrap").addEventListener("click", e => { if (e.target === $("#eqwrap")) closeEqns(); });
-const eqQuery = f => `/api/${eqView}?format=${f}&theme=${eqTheme}`
-  + (eqView === "phillips" ? `&layout=${eqLayout}` : "");
+const eqQuery = f => eqView === "pubtabs"
+  ? `/api/pubtabs/${pubIdx}/render?format=${f}&theme=${eqTheme}`
+  : `/api/${eqView}?format=${f}&theme=${eqTheme}`
+    + (eqView === "phillips" ? `&layout=${eqLayout}` : "");
 $("#eqsvg").onclick = () => { location.href = eqQuery("svg"); };
 $("#eqpng").onclick = () => { location.href = eqQuery("png"); };
 function markEqTheme(){
@@ -2542,6 +2572,7 @@ function markEqView(){
   // each control belongs to one view: units to the equations, arrangement to the diagram
   $("#checkunits").style.display = eqView === "equations" ? "" : "none";
   $("#eqlay").style.display = eqView === "phillips" ? "" : "none";
+  $("#pubctl").style.display = eqView === "pubtabs" ? "flex" : "none";
   for (const b of document.querySelectorAll(".eqlaybtn"))
     b.setAttribute("aria-pressed", String(b.dataset.lay === eqLayout));
 }
@@ -2557,6 +2588,44 @@ for (const b of document.querySelectorAll(".eqlaybtn")) b.onclick = () => {
   openEqns("phillips");
 };
 markEqTheme(); markEqView();
+$("#pubsel").onchange = () => { pubIdx = +$("#pubsel").value; openEqns("pubtabs"); };
+$("#pubnew").onclick = guard(async () => {
+  const name = (prompt("Name this figure", `Figure ${pubTabs.length}`) || "").trim();
+  if (!name) return;
+  const r = await api("/pubtabs", {method:"POST", body: JSON.stringify({name})});
+  pubTabs = r.tabs; pubIdx = pubTabs.length - 1;
+  openEqns("pubtabs");
+});
+$("#pubren").onclick = guard(async () => {
+  const cur = pubTabs[pubIdx];
+  if (!cur) return;
+  const name = (prompt("Rename this figure", cur.name) || "").trim();
+  if (!name || name === cur.name) return;
+  await api(`/pubtabs/${pubIdx}/rename`, {method:"POST", body: JSON.stringify({name})});
+  openEqns("pubtabs");
+});
+$("#pubdel").onclick = guard(async () => {
+  const cur = pubTabs[pubIdx];
+  if (!cur) return;
+  if (!await askConfirm(`Delete "${cur.name}"?`,
+        `It holds ${cur.items} item${cur.items === 1 ? "" : "s"}. `
+        + "The items themselves stay on the canvas.")) return;
+  await api(`/pubtabs/${pubIdx}`, {method:"DELETE"});
+  pubIdx = 0;
+  openEqns("pubtabs");
+});
+$("#pubadd").onclick = guard(async () => {
+  const refs = [...selSet];
+  if (!refs.length) {
+    toast("Select something on the canvas first — the figure shows what you choose.");
+    return;
+  }
+  const r = await api(`/pubtabs/${pubIdx}/items`,
+                      {method:"POST", body: JSON.stringify({refs})});
+  toast(`Added ${r.added} item${r.added === 1 ? "" : "s"} to `
+      + `${pubTabs[pubIdx]?.name || "the figure"}.`, true);
+  openEqns("pubtabs");
+});
 $("#checkunits").onclick = guard(async () => {
   const r = await api("/analysis/units", {method:"POST"});
   $("#eqnote").textContent = r.ok

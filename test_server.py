@@ -3945,6 +3945,90 @@ if Path(_gw).exists():
 c.post("/api/clear")
 
 
+print("\n72. publication tabs")
+_gw = "/Users/ryneschultz/minsky/examples/GoodwinLinear.mky"
+if Path(_gw).exists():
+    _st = c.post(f"/api/load?path={_gw}").json()
+    _t = c.get("/api/pubtabs").json()["tabs"]
+    check("a model comes with a tab", len(_t) == 1 and _t[0]["items"] == 0, str(_t))
+
+    _r = c.post("/api/pubtabs", json={"name":"Figure 1"})
+    check("a tab can be added", _r.status_code == 200, _r.text[:110])
+    check("and appears in the list", len(_r.json()["tabs"]) == 2,
+          str(_r.json()["tabs"]))
+    check("an unnamed tab is refused",
+          c.post("/api/pubtabs", json={"name":"   "}).status_code == 422)
+
+    _refs = [i["ref"] for i in _st["items"]
+             if i["classType"].startswith("Plot") or i["classType"] == "IntOp"][:3]
+    _r = c.post("/api/pubtabs/1/items", json={"refs": _refs})
+    check("canvas items can be put on it", _r.status_code == 200, _r.text[:120])
+    check("all of them", _r.json()["added"] == len(_refs),
+          f'{_r.json()["added"]} of {len(_refs)}')
+
+    # everything lands at (100,100), so the second item hides the first
+    check("and they are laid out, not stacked",
+          "_pub_arrange" in (Path(__file__).parent / "minskyweb/server.py").read_text(),
+          "a tab of items all at one point")
+
+    _r = c.post("/api/pubtabs/1/rename", json={"name":"Goodwin figure"})
+    check("a tab can be renamed",
+          _r.status_code == 200 and _r.json()["tabs"][1]["name"] == "Goodwin figure",
+          _r.text[:110])
+    check("renaming a tab that is not there is refused",
+          c.post("/api/pubtabs/9/rename", json={"name":"x"}).status_code == 404)
+
+    for _f, _sig in (("svg", b"<?xml"), ("png", b"\x89PNG")):
+        _r = c.get(f"/api/pubtabs/1/render?format={_f}&theme=dark")
+        check(f"a tab renders as {_f}", _r.status_code == 200, _r.text[:110])
+        check(f"and the {_f} is real",
+              _r.content.startswith(_sig) and len(_r.content) > 2000,
+              f"{len(_r.content)} bytes")
+    # an empty tab renders as an empty file, which reaches the user as a blank panel
+    _r = c.get("/api/pubtabs/0/render")
+    check("an empty tab says so rather than drawing nothing", _r.status_code == 422,
+          f"{_r.status_code}: {_r.text[:90]}")
+    check("and says how to fill it", "add it to this tab" in _r.text, _r.text[:120])
+
+    # the canvas hit test never descends into a group
+    check("an item inside a group is refused, with the reason",
+          c.post("/api/pubtabs/1/items", json={"refs":["g0:1"]}).status_code == 422)
+
+    # it has to survive a round trip or the figure is lost with the file
+    _saved = c.post("/api/save", json={"name":"pub-probe"}).json()["saved"]
+    c.post(f"/api/load?path={_saved}")
+    _t = c.get("/api/pubtabs").json()["tabs"]
+    check("tabs survive save and reload",
+          len(_t) == 2 and _t[1]["name"] == "Goodwin figure" and _t[1]["items"] == 3,
+          str(_t))
+    _rm("pub-probe")
+
+    _r = c.delete("/api/pubtabs/1")
+    check("a tab can be deleted", _r.status_code == 200 and len(_r.json()["tabs"]) == 1,
+          _r.text[:110])
+c.post("/api/clear")
+
+_ui = (Path(__file__).parent / "minskyweb/ui/index.html").read_text()
+check("figures are a view in the panel that already renders and exports",
+      'data-view="pubtabs"' in _ui and "EQ_VIEWS" in _ui)
+# the insertion that silently did nothing the first time
+_open = _ui.split("async function openEqns")[1].split("function closeEqns")[0]
+check("opening the view loads the tabs",
+      "await loadPubTabs()" in _open,
+      "the picker would be empty whatever the model holds")
+check("and renders the chosen tab, not the view name",
+      "/api/pubtabs/${pubIdx}/render" in _open)
+check("the export follows the chosen tab too",
+      "pubIdx" in _ui.split("const eqQuery")[1].split(";")[0])
+check("its controls show only on that view",
+      'eqView === "pubtabs" ? "flex"' in _ui)
+check("the last tab cannot be deleted",
+      '$("#pubdel").disabled = pubTabs.length < 2' in _ui,
+      "a model with no tab at all")
+check("adding with nothing selected explains itself rather than failing",
+      "Select something on the canvas first" in _ui)
+
+
 # Whatever any section forgot: the suite must not leave files among the user's models.
 # Minsky renames the old file to "<name>.mky;1" on every save, so both go.
 _left = [f for f in SAVE_DIR.iterdir()

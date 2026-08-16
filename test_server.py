@@ -716,6 +716,8 @@ LITERAL_OK = {
     "o",
     # escapes its own model data inline
     'v === null ? "" : (v.trim()==="0" ? "✓ 0" : "≠ " + esc(v))',
+    # an accumulator of already-escaped buttons, the same shape as `h` above
+    "btns",
 }
 bad = []
 for lit in re.findall(r"`([^`]*)`", ui, re.S):
@@ -3064,6 +3066,81 @@ check("rotation is described as belonging to the icon",
       "rotation belongs to this icon alone" in _ui)
 check("and units as belonging to the variable",
       "belong to the variable" in _ui)
+
+
+print("\n61. the whole operation set, and export")
+# The palette carried 14 of the engine's 77 operations. The other 59 were not blocked by
+# anything -- they already worked through /api/item and were simply never offered.
+_ui = (Path(__file__).parent / "minskyweb/ui/index.html").read_text()
+_grp = re.search(r"const OP_GROUPS = \[(.*?)\n\];", _ui, re.S)
+check("the palette is defined in families", bool(_grp), "OP_GROUPS is gone")
+_palette = re.findall(r'"([A-Za-z_]+)"', _grp.group(1)) if _grp else []
+_palette = [o for o in _palette if o not in
+            ("common","constants","trig","elementary","logic","reductions","scans",
+             "tensor","statistics")]
+check("it now offers the full set", len(_palette) >= 70, f"{len(_palette)} operations")
+
+# Each one has to actually build, or the palette is a list of buttons that 400.
+c.post("/api/clear")
+_bad = []
+for _op in _palette:
+    if c.post("/api/item", json={"kind":"operation","op":_op,"at":[200,200]}).status_code != 200:
+        _bad.append(_op)
+check("and every one of them builds", not _bad, f"refused: {_bad[:8]}")
+c.post("/api/clear")
+
+# `and`/`or`/`not` are `and_`/`or_`/`not_` to the engine. Sending the bare word is not an
+# error -- it falls through to a deprecated constant -- so the palette must not do it.
+check("logic operators use the engine's names",
+      "and_" in _palette and "and" not in _palette,
+      "the bare word silently becomes a deprecated constant")
+check("but they are not SHOWN with the underscore",
+      "opLabel" in _ui and 'and_:"and"' in _ui)
+
+# These build their own class, not an Operation:*. Our guard refused them; the engine
+# never did.
+for _op, _cls in (("data","DataOp"), ("userFunction","UserFunction")):
+    _r = c.post("/api/item", json={"kind":"operation","op":_op,"at":[300,300]})
+    check(f"{_op} is accepted", _r.status_code == 200, _r.text[:110])
+    check(f"and arrives as {_cls}",
+          c.get("/api/state").json()["items"][-1]["classType"] == _cls,
+          str(c.get("/api/state").json()["items"][-1]["classType"]))
+c.post("/api/clear")
+
+# --- export: the engine draws its own canvas and plots ---
+_gw = "/Users/ryneschultz/minsky/examples/GoodwinLinear.mky"
+if Path(_gw).exists():
+    c.post(f"/api/load?path={_gw}")
+    # an SVG opens with an XML declaration, not with the <svg tag
+    for _f, _sig in (("svg", (b"<?xml", b"<svg")), ("png", (b"\x89PNG",)),
+                     ("pdf", (b"%PDF",))):
+        _r = c.get(f"/api/export/canvas?format={_f}")
+        check(f"the canvas exports as {_f}", _r.status_code == 200, _r.text[:90])
+        check(f"and the {_f} is a real {_f}",
+              any(_r.content.startswith(x) for x in _sig)
+              and (_f != "svg" or b"<svg" in _r.content[:400]),
+              str(_r.content[:10]))
+        check(f"and is not an empty {_f}", len(_r.content) > 1000, f"{len(_r.content)} bytes")
+    check("an unknown format is refused, not guessed at",
+          c.get("/api/export/canvas?format=bogus").status_code == 422)
+
+    _plot = next((i["ref"] for i in c.get("/api/state").json()["items"]
+                  if "Plot" in i["classType"]), None)
+    if _plot:
+        _r = c.get(f"/api/export/plot/{_plot}?format=svg")
+        check("a plot exports on its own", _r.status_code == 200, _r.text[:90])
+        check("and is smaller than the whole canvas",
+              0 < len(_r.content) < len(c.get("/api/export/canvas?format=svg").content),
+              "the plot export looks like the canvas export")
+    check("exporting something that is not a plot is refused",
+          c.get("/api/export/plot/0?format=svg").status_code == 422)
+c.post("/api/clear")
+
+check("the export menu offers the canvas formats",
+      all(f'data-exp="canvas:{f}"' in _ui for f in ("svg","png","pdf","ps")))
+check("and disables plot export until a plot is chosen",
+      "select one first" in _ui and "disabled = !isPlot" in _ui,
+      "it would offer an export that can only fail")
 
 
 # Whatever any section forgot: the suite must not leave files among the user's models.

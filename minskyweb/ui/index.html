@@ -61,6 +61,31 @@ button.danger:hover:not(:disabled){border-color:var(--bad);color:var(--bad)}
 .pitem:hover{background:var(--panel-2);border-color:var(--line);color:var(--ink)}
 .dot{width:8px;height:8px;border-radius:2px;flex:none}
 .grid2{display:grid;grid-template-columns:1fr 1fr;gap:2px}
+.expmenu{display:none;position:absolute;top:38px;z-index:30;min-width:246px;
+  background:var(--panel);border:1px solid var(--line);border-radius:8px;padding:5px;
+  box-shadow:0 12px 34px rgba(0,0,0,.45)}
+.expmenu.open{display:block}
+.expmenu button{display:block;width:100%;text-align:left;font-size:12.5px;
+  padding:6px 9px;border:0;border-radius:5px;background:none;color:var(--ink-2);
+  cursor:pointer}
+.expmenu button:hover{background:var(--panel-2);color:var(--ink)}
+.expmenu button:disabled{opacity:.38;cursor:default}
+.expmenu button:disabled:hover{background:none;color:var(--ink-2)}
+.expmenu .sep{font-size:10px;letter-spacing:.09em;text-transform:uppercase;
+  color:var(--ink-3);padding:8px 9px 4px}
+.opfind{width:100%;font-size:12px;padding:5px 8px;margin:0 0 4px;border-radius:6px;
+  border:1px solid var(--line);background:var(--bg);color:var(--ink)}
+.opfind:focus{outline:none;border-color:var(--acc)}
+/* 73 operations need structure. Families collapse so the list stays a list; the ones
+   an economic model actually uses are open, the tensor and statistics families are not. */
+.opgrp>summary{font-size:10px;letter-spacing:.09em;text-transform:uppercase;
+  color:var(--ink-3);margin:8px 4px 4px;cursor:pointer;list-style:none;
+  display:flex;align-items:center;gap:5px}
+.opgrp>summary::-webkit-details-marker{display:none}
+.opgrp>summary::before{content:"▸";font-size:9px;transition:transform .12s}
+.opgrp[open]>summary::before{transform:rotate(90deg)}
+.opgrp>summary:hover{color:var(--ink-2)}
+.opgrp .n{margin-left:auto;font-variant-numeric:tabular-nums;opacity:.6}
 
 /* ---------- canvas ---------- */
 .canvas{grid-area:canvas;min-width:0;position:relative;overflow:hidden;background:
@@ -245,7 +270,19 @@ svg#board.panning{cursor:grabbing}
   <button id="redo" title="Redo (⇧⌘Z)">↷</button>
   <button id="save">Save</button>
   <button id="saveas">Save As…</button>
-  <button id="download" title="Download a copy to your computer">↓</button>
+  <button id="download" title="Export…">↓</button>
+  <div id="expmenu" class="expmenu">
+    <button data-exp="mky">Model (.mky)</button>
+    <div class="sep">Canvas, drawn by Minsky</div>
+    <button data-exp="canvas:svg">SVG — vector, scales to any size</button>
+    <button data-exp="canvas:pdf">PDF</button>
+    <button data-exp="canvas:png">PNG</button>
+    <button data-exp="canvas:ps">PostScript</button>
+    <div class="sep" id="expplotsep">Selected plot</div>
+    <button data-exp="plot:svg" id="expplotsvg">Plot as SVG</button>
+    <button data-exp="plot:pdf" id="expplotpdf">Plot as PDF</button>
+    <button data-exp="plot:png" id="expplotpng">Plot as PNG</button>
+  </div>
   <button id="clear">Clear</button>
   <button id="tidy" title="Arrange the canvas left to right (⌘L)">⌗ Tidy</button>
   <button id="del" class="danger" disabled>Delete</button>
@@ -263,7 +300,9 @@ svg#board.panning{cursor:grabbing}
   <button class="pitem" data-add="variable" data-vt="stock"><i class="dot" style="background:var(--var)"></i>Stock</button>
   <button class="pitem" data-add="parameter"><i class="dot" style="background:var(--par)"></i>Parameter</button>
   <h3>Operations</h3>
-  <div class="grid2" id="ops"></div>
+  <input id="opfind" class="opfind" placeholder="filter 73 operations…"
+         autocomplete="off" spellcheck="false">
+  <div id="ops"></div>
   <h3>Blocks</h3>
   <button class="pitem" data-add="godley"><i class="dot" style="background:var(--godley)"></i>Godley table</button>
 
@@ -434,8 +473,29 @@ svg#board.panning{cursor:grabbing}
   </div>
 
 <script>
-const OPS = ["add","subtract","multiply","divide","integrate","time","exp","ln",
-             "pow","sqrt","min","max","sin","cos"];
+// Every operation this engine builds, grouped the way Minsky groups them. The palette
+// carried 14 of these; the other 59 already worked through the API and were simply never
+// offered. `and`, `or` and `not` are `and_`, `or_`, `not_` to the engine -- sending the
+// bare word is not an error, it silently falls through to a deprecated constant.
+const OP_GROUPS = [
+  ["common",     true,  ["add","subtract","multiply","divide","pow","min","max",
+                         "integrate","differentiate","time","exp","ln","log","sqrt"]],
+  ["constants",  false, ["pi","euler","zero","one","inf","percent"]],
+  ["trig",       false, ["sin","cos","tan","asin","acos","atan","sinh","cosh","tanh"]],
+  ["elementary", false, ["abs","floor","frac","copy","Gamma","fact","polygamma"]],
+  ["logic",      false, ["and_","or_","not_","lt","le","eq"]],
+  ["reductions", false, ["sum","product","infimum","supremum","any","all",
+                         "infIndex","supIndex"]],
+  ["scans",      false, ["runningSum","runningAv","runningProduct","difference",
+                         "differencePlus"]],
+  ["tensor",     false, ["innerProduct","outerProduct","index","gather","meld","merge",
+                         "slice","size","shape"]],
+  ["statistics", false, ["mean","median","stdDev","moment","histogram","covariance",
+                         "correlation","linearRegression","bulkLinearRegression"]],
+];
+// the trailing underscore is the engine's, not something to show anyone
+const opLabel = o => ({and_:"and", or_:"or", not_:"not"}[o] || o);
+const OPS = OP_GROUPS.flatMap(g => g[2]);
 const $ = s => document.querySelector(s);
 
 // Everything that reaches innerHTML goes through this. Model data is NOT trustworthy:
@@ -1056,9 +1116,33 @@ function renderParams(){
 async function refresh(){ state = await api("/state"); render(); }
 
 /* ---------- palette ---------- */
-$("#ops").innerHTML = OPS.map(o =>
-  `<button class="pitem" data-add="operation" data-op="${o}">
-     <i class="dot" style="background:var(--op)"></i>${o}</button>`).join("");
+function drawOps(filter=""){
+  const q = filter.trim().toLowerCase();
+  $("#ops").innerHTML = OP_GROUPS.map(([name, open, ops]) => {
+    const hits = q ? ops.filter(o => opLabel(o).toLowerCase().includes(q)) : ops;
+    if (!hits.length) return "";
+    const btns = hits.map(o =>
+      `<button class="pitem" data-add="operation" data-op="${esc(o)}">
+         <i class="dot" style="background:var(--op)"></i>${esc(opLabel(o))}</button>`).join("");
+    return `<details class="opgrp" data-grp="${esc(name)}"><summary>${esc(name)}
+      <span class="n">${esc(hits.length)}</span></summary>
+      <div class="grid2">${btns}</div></details>`;
+  }).join("") || `<div style="font-size:12px;color:var(--ink-3);padding:6px 4px">
+      No operation matches.</div>`;
+  // Set the open state as a PROPERTY rather than interpolating an attribute: everything
+  // that reaches innerHTML here is markup this file wrote, and keeping it that way means
+  // the "is every interpolation escaped" check stays a real check.
+  const openByDefault = new Set(OP_GROUPS.filter(g => g[1]).map(g => g[0]));
+  // a filter that matched something should show it, whatever the group's usual state
+  $("#ops").querySelectorAll(".opgrp").forEach(d => {
+    d.open = !!q || openByDefault.has(d.dataset.grp);
+  });
+}
+drawOps();
+$("#opfind").addEventListener("input", () => drawOps($("#opfind").value));
+$("#opfind").addEventListener("keydown", e => {
+  if (e.key === "Escape") { e.preventDefault(); $("#opfind").value = ""; drawOps(); }
+});
 
 // Adding a named item used to fire two chained native prompt() dialogs. They block the
 // page, cannot be validated before a round trip, and cannot be answered independently.
@@ -1908,7 +1992,37 @@ $("#sa-name").addEventListener("keydown", e => {
   if (e.key === "Enter")  { e.preventDefault(); $("#sa-ok").click(); }
   if (e.key === "Escape") { e.preventDefault(); closeSaveAs(); }
 });
-$("#download").onclick = () => { location.href = "/api/download"; };
+// The engine draws its own canvas and plots to vector formats, which is a better
+// picture than ours: it has Minsky's real glyphs, curved wires and value annotations.
+// All this menu does is reach them.
+function closeExport(){ $("#expmenu").classList.remove("open"); }
+$("#download").onclick = e => {
+  e.stopPropagation();
+  const open = $("#expmenu").classList.toggle("open");
+  if (!open) return;
+  const r = $("#download").getBoundingClientRect();
+  $("#expmenu").style.left = `${Math.round(r.left)}px`;
+  // Plot export needs a plot chosen; say so by disabling rather than by failing later.
+  const it = sel === null ? null : state.items.find(i => i.ref === sel);
+  const isPlot = !!it && (it.classType.startsWith("Plot") || it.classType.startsWith("Sheet"));
+  for (const id of ["#expplotsvg", "#expplotpdf", "#expplotpng"]) $(id).disabled = !isPlot;
+  $("#expplotsep").textContent = isPlot
+    ? `Selected plot` : `Selected plot — select one first`;
+};
+document.addEventListener("click", e => {
+  if (!e.target.closest("#expmenu") && !e.target.closest("#download")) closeExport();
+});
+$("#expmenu").addEventListener("click", e => {
+  const b = e.target.closest("[data-exp]");
+  if (!b || b.disabled) return;
+  const what = b.dataset.exp;
+  closeExport();
+  if (what === "mky") { location.href = "/api/download"; return; }
+  const [kind, fmt] = what.split(":");
+  if (kind === "canvas") { location.href = `/api/export/canvas?format=${fmt}`; return; }
+  if (sel === null) return;
+  location.href = `/api/export/plot/${encodeURIComponent(sel)}?format=${fmt}`;
+});
 addEventListener("keydown", e => {
   if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "s") {
     e.preventDefault();

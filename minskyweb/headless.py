@@ -448,11 +448,17 @@ class Model:
         self.set_init(name, value)
         return it
 
+    #: Operations the engine builds as their OWN class rather than an `Operation:<op>`.
+    #: Verified by asking for each and reading back what appeared. Without these, three
+    #: operations the engine supports were refused by us, not by it -- the guard below is
+    #: worth keeping strict, it just has to know what to expect.
+    _OP_CLASS = {"integrate": "IntOp", "data": "DataOp",
+                 "userFunction": "UserFunction", "ravel": "Ravel"}
+
     def operation(self, op: str, at=None) -> Item:
         self.minsky.canvas.addOperation(op)
-        # 'integrate' yields an IntOp (plus a Variable:integral); the rest are Operation:<op>
         return self._adopt(f"op:{op}", None, at,
-                           expect="IntOp" if op == "integrate" else f"Operation:{op}")
+                           expect=self._OP_CLASS.get(op, f"Operation:{op}"))
 
     def godley(self, at=None, flow_rows: int = 1) -> Item:
         """A Godley table, with `flow_rows` blank flow rows.

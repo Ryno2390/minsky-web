@@ -2874,6 +2874,68 @@ def create_app() -> FastAPI:
         return FileResponse(str(tmp), media_type="application/xml",
                             filename=f"{stem}.mky")
 
+    #: What the engine can draw, and what to call the result. EMF is deliberately absent:
+    #: renderToEMF raises "only available on Windows".
+    EXPORT = {"svg": ("image/svg+xml", "renderToSVG", "renderCanvasToSVG"),
+              "png": ("image/png", "renderToPNG", "renderCanvasToPNG"),
+              "pdf": ("application/pdf", "renderToPDF", "renderCanvasToPDF"),
+              "ps":  ("application/postscript", "renderToPS", "renderCanvasToPS")}
+
+    @app.get("/api/export/canvas")
+    async def export_canvas(format: str = "svg"):
+        """The whole diagram, drawn by the engine rather than by us.
+
+        Minsky renders its own canvas to vector formats, so an export is the engine's
+        own picture at any resolution -- not a screenshot of our SVG, which would carry
+        our approximations of its icons.
+        """
+        require_idle()
+        fmt = format.lower()
+        if fmt not in EXPORT:
+            raise HTTPException(
+                422, f"unknown format {format!r}. Use one of: {', '.join(EXPORT)}")
+        media, _item_meth, canvas_meth = EXPORT[fmt]
+        out = _SCRATCH / f"canvas.{fmt}"
+
+        def _draw():
+            settle()
+            getattr(engine().minsky, canvas_meth)(str(out))
+        await call(_draw)
+        if not out.exists() or out.stat().st_size == 0:
+            # the renderers report success by returning; an empty file is the only sign
+            raise HTTPException(500, f"the engine drew nothing for {fmt}")
+        stem = Path(_CURRENT).stem if _CURRENT else "model"
+        return FileResponse(str(out), media_type=media, filename=f"{stem}.{fmt}")
+
+    @app.get("/api/export/plot/{ref}")
+    async def export_plot(ref: str, format: str = "svg"):
+        """One plot, at whatever size and quality the format allows."""
+        require_idle()
+        fmt = format.lower()
+        if fmt not in EXPORT:
+            raise HTTPException(
+                422, f"unknown format {format!r}. Use one of: {', '.join(EXPORT)}")
+        media, item_meth, _c = EXPORT[fmt]
+        await call(check_ref, ref)
+
+        def _kind():
+            return _resolve(engine().minsky, ref).classType()
+        cls = await call(_kind)
+        if "Plot" not in cls and "Sheet" not in cls:
+            raise HTTPException(422, f"{cls} is not a plot; there is nothing to draw")
+
+        out = _SCRATCH / f"plot.{fmt}"
+
+        def _draw():
+            settle()
+            getattr(_resolve(engine().minsky, ref), item_meth)(str(out))
+        await call(_draw)
+        if not out.exists() or out.stat().st_size == 0:
+            raise HTTPException(500, f"the engine drew nothing for {fmt}")
+        stem = Path(_CURRENT).stem if _CURRENT else "model"
+        return FileResponse(str(out), media_type=media,
+                            filename=f"{stem}-plot{ref.replace(':', '-')}.{fmt}")
+
     @app.websocket("/ws/sim")
     async def ws_sim(ws: WebSocket):
         """Stream a run. Client sends {"cmd":"run","steps":N,"tmax":T} then may send

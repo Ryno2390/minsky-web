@@ -3680,6 +3680,105 @@ check("and it is in the palette now it can be given one",
       '"userFunction"' in _ui.split("const OP_GROUPS")[1].split("];")[0])
 
 
+print("\n69. the Phillips diagram, and loading a data series")
+# A Phillips diagram is built from Godley tables. A model with none produces a near-empty
+# render rather than an error, which would reach the user as a blank panel.
+_em = "/Users/ryneschultz/minsky/examples/EndogenousMoney.mky"
+_gw = "/Users/ryneschultz/minsky/examples/GoodwinLinear.mky"
+if Path(_em).exists():
+    c.post(f"/api/load?path={_em}")
+    _r = c.get("/api/phillips?format=svg&theme=dark")
+    check("a stock-flow model draws a Phillips diagram", _r.status_code == 200,
+          _r.text[:110])
+    check("and it is a real drawing, not an empty canvas", len(_r.content) > 20000,
+          f"{len(_r.content)} bytes")
+    _d = _r.text
+    check("the dark theme recolours the ink", "rgb(90%, 93%, 94%)" in _d)
+    check("but leaves the accents alone, which carry meaning",
+          "rgb(0%, 0%, 100%)" in _d or "rgb(100%, 0%, 0%)" in _d,
+          "red and blue were rewritten along with the black")
+    check("a png comes back opaque",
+          c.get("/api/phillips?format=png").content[:4] == b"\x89PNG")
+if Path(_gw).exists():
+    c.post(f"/api/load?path={_gw}")
+    _r = c.get("/api/phillips?format=svg")
+    check("a model with no tables is told why there is nothing to draw",
+          _r.status_code == 422, f"{_r.status_code}: {_r.text[:90]}")
+    check("and the reason names Godley tables",
+          "Godley" in _r.text, _r.text[:120])
+check("an unknown phillips theme is refused",
+      c.get("/api/phillips?theme=neon").status_code == 422)
+
+# DataOp::readData is `while (f>>x>>y)` -- whitespace pairs, NOT csv despite the name.
+# A comma-separated file parses as nothing, sets the filename, and raises nothing.
+c.post("/api/clear")
+c.post("/api/item", json={"kind":"operation","op":"data","at":[300,300]})
+_ref = c.get("/api/state").json()["items"][0]["ref"]
+
+def _send(name, body, **q):
+    return c.post(f"/api/item/{_ref}/data", params=q,
+                  files={"file": (name, body, "text/csv")})
+
+_r = _send("gdp.csv", b"year,gdp\n2000,10.5\n2001,11.2\n2002,12.9\n")
+check("a comma-separated file loads", _r.status_code == 200, _r.text[:140])
+_L = _r.json()["loaded"]
+check("with the right number of points", _L["points"] == 3, str(_L))
+check("and the header recognised rather than counted as data",
+      _L["header"] == ["year", "gdp"] and _L["skipped"] == 0, str(_L))
+check("and the x range reported", (_L["xFrom"], _L["xTo"]) == (2000.0, 2002.0), str(_L))
+
+_r = _send("semi.csv", b"0;0\n1;3\n2;12\n")
+check("a delimiter that is not a comma is worked out",
+      _r.status_code == 200 and _r.json()["loaded"]["delimiter"] == ";",
+      _r.text[:120])
+_r = _send("tab.tsv", b"0\t5\n1\t7\n")
+check("as is a tab", _r.status_code == 200 and _r.json()["loaded"]["points"] == 2,
+      _r.text[:120])
+
+# the engine keeps a map keyed by x, so a repeated x silently overwrites
+_r = _send("dupe.csv", b"1,1\n1,2\n2,3\n")
+check("a repeated x is reported, not silently dropped",
+      _r.status_code == 200 and _r.json()["loaded"]["duplicates"] == 1,
+      str(_r.json().get("loaded")))
+
+_r = _send("junk.csv", b"a,b\nx,y\n")
+check("a file with no numbers is refused", _r.status_code == 422, _r.text[:120])
+check("and the message says what it tried", "separated" in _r.text, _r.text[:140])
+_r = _send("cols.csv", b"1,2,3\n4,5,6\n", x=0, y=2)
+check("a column can be chosen",
+      _r.status_code == 200 and _r.json()["loaded"]["xFrom"] == 1.0
+      and _r.json()["loaded"]["points"] == 2, _r.text[:120])
+check("but not the same column twice",
+      _send("cols.csv", b"1,2\n3,4\n", x=1, y=1).status_code == 422)
+
+# it must survive a round trip, or the item is decoration
+_saved = c.post("/api/save", json={"name":"data-probe"}).json()["saved"]
+c.post(f"/api/load?path={_saved}")
+check("the series survives save and reload",
+      c.get("/api/state").json()["items"][0]["classType"] == "DataOp",
+      "the item did not come back")
+_rm("data-probe")
+
+c.post("/api/clear")
+c.post("/api/item", json={"kind":"parameter","name":"p","value":1,"at":[200,200]})
+check("only an interpolated-data item takes a series",
+      c.post("/api/item/0/data",
+             files={"file": ("x.csv", b"1,2\n", "text/csv")}).status_code == 422)
+c.post("/api/clear")
+
+_ui = (Path(__file__).parent / "minskyweb/ui/index.html").read_text()
+check("both views share one panel rather than two near-identical ones",
+      "EQ_VIEWS" in _ui and 'data-view="phillips"' in _ui)
+check("and units are offered only where they mean something",
+      'eqView === "equations"' in _ui,
+      "a Phillips diagram has nothing to say about units")
+check("a data item can be given a series", 'id="do-file"' in _ui)
+check("with the columns chosen", 'id="do-x"' in _ui and 'id="do-y"' in _ui)
+check("and the same file can be picked twice",
+      '$("#do-file").value = ""' in _ui,
+      "a file input does not fire change for the same file twice")
+
+
 # Whatever any section forgot: the suite must not leave files among the user's models.
 # Minsky renames the old file to "<name>.mky;1" on every save, so both go.
 _left = [f for f in SAVE_DIR.iterdir()

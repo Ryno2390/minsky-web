@@ -3067,32 +3067,58 @@ def create_app() -> FastAPI:
               "pdf": ("application/pdf", "renderToPDF", "renderCanvasToPDF"),
               "ps":  ("application/postscript", "renderToPS", "renderCanvasToPS")}
 
-    #: What the engine draws equations in, and what each theme wants instead. The engine
-    #: emits pure black on TRANSPARENT -- measured: 58 `fill="rgb(0%, 0%, 0%)"` and 4
-    #: strokes, and no background rect at all. So both themes get an explicit ground:
-    #: without one, "light" is really "transparent", which a viewer that composites over
-    #: black renders as black on black.
+    #: What the engine draws in, and what each theme wants instead. It emits pure black
+    #: on TRANSPARENT -- measured: 58 `fill="rgb(0%, 0%, 0%)"` in the equations, 56 in a
+    #: Phillips diagram, and no background rect in either. So both themes get an explicit
+    #: ground: without one, "light" is really "transparent", which a viewer compositing
+    #: over black renders as black on black.
     _EQ_INK = 'rgb(0%, 0%, 0%)'
     EQ_THEME = {"light": ("#FFFFFF", "rgb(0%, 0%, 0%)", (255, 255, 255), (0, 0, 0)),
                 "dark":  ("#0E1113", "rgb(90%, 93%, 94%)", (14, 17, 19), (230, 237, 240))}
+
+    def _themed(raw: Path, out: Path, fmt: str, th: str):
+        """Recolour a render into `th`. Only the one black the engine writes is touched.
+
+        A Phillips diagram also carries red and blue, which mean something -- rewriting
+        every colour, or inverting, would destroy them.
+        """
+        bg_hex, ink_rgb, bg_px, ink_px = EQ_THEME[th]
+        if fmt == "svg":
+            doc = raw.read_text()
+            doc = doc.replace(_EQ_INK, ink_rgb)
+            i = doc.find(">", doc.find("<svg"))
+            bg = f'\n<rect width="100%" height="100%" fill="{bg_hex}"/>'
+            out.write_text(doc[:i + 1] + bg + doc[i + 1:])
+            return
+        from PIL import Image
+        with Image.open(raw) as im:
+            im = im.convert("RGBA")
+            # The alpha channel IS the shape, so the ink is painted through it rather
+            # than the pixels inverted -- inverting takes the transparent ground to
+            # white and swallows the drawing.
+            ground = Image.new("RGB", im.size, bg_px)
+            ink = Image.new("RGB", im.size, ink_px)
+            ground.paste(ink, mask=im.split()[-1])
+            ground.save(out)
+
+    def _check_render_args(fmt: str, theme: str):
+        f, t = fmt.lower(), theme.lower()
+        if f not in ("svg", "png"):
+            raise HTTPException(422, f"unknown format {fmt!r}. Use svg or png")
+        if t not in EQ_THEME:
+            raise HTTPException(422, f"unknown theme {theme!r}. "
+                                     f"Use {' or '.join(EQ_THEME)}")
+        return f, t
 
     @app.get("/api/equations")
     async def equations(format: str = "svg", theme: str = "dark"):
         """The model written out as equations, drawn by the engine.
 
-        This is the same view Minsky's own equation tab shows -- it is derived from the
-        wiring, so it is the one place a modeller can check that what they drew is what
-        they meant.
+        Derived from the wiring, so it is the one place a modeller can check that what
+        they drew is what they meant.
         """
         require_idle()
-        fmt = format.lower()
-        if fmt not in ("svg", "png"):
-            raise HTTPException(422, f"unknown format {format!r}. Use svg or png")
-        th = theme.lower()
-        if th not in EQ_THEME:
-            raise HTTPException(
-                422, f"unknown theme {theme!r}. Use {' or '.join(EQ_THEME)}")
-        bg_hex, ink_rgb, bg_px, ink_px = EQ_THEME[th]
+        fmt, th = _check_render_args(format, theme)
         raw = _SCRATCH / f"equations-raw.{fmt}"
         out = _SCRATCH / f"equations-{th}.{fmt}"
 
@@ -3103,33 +3129,50 @@ def create_app() -> FastAPI:
         await call(_draw)
         if not raw.exists() or raw.stat().st_size == 0:
             raise HTTPException(500, "the engine drew no equations")
-
-        def _recolour():
-            if fmt == "svg":
-                doc = raw.read_text()
-                # Only the exact black the engine writes is touched. A blanket colour
-                # rewrite would be a guess; this is the one value it actually emits.
-                doc = doc.replace(_EQ_INK, ink_rgb)
-                i = doc.find(">", doc.find("<svg"))
-                bg = f'\n<rect width="100%" height="100%" fill="{bg_hex}"/>'
-                out.write_text(doc[:i + 1] + bg + doc[i + 1:])
-                return
-            from PIL import Image
-            with Image.open(raw) as im:
-                im = im.convert("RGBA")
-                # The alpha channel IS the glyph shape, so the ink is painted through it
-                # rather than the pixels being inverted -- inverting would take the
-                # transparent ground to white and swallow the equations.
-                ground = Image.new("RGB", im.size, bg_px)
-                ink = Image.new("RGB", im.size, ink_px)
-                ground.paste(ink, mask=im.split()[-1])
-                ground.save(out)
-
-        await run_in_threadpool(_recolour)
+        await run_in_threadpool(_themed, raw, out, fmt, th)
         stem = Path(_CURRENT).stem if _CURRENT else "model"
         return FileResponse(str(out),
                             media_type="image/svg+xml" if fmt == "svg" else "image/png",
                             filename=f"{stem}-equations-{th}.{fmt}")
+
+    @app.get("/api/phillips")
+    async def phillips(format: str = "svg", theme: str = "dark"):
+        """The Phillips diagram: the model's stocks and the flows between them.
+
+        It is built from Godley tables, so a model without any has nothing to draw. The
+        engine says so by producing a near-empty file rather than by failing, which would
+        reach the user as a blank panel with no explanation -- so the size is checked and
+        the reason given.
+        """
+        require_idle()
+        fmt, th = _check_render_args(format, theme)
+        raw = _SCRATCH / f"phillips-raw.{fmt}"
+        out = _SCRATCH / f"phillips-{th}.{fmt}"
+
+        def _draw():
+            settle()
+            pd = engine().minsky.phillipsDiagram
+            pd.init()
+            getattr(pd, "renderToSVG" if fmt == "svg" else "renderToPNG")(str(raw))
+            n = sum(1 for _r, it in _iter_items(engine().minsky)
+                    if "Godley" in it.classType())
+            return n
+        tables = await call(_draw)
+        if not raw.exists():
+            raise HTTPException(500, "the engine drew no Phillips diagram")
+        # an empty render is ~169 bytes of SVG preamble and nothing else
+        if raw.stat().st_size < 900:
+            raise HTTPException(
+                422,
+                "there is nothing to draw: a Phillips diagram is built from the stocks "
+                "and flows of Godley tables, and this model has "
+                + (f"{tables} table(s) but no flows between them."
+                   if tables else "no Godley tables."))
+        await run_in_threadpool(_themed, raw, out, fmt, th)
+        stem = Path(_CURRENT).stem if _CURRENT else "model"
+        return FileResponse(str(out),
+                            media_type="image/svg+xml" if fmt == "svg" else "image/png",
+                            filename=f"{stem}-phillips-{th}.{fmt}")
 
     @app.post("/api/analysis/units")
     async def check_units():
@@ -3153,6 +3196,93 @@ def create_app() -> FastAPI:
             if it.classType().startswith("Variable")
             and (getattr(it, "unitsStr", lambda: "")() or "")))
         return dict(ok=problem is None, problem=problem, withUnits=n)
+
+    @app.post("/api/item/{ref}/data")
+    async def load_data(ref: str, file: UploadFile = File(...),
+                        x: int = 0, y: int = 1, delimiter: str = ""):
+        """Load a series into an interpolated-data item from a CSV.
+
+        `DataOp::readData` is not a CSV reader despite the name -- it is `while (f>>x>>y)`,
+        whitespace-separated pairs, so a comma-separated file parses as nothing and the
+        item is left empty with the filename set and no error raised. The file is parsed
+        here and handed over in the form the engine actually reads.
+        """
+        require_idle()
+        await call(check_ref, ref)
+        blob = await file.read()
+        if len(blob) > 8_000_000:
+            raise HTTPException(413, "that file is larger than 8 MB")
+        try:
+            text = blob.decode("utf-8-sig")
+        except UnicodeDecodeError:
+            raise HTTPException(422, "that file is not text this can read (expected UTF-8)")
+        if x == y:
+            raise HTTPException(422, "the x and y columns must be different")
+
+        import csv as _csv
+        sample = text[:8000]
+        if delimiter:
+            dial = None
+            sep = delimiter
+        else:
+            try:
+                dial = _csv.Sniffer().sniff(sample, delimiters=",;\t| ")
+                sep = dial.delimiter
+            except Exception:
+                sep = ","
+        rows = list(_csv.reader(text.splitlines(), delimiter=sep))
+        pairs, skipped, header = [], 0, None
+        for i, row in enumerate(rows):
+            if max(x, y) >= len(row):
+                skipped += 1
+                continue
+            try:
+                pairs.append((float(row[x]), float(row[y])))
+            except ValueError:
+                # a first row that will not parse is a header, not an error
+                if i == 0 and header is None:
+                    header = [row[x].strip(), row[y].strip()]
+                else:
+                    skipped += 1
+        if not pairs:
+            raise HTTPException(
+                422, f"no numeric pairs found in columns {x} and {y}. The file was read "
+                     f"as {sep!r}-separated with {len(rows)} row(s); check the columns "
+                     f"or give a delimiter.")
+        # the engine keeps a map keyed by x, so duplicates silently overwrite
+        dupes = len(pairs) - len({px for px, _ in pairs})
+
+        staged = _SCRATCH / "data-import.txt"
+        staged.write_text("".join(f"{px!r} {py!r}\n" for px, py in pairs))
+        await call(checkpoint)
+
+        def _go():
+            raw = _resolve(engine().minsky, ref)
+            if raw.classType() != "DataOp":
+                raise HTTPException(
+                    422, f"{raw.classType()} cannot hold a data series. Add an "
+                         f"interpolated-data item from the palette first.")
+            raw.readData(str(staged))
+            got = list(raw.data.keys())
+            if len(got) != len(pairs) - dupes:
+                raise HTTPException(
+                    500, f"the engine kept {len(got)} of {len(pairs) - dupes} points")
+            return len(got), min(got), max(got)
+
+        try:
+            n, lo, hi = await call(_go)
+        except HTTPException:
+            rollback()
+            raise
+        except Exception as ex:
+            rollback()
+            raise HTTPException(422, str(ex))
+        mark_dirty()
+        out = await call(snapshot)
+        out["loaded"] = dict(points=n, xFrom=lo, xTo=hi, delimiter=sep,
+                             skipped=skipped, duplicates=dupes, header=header,
+                             filename=file.filename)
+        return out
 
     @app.post("/api/item/{ref}/expression")
     async def set_expression(ref: str, spec: RenameSpec):

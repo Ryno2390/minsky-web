@@ -354,7 +354,11 @@ svg#board.panning{cursor:grabbing}
   </div>
 
   <div class="gwrap" id="eqwrap"><div class="gpanel eqpanel">
-    <div class="ghead"><b>Equations</b>
+    <div class="ghead"><b id="eqtitle">Equations</b>
+      <div class="toggle2">
+        <button class="gbtn eqview" data-view="equations">Equations</button>
+        <button class="gbtn eqview" data-view="phillips">Phillips</button>
+      </div>
       <span id="eqnote" style="font-size:12px;color:var(--ink-3)"></span>
       <div class="spacer"></div>
       <button class="gbtn" id="checkunits">Check units</button>
@@ -406,7 +410,7 @@ svg#board.panning{cursor:grabbing}
   <button id="clear">Clear</button>
   <button id="tidy" title="Arrange the canvas left to right (⌘L)">⌗ Tidy</button>
   <button id="plots" title="Every plot in the model (⌘P)">◫ Plots</button>
-  <button id="eqns" title="The model written out as equations (⌘E)">∑ Equations</button>
+  <button id="eqns" title="Equations and the Phillips diagram (⌘E)">∑ Equations</button>
   <button id="del" class="danger" disabled>Delete</button>
   <span id="fname" style="font-size:12.5px;color:var(--ink-3);margin-left:4px"></span>
   <div class="spacer"></div>
@@ -568,6 +572,18 @@ svg#board.panning{cursor:grabbing}
     </div>
     <div style="font-size:11.5px;color:var(--ink-3);padding:0 2px" id="initnote"></div>
   </div>
+  <div id="dowrap" style="display:none;margin-top:8px">
+    <div class="field" style="gap:6px">
+      <label style="white-space:nowrap">x,y cols</label>
+      <input id="do-x" style="width:100%" value="0">
+      <input id="do-y" style="width:100%" value="1">
+    </div>
+    <label for="do-file" class="pitem" style="justify-content:center;margin-top:6px;
+      border:1px solid var(--line);border-radius:6px;cursor:pointer">Load a CSV…</label>
+    <input id="do-file" type="file" accept=".csv,.tsv,.txt,text/csv,text/plain"
+           style="display:none">
+    <div style="font-size:11.5px;color:var(--ink-3);padding:5px 2px" id="donote"></div>
+  </div>
   <div id="ufwrap" style="display:none;margin-top:8px">
     <div class="field" style="gap:6px">
       <label style="white-space:nowrap" id="uflab">f(x,y)</label>
@@ -634,7 +650,8 @@ const OP_GROUPS = [
                          "integrate","differentiate","time","exp","ln","log","sqrt"]],
   // offered now it has an editor: without a body it computes nothing, so putting it in
   // the palette before there was any way to set one would have been a dead end
-  ["custom",     false, ["userFunction"]],
+  // both need an editor to be usable at all, and now have one
+  ["custom",     false, ["userFunction", "data"]],
   ["constants",  false, ["pi","euler","zero","one","inf","percent"]],
   ["trig",       false, ["sin","cos","tan","asin","acos","atan","sinh","cosh","tanh"]],
   ["elementary", false, ["abs","floor","frac","copy","Gamma","fact","polygamma"]],
@@ -1128,6 +1145,12 @@ function render() {
   const selItem = sel === null ? null : byRef.get(sel);
   const ct = selItem?.classType || "";
 
+  // An interpolated-data item has nothing to interpolate until a series is loaded.
+  const isData = ct === "DataOp";
+  $("#dowrap").style.display = isData ? "" : "none";
+  if (isData && !$("#donote").textContent)
+    $("#donote").textContent = "two numeric columns: x, then the value at x";
+
   // A user function computes nothing until it has a body.
   const isUF = ct === "UserFunction";
   $("#ufwrap").style.display = isUF ? "" : "none";
@@ -1155,6 +1178,8 @@ function render() {
       ? "Rename it below, or set its value. Double-click the icon to rename in place."
     : isUF
       ? "Give it a body below, in terms of its arguments."
+    : isData
+      ? "Load a series below; it interpolates between the points you give it."
     : ct.startsWith("Operation:") || ct === "IntOp"
       ? "An operation has no settings — what it computes comes from what is wired into it."
     : ct.startsWith("Plot") || ct.startsWith("Sheet")
@@ -1457,6 +1482,29 @@ for (const [id, btn] of [["#units","#unitsok"], ["#rot","#rotok"],
     if (e.key === "Escape") { e.preventDefault(); $(id).blur(); render(); }
   });
 }
+$("#do-file").onchange = guard(async () => {
+  const f = $("#do-file").files[0];
+  if (!f || sel === null) return;
+  const fd = new FormData();
+  fd.append("file", f);
+  const q = `?x=${encodeURIComponent($("#do-x").value)}`
+          + `&y=${encodeURIComponent($("#do-y").value)}`;
+  const r = await fetch(`/api/item/${encodeURIComponent(sel)}/data${q}`,
+                        {method:"POST", body: fd});
+  $("#do-file").value = "";                    // so the same file can be picked again
+  const body = await r.json();
+  if (!r.ok) throw new Error(body.detail || `HTTP ${r.status}`);
+  state = body; render();
+  const L = body.loaded;
+  $("#donote").textContent =
+    `${L.points} points, x from ${L.xFrom} to ${L.xTo}`
+    + (L.header ? ` — columns ${L.header.join(", ")}` : "")
+    + (L.skipped ? `, ${L.skipped} row(s) skipped` : "")
+    + (L.duplicates ? `, ${L.duplicates} duplicate x overwritten` : "");
+  toast(`Loaded ${L.points} points from ${L.filename}.`
+      + (L.duplicates ? ` ${L.duplicates} duplicate x values overwrote earlier ones.` : ""),
+        !L.duplicates);
+});
 $("#ufok").onclick = guard(async () => {
   if (sel === null) return;
   const r = await api(`/item/${encodeURIComponent(sel)}/expression`,
@@ -2279,32 +2327,37 @@ $("#sa-name").addEventListener("keydown", e => {
 // All this menu does is reach them.
 function closeExport(){ $("#expmenu").classList.remove("open"); }
 
-/* ---------- equations, and whether the units add up ---------- */
-// Which theme the equations are drawn in -- for the view AND the export, so what is
-// saved is what was on screen. Defaults to dark, matching the rest of the app.
+/* ---------- equations, the Phillips diagram, and whether the units add up ---------- */
+// Both are drawn by the engine as black on transparency, both want the same theme and
+// the same export path, so they share a panel rather than duplicating one.
 let eqTheme = (() => {
   try { return localStorage.getItem("minsky.eqTheme") || "dark"; } catch { return "dark"; }
 })();
+let eqView = "equations";
+const EQ_VIEWS = {equations: "Equations", phillips: "Phillips diagram"};
 
-async function openEqns(){
+async function openEqns(view){
+  if (view) eqView = view;
   $("#eqwrap").classList.add("open");
+  $("#eqtitle").textContent = EQ_VIEWS[eqView];
+  markEqTheme(); markEqView();
   $("#eqbody").innerHTML = `<div class="msg">Deriving…</div>`;
+  $("#eqbody").classList.toggle("dark", eqTheme === "dark");
   $("#eqnote").textContent = "";
   try {
-    // cache-busted: the equations follow the wiring, so they change as the model does
-    const r = await fetch(`/api/equations?format=svg&theme=${eqTheme}&at=${Date.now()}`);
+    // cache-busted: both views follow the wiring, so they change as the model does
+    const r = await fetch(`/api/${eqView}?format=svg&theme=${eqTheme}&at=${Date.now()}`);
     if (!r.ok) {
       let d; try { d = (await r.json()).detail; } catch { d = `HTTP ${r.status}`; }
       throw new Error(d);
     }
     const blob = await r.blob();
     const img = document.createElement("img");
-    img.alt = "The model as equations";
+    img.alt = EQ_VIEWS[eqView];
     img.src = URL.createObjectURL(blob);
     img.onload = () => setTimeout(() => URL.revokeObjectURL(img.src), 30000);
     $("#eqbody").innerHTML = "";
     $("#eqbody").appendChild(img);
-    $("#eqbody").classList.toggle("dark", eqTheme === "dark");
   } catch (e) {
     $("#eqbody").innerHTML = `<div class="msg"></div>`;
     $("#eqbody").firstChild.textContent = e.message;
@@ -2314,19 +2367,25 @@ function closeEqns(){ $("#eqwrap").classList.remove("open"); }
 $("#eqns").onclick = () => openEqns();
 $("#eqclose").onclick = closeEqns;
 $("#eqwrap").addEventListener("click", e => { if (e.target === $("#eqwrap")) closeEqns(); });
-$("#eqsvg").onclick = () => { location.href = `/api/equations?format=svg&theme=${eqTheme}`; };
-$("#eqpng").onclick = () => { location.href = `/api/equations?format=png&theme=${eqTheme}`; };
+$("#eqsvg").onclick = () => { location.href = `/api/${eqView}?format=svg&theme=${eqTheme}`; };
+$("#eqpng").onclick = () => { location.href = `/api/${eqView}?format=png&theme=${eqTheme}`; };
 function markEqTheme(){
   for (const b of document.querySelectorAll(".eqth"))
     b.setAttribute("aria-pressed", String(b.dataset.th === eqTheme));
 }
+function markEqView(){
+  for (const b of document.querySelectorAll(".eqview"))
+    b.setAttribute("aria-pressed", String(b.dataset.view === eqView));
+  // units belong to the equations; the Phillips diagram has nothing to say about them
+  $("#checkunits").style.display = eqView === "equations" ? "" : "none";
+}
 for (const b of document.querySelectorAll(".eqth")) b.onclick = () => {
   eqTheme = b.dataset.th;
   try { localStorage.setItem("minsky.eqTheme", eqTheme); } catch {}
-  markEqTheme();
   openEqns();
 };
-markEqTheme();
+for (const b of document.querySelectorAll(".eqview")) b.onclick = () => openEqns(b.dataset.view);
+markEqTheme(); markEqView();
 $("#checkunits").onclick = guard(async () => {
   const r = await api("/analysis/units", {method:"POST"});
   $("#eqnote").textContent = r.ok

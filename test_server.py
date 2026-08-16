@@ -4189,6 +4189,87 @@ check("and the menu gates plot entries by what they are, not by a list to keep i
       "adding a format would silently leave it enabled with no plot selected")
 
 
+print("\n74. a user function's arguments, and the two ways it computes 0 in silence")
+# Minsky splits a user function across two properties that must agree: `expression` is
+# the body, but the ARGUMENT LIST is parsed out of `description`, written f(a,b). Setting
+# only the body left every function on the x,y it is born with, so an expression over any
+# other name was accepted, echoed back, and evaluated as 0.
+c.post("/api/clear")
+c.post("/api/item", json={"kind": "parameter", "name": "alpha", "value": 0.02})
+_uf = str(c.post("/api/item",
+                 json={"kind": "operation", "op": "userFunction"}).json()["index"])
+
+_r = c.post(f"/api/item/{_uf}/expression", json={"name": "x*y + 2"})
+check("a bare body is taken, and keeps the arguments it had",
+      _r.status_code == 200 and _r.json()["args"] == ["x", "y"], _r.text[:110])
+_r = c.post(f"/api/item/{_uf}/expression", json={"name": "f(a,b) = a*10 + b"})
+check("f(a,b) = body sets the arguments as well as the body",
+      _r.status_code == 200 and _r.json()["args"] == ["a", "b"]
+      and _r.json()["expression"] == "a*10 + b", _r.text[:110])
+_r = c.post(f"/api/item/{_uf}/expression", json={"name": "a*10 + b"})
+check("and a bare body over those names is then fine", _r.status_code == 200,
+      _r.text[:110])
+_r = c.post(f"/api/item/{_uf}/expression", json={"name": "g(p) = 2*p + time"})
+check("`time` is a name the engine supplies, not a typo",
+      _r.status_code == 200 and _r.json()["args"] == ["p"], _r.text[:110])
+_r = c.post(f"/api/item/{_uf}/expression", json={"name": "q(x,y) = x >= y"})
+check("a comparison in the body is a body, not a heading",
+      _r.status_code == 200 and _r.json()["expression"] == "x >= y", _r.text[:110])
+
+# The dangerous one. `UserFunction::compile()` binds any MODEL VARIABLE named in the
+# expression straight to its storage. It reads correctly at reset and then evaluates as 0
+# for essentially every step of a run -- measured: dK was 0 on 143 of 144 steps, on both
+# solvers, with no error frame.
+_r = c.post(f"/api/item/{_uf}/expression", json={"name": "2*alpha"})
+check("a model variable used as if it were an argument is refused",
+      _r.status_code == 422 and "alpha" in _r.text and "0" in _r.text, _r.text[:150])
+check("and the refusal shows how to write it instead",
+      "alpha" in _r.json()["detail"].split("=")[0].split("(")[-1], _r.text[:150])
+_r = c.post(f"/api/item/{_uf}/expression", json={"name": "p + zzz"})
+check("a name that is nothing at all is refused too",
+      _r.status_code == 422 and "zzz" in _r.text, _r.text[:150])
+
+# `evaluate(double in1, double in2)` zeroes every argument after the second, and the icon
+# only ever grows two input ports: f(a,b,c) fed 1 and 2 returns 120, not 123.
+_r = c.post(f"/api/item/{_uf}/expression", json={"name": "f(a,b,cc) = a*100+b*10+cc"})
+check("a third argument is refused rather than evaluated as zero",
+      _r.status_code == 422 and "2 arguments" in _r.text, _r.text[:150])
+for _bad, _why in (("h(a b) = a", "arguments not separated by commas"),
+                   ("h(a,a) = a", "an argument repeated"),
+                   ("h(a,b) = ", "a heading with no body"),
+                   ("", "nothing at all")):
+    _r = c.post(f"/api/item/{_uf}/expression", json={"name": _bad})
+    check(f"{_why} is refused", _r.status_code == 422, f"{_r.status_code}: {_r.text[:90]}")
+
+# the guard must not fire on something that is not a user function at all
+_v = str(c.post("/api/item",
+                json={"kind": "variable", "name": "zz", "var_type": "flow"}).json()["index"])
+_r = c.post(f"/api/item/{_v}/expression", json={"name": "x+1"})
+check("a variable has no expression to set", _r.status_code == 422
+      and "user function" in _r.text, _r.text[:110])
+
+# A two-argument function still computes what it says, wired and run.
+c.post("/api/clear")
+_uf = str(c.post("/api/item",
+                 json={"kind": "operation", "op": "userFunction"}).json()["index"])
+c.post(f"/api/item/{_uf}/expression", json={"name": "f(a,b) = a*10 + b"})
+for _v in (3.0, 4.0):
+    _cc = str(c.post("/api/item", json={"kind": "variable", "var_type": "constant",
+                                        "value": _v}).json()["index"])
+    c.post("/api/wire", json={"src": _cc, "dst": _uf,
+                              "port": 1 if _v == 3.0 else 2})
+_out = str(c.post("/api/item",
+                  json={"kind": "variable", "name": "out",
+                        "var_type": "flow"}).json()["index"])
+c.post("/api/wire", json={"src": _uf, "dst": _out, "port": 1})
+c.post("/api/solver", json={"implicit": False})
+c.post("/api/reset")
+check("and a two-argument function computes what it says",
+      abs(c.get("/api/state").json()["values"][":out"] - 34.0) < 1e-9,
+      str(c.get("/api/state").json()["values"].get(":out")))
+c.post("/api/clear")
+
+
 # Whatever any section forgot: the suite must not leave files among the user's models.
 # Minsky renames the old file to "<name>.mky;1" on every save, so both go.
 _left = [f for f in SAVE_DIR.iterdir()

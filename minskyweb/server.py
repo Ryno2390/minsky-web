@@ -926,6 +926,25 @@ def godley_owner(name: str):
     return None
 
 
+def _variable_named(m, name: str) -> bool:
+    """Is there a variable of this name anywhere in the model, at any depth?
+
+    Used to tell the two ways of writing a bad user function apart: a name that is a
+    variable is the trap worth explaining, a name that is nothing is a typo.
+    """
+    want = name.strip()
+    for _ref, it in _iter_items(m):
+        if not it.classType().startswith("Variable"):
+            continue
+        for getter in ("name", "rawName"):
+            try:
+                if (getattr(it, getter)() or "").strip() == want:
+                    return True
+            except Exception:
+                continue
+    return False
+
+
 def load_complaint(path) -> str | None:
     """Did the engine actually read the file? Returns something to say, or None.
 
@@ -3731,25 +3750,126 @@ def create_app() -> FastAPI:
                              filename=file.filename)
         return out
 
+    #: Names an expression may use that are not its own arguments. Minsky's
+    #: `addTimeVariables` puts the first four in the symbol table; the rest are exprtk's.
+    EXPR_BUILTINS = {
+        "time", "timeStep", "initialTime", "finalTime",
+        "isfinite", "isinf", "isnan", "pi", "epsilon", "inf", "true", "false",
+        "abs", "avg", "ceil", "clamp", "equal", "erf", "erfc", "exp", "expm1",
+        "floor", "frac", "log", "log10", "log1p", "log2", "logn", "max", "min",
+        "mul", "ncdf", "nequal", "root", "round", "roundn", "sgn", "sqrt", "sum",
+        "swap", "trunc", "hypot", "atan2", "if", "else", "while", "for", "not",
+        "and", "or", "xor", "nand", "nor", "in", "like", "ilike", "var", "switch",
+        "case", "default", "repeat", "until", "break", "continue", "return", "null",
+        "sin", "cos", "tan", "asin", "acos", "atan", "sinh", "cosh", "tanh",
+        "asinh", "acosh", "atanh", "sec", "csc", "cot", "deg2rad", "rad2deg",
+        "deg2grad", "grad2deg", "sinc", "cbrt", "pow", "fmod",
+    }
+    _EXPR_WORD = re.compile(r"(?<![A-Za-z0-9_])([A-Za-z_][A-Za-z0-9_]*)")
+
+    def _expr_names(body: str) -> set:
+        """Identifiers in an expression, ignoring anything that is part of a number."""
+        return set(_EXPR_WORD.findall(body or ""))
+
     @app.post("/api/item/{ref}/expression")
     async def set_expression(ref: str, spec: RenameSpec):
-        """A user function's body. Without one the item computes nothing."""
+        """A user function's body, and optionally its name and arguments.
+
+        Minsky splits these across two properties that have to agree. `expression` is the
+        body; the ARGUMENT LIST lives in `description`, parsed out of a name written
+        `f(a,b,c)`. Setting only the body left every function on the two arguments a
+        fresh one is born with, `x` and `y`, so `a*b+c` was accepted, reported back
+        verbatim, and computed 0. Both forms are taken here:
+
+            "x*y + 2"              the body, keeping whatever arguments it has
+            "f(a,b,c) = a*b + c"   name, arguments and body together
+
+        Two ways of writing an expression are refused rather than stored, because the
+        engine takes both and then quietly computes the wrong thing:
+
+        A name that is not an argument. `compile()` will bind any MODEL VARIABLE named in
+        the expression straight to its storage, which looks like a convenient shorthand
+        and is not: it reads correctly at reset and then returns 0 for essentially every
+        step of a run, on either solver, with nothing reported. Wire the value in instead.
+
+        A name that is nothing at all. exprtk fails to compile, and the failure surfaces
+        as a value of 0 rather than as an error.
+        """
         require_idle()
         await call(check_ref, ref)
+
+        text = (spec.name or "").strip()
+        if not text:
+            raise HTTPException(422, "a user function needs an expression")
+        before, sep, after = text.partition("=")
+        # "a == b" and "a >= b" are comparisons, not the name=body form
+        looks_like_heading = bool(sep) and not after.startswith("=") \
+            and not before.rstrip().endswith((">", "<", "!"))
+        head = before.strip() if looks_like_heading else ""
+        body = (after.strip() if looks_like_heading else text.strip())
+        if looks_like_heading and not body:
+            raise HTTPException(422, f"{text!r} has a name but no expression after '='")
+        if head:
+            mh = re.fullmatch(r"([A-Za-z_][A-Za-z0-9_]*)\s*\(([^()]*)\)", head)
+            names = [a.strip() for a in (mh.group(2).split(",") if mh else [])]
+            if not mh or not all(re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", a)
+                                 for a in names if a):
+                raise HTTPException(
+                    422, f"{head!r} is not a function heading. Write it as "
+                         f"f(a, b) = <body> with the arguments separated by commas, or "
+                         f"give the body on its own to keep the arguments as they are.")
+            if len(set(names)) != len(names):
+                raise HTTPException(422, f"{head!r} repeats an argument name")
+            # `UserFunction::evaluate(double in1, double in2)` takes two arguments and
+            # sets every one after them to zero, and the icon only ever grows two input
+            # ports. Declaring three is accepted by the engine and then computes with the
+            # third as 0: f(a,b,c)=a*100+b*10+c fed 1 and 2 returns 120, not 123, at reset
+            # and throughout a run, with nothing reported.
+            if len(names) > 2:
+                raise HTTPException(
+                    422, f"a user function takes at most 2 arguments; {head!r} declares "
+                         f"{len(names)}. Minsky evaluates the third and beyond as 0 "
+                         f"rather than refusing them. Split the calculation across "
+                         f"blocks, or wire the extra values in through operations.")
         await call(checkpoint)
 
         def _go():
-            raw = _resolve(engine().minsky, ref)
+            mk = engine().minsky
+            raw = _resolve(mk, ref)
             if raw.classType() != "UserFunction":
                 raise HTTPException(
                     422, f"{raw.classType()} has no expression to set. Only a user "
                          f"function does.")
-            raw.expression(spec.name)
+            if head:
+                raw.description(head)
+            args = list(raw.argNames())
+            known = set(a for a in args if a) | EXPR_BUILTINS
+            free = sorted(n for n in _expr_names(body) if n not in known)
+            if free:
+                vars_ = {n for n in free if _variable_named(mk, n)}
+                if vars_:
+                    raise HTTPException(
+                        422,
+                        f"{', '.join(sorted(vars_))} "
+                        f"{'is a variable' if len(vars_) == 1 else 'are variables'} in "
+                        f"this model, not an argument of this function. Minsky will bind "
+                        f"it and then evaluate it as 0 for almost every step of a run, "
+                        f"reporting nothing. Wire the value into the function instead, or "
+                        f"name it as an argument: "
+                        f"{raw.name()}({', '.join(list(args) + sorted(vars_))}) = ...")
+                raise HTTPException(
+                    422,
+                    f"{', '.join(free)} is not an argument of this function"
+                    f"{' (its arguments are ' + ', '.join(args) + ')' if any(args) else ''}"
+                    f" and is nothing else in the model. The expression will not compile, "
+                    f"and a function that does not compile evaluates to 0 rather than "
+                    f"failing.")
+            raw.expression(body)
             settle()
             got = raw.expression()
-            if got != spec.name:
+            if got != body:
                 raise HTTPException(
-                    409, f"the engine kept {got!r} rather than {spec.name!r}")
+                    409, f"the engine kept {got!r} rather than {body!r}")
             return got, raw.name(), list(raw.argNames())
 
         try:

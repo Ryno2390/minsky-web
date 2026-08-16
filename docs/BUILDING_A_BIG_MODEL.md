@@ -62,7 +62,7 @@ The idiom is to place **ordinary copies** elsewhere and wire those. In `Loanable
 every flow has one icon wired into it and several plain copies feeding other blocks. Not
 obvious from the outside; it cost an hour.
 
-## 6. The default solver settings are impractical at this size — worth knowing
+## 6. The default solver settings are impractical at this size — now diagnosed
 
 Minsky ships `implicit`, `epsRel` 1e-8, `epsAbs` 1e-10. On this 215-item model:
 
@@ -72,20 +72,74 @@ Minsky ships `implicit`, `epsRel` 1e-8, `epsAbs` 1e-10. On this 215-item model:
 | implicit, 1e-4/1e-6 | 0.0414 | 13.9 ms | ~2 s |
 | explicit, 1e-4/1e-6 | 0.0699 | 1.56 ms | ~0.1 s |
 
-That is ~11,000× end to end. A user who opens a mid-sized model, presses Run and waits is
-not going to guess that the tolerances are the reason. The model is saved with explicit /
-1e-6 / 1e-8. **Worth considering: a warning, or defaults that scale with model size.**
+That is ~11,000× end to end, and a user who presses Run and waits has no way to guess the
+tolerances are the reason. A run that stops on the step cap now says where it got to, how
+many steps the current step size would need, and — when the step size is the giveaway —
+names the settings to change:
 
-## 7. The simulation socket costs 35× the engine — worth knowing
+    stopped after 300 solver steps, at t=0.1523, short of tmax=60. At this step size
+    (0.000508) reaching tmax needs about 118,157 steps. Steps this small usually mean
+    the solver tolerances rather than the model: try epsRel 1e-6, epsAbs 1e-8, and
+    implicit off.
 
-`/ws/sim` emits one frame per solver step carrying every value: ~55 ms/step against the
-engine's 1.5 ms. Fine for watching a model, too slow for measuring one — the experiments
-here run headless (`models/runner.py`) for that reason. **Worth considering:** a sampling
-interval on the socket, so long runs stream every Nth step.
+The defaults themselves are left alone: implicit is the right choice for a genuinely
+stiff model, and silently switching someone's solver is not a fix. The step cap in the
+interface went from 2,000 to 50,000, which reporting no longer scales with.
 
-## 8. Smaller things
+## 7. Reporting a run cost more than solving it — fixed
 
-- A user function on the **implicit solver** is refused at step 0, mid-run, rather than
+`/ws/sim` emitted one frame per solver step, and each frame read every value out of the
+engine. Two things were wrong with that.
+
+`live_value_ids()` walks every item in the model — 29 ms here — and it was called from
+**inside a comprehension over the value keys**: 89 calls, ~2.6 s of pure waste before
+every run, growing with the square of the model.
+
+And nearly all the cost of reading a variable is the **lookup**, not the read. Measured on
+this model:
+
+| reading all 89 values | cost |
+|---|---|
+| `variableValues[k].value()` each step | 8.54 ms |
+| through objects bound once per run | **0.027 ms** |
+
+316×. The bound objects track the run exactly — checked against fresh lookups every 40
+steps over 400 steps: zero disagreement — and nothing can invalidate them, because editing
+is locked for the duration of a run.
+
+Same model, same run, same result to the last digit:
+
+| | frames | time |
+|---|---|---|
+| before | 430 | 6.62 s |
+| after | 430 | **0.89 s** |
+
+The engine step is 1.56 ms, so 430 steps cannot cost less than 0.67 s. What is left is
+within a third of that floor.
+
+Clients can also thin what they are *sent* without changing what is solved: `every: N`
+reports one step in N, `maxFps: F` reports at most F frames a second. Both default to off,
+so nothing changed for a client that says nothing, and whatever a cap held back is sent
+before the run closes — the last frame is always the true final state. The interface asks
+for 30 fps, which is all a screen can paint.
+
+## 8. There was no way to make a chart — fixed
+
+`POST /api/item` had no plot kind, so a model built through the API had nothing to look
+at: the Plots workspace correctly reported "this model has no plots" and there was no way
+to give it one. `canvas.addPlot()` was there all along.
+
+A plot is also born with room for **one** line — one series per axis — and nothing grew
+it, so every extra series needed its own chart. `numLines` on `POST /api/item/{ref}/attrs`
+sets the count and rebuilds the ports (6 + 4N of them; with N lines the y ports run
+6..6+2N-1, the first N left axis and the next N right). A plot's title is its name, so
+`rename` sets it.
+
+The model now ships with three charts and is watchable the moment it opens.
+
+## 9. Smaller things
+
+- A user function on the **implicit solver** is still refused at step 0, mid-run, rather than
   when the model is built or reset. The message itself is good ("user functions cannot be
   used with an implicit method") — it just arrives after the user has pressed Run.
 - **Slider bounds** are refused when the current value sits exactly on a bound, and the
@@ -94,8 +148,8 @@ interval on the socket, so long runs stream every Nth step.
 - A **parameter's value** has no endpoint of its own — it goes through `/api/init`, since
   a parameter's value is its initial condition. `attrs` covers units, sliders and rotation
   but not the value.
-- **max steps defaults to 2000**, which this model needs ~860 of for t=60. A longer run
-  hits the cap silently-ish.
+- The **step cap** now defaults to 50,000 in the interface and a run that hits it explains
+  itself, but it is still a cap the user has to know about.
 
 ## What worked well
 

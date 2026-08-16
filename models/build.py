@@ -162,6 +162,23 @@ class Builder:
         api(f"/api/godley/{r}/resize", {"rows": rows, "cols": cols})
         return r
 
+    def plot(self, title, left, right=(), at=None):
+        """A chart. `left` and `right` are variable names, one series each.
+
+        A plot is born with room for ONE line -- one series per axis -- so the count has
+        to be set before the series can be wired. With N lines the y ports run 6..6+2N-1:
+        the first N are the left axis, the next N the right.
+        """
+        n = max(len(left), len(right), 1)
+        r = self._add({"kind": "plot", "at": at or self._at()})
+        api(f"/api/item/{r}/attrs", {"numLines": n})
+        api(f"/api/item/{r}/rename", {"name": title})
+        for k, nm in enumerate(left):
+            self.wire(self.ref[nm], r, 6 + k)
+        for k, nm in enumerate(right):
+            self.wire(self.ref[nm], r, 6 + n + k)
+        return r
+
     def wire(self, src, dst, port):
         api("/api/wire", {"src": src, "dst": dst, "port": port})
 

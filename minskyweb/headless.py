@@ -470,6 +470,15 @@ class Model:
         self.minsky.canvas.addSwitch()
         return self._adopt("switch", None, at, expect="SwitchIcon")
 
+    def plot(self, at=None) -> Item:
+        """A PlotWidget: the chart a run is actually watched on.
+
+        Its input ports are the plot's lines -- ports 6 onwards, since 0 to 5 are the
+        axis bounds. Wire a variable into one and it becomes a series.
+        """
+        self.minsky.canvas.addPlot()
+        return self._adopt("plot", None, at, expect="PlotWidget")
+
     def copy_icon(self, item: Item) -> Item:
         """Another icon of the SAME variable, the way Minsky's "copy item" does it.
 
@@ -778,10 +787,19 @@ class Model:
             raw.update()
             return new
 
+        if ct == "PlotWidget":                  # a plot's name is its title, as on screen
+            # No update() on a plot -- that is a Godley icon's method, and calling it here
+            # raised AttributeError after the title had already been set.
+            raw.title(new)
+            got = (raw.title() or "").strip()
+            if got != new:
+                raise ValueError(f"the engine kept the title {got!r}, not {new!r}")
+            return new
+
         if not ct.startswith("Variable:"):
             raise ValueError(
-                f"{ct} has no name to change. Only variables, parameters and Godley "
-                f"tables can be renamed.")
+                f"{ct} has no name to change. Only variables, parameters, plots and "
+                f"Godley tables can be renamed.")
 
         # `renameAllInstances` renames the variable the CANVAS is focused on, and
         # focusing is done by position -- so it could not reach a variable inside a

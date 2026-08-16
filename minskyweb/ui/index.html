@@ -715,7 +715,7 @@ svg#board.panning{cursor:grabbing}
   <div class="field"><label>order</label><input id="order" value="4"></div>
   <div class="field"><label>implicit</label><input id="implicit" type="checkbox" checked></div>
   <div class="field"><label>tmax</label><input id="tmax" value="10"></div>
-  <div class="field"><label>max steps</label><input id="steps" value="2000"></div>
+  <div class="field"><label>max steps</label><input id="steps" value="50000"></div>
   </div>
 
 <script>
@@ -2090,7 +2090,11 @@ $("#run").onclick = guard(async () => {
     // and one that runs to t=500.
     const secs = +$("#speed").value;
     const span = (cfg.tmax ?? 0) - (state.solver?.t0 ?? 0);
-    const msg = {cmd:"run", steps: cfg.steps, tmax: cfg.tmax};
+    // A screen cannot paint faster than it refreshes, and on a small model the solver
+    // can produce thousands of steps a second. Cap what we are SENT rather than what is
+    // solved -- the server still takes every step, and sends whatever the cap held back
+    // before it closes, so the last frame is the true final state either way.
+    const msg = {cmd:"run", steps: cfg.steps, tmax: cfg.tmax, maxFps: 30};
     if (secs > 0 && span > 0) msg.rate = span / secs;
     ws.send(JSON.stringify(msg));
   };
@@ -2100,6 +2104,9 @@ $("#run").onclick = guard(async () => {
     if (m.done || m.stopped) {
       finish();
       if (m.reason === "diverged") toast("Diverged: " + (m.variables||[]).join(", "));
+      // running out of steps is not finishing, and "Finished (steps)" read as though it
+      // had. The server says where it got to and what to change; pass that straight on.
+      else if (m.reason === "steps" && m.note) toast(m.note);
       else if (m.done) toast(`Finished (${m.reason})`, true);
       refresh(); return;
     }

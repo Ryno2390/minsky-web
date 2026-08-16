@@ -374,6 +374,12 @@ def build(s, p):
                          ("spread", "dspread"), ("ipol", "dipol")):
         b.wire(b.ref[deriv], ints[state], 1)
 
+    # Charts, so the model is watchable the moment it opens rather than a wiring diagram
+    # with nothing to look at. Placed well clear of the equation blocks.
+    b.plot("Profit rates and policy", ["r", "rE", "ipol"], ["iL"], at=[2300, 300])
+    b.plot("Accumulation and activity", ["gacc", "u", "lam"], at=[2300, 800])
+    b.plot("Finance", ["dlev", "rB", "infl"], at=[2300, 1300])
+
     # Minsky's defaults -- implicit, epsRel 1e-8, epsAbs 1e-10 -- take 0.0005-long steps
     # at 45ms each on this model, so a 60-period run would take about an hour. The
     # explicit method at 1e-6/1e-8 takes steps 140x longer at a thirtieth of the cost and

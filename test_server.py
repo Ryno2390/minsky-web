@@ -4270,6 +4270,174 @@ check("and a two-argument function computes what it says",
 c.post("/api/clear")
 
 
+print("\n75. streaming a run that is longer than a demo")
+# Reporting used to cost more than solving. Every step read every value out of the engine
+# -- and nearly all of that cost is the LOOKUP, not the read, so the value objects are now
+# bound once per run. Measured on a 215-item model: 8.5ms to look up and read all 89
+# values, 0.027ms to read them through bound objects. `live_value_ids()` was also being
+# called once per KEY from inside a comprehension, 89 times at 29ms each.
+c.post("/api/clear")
+_iop = str(c.post("/api/item", json={"kind": "operation", "op": "integrate"}).json()["index"])
+c.post("/api/item/0/rename", json={"name": "S"})
+c.post("/api/init", json={"name": "S", "value": 1.0})
+_g = str(c.post("/api/item", json={"kind": "parameter", "name": "g",
+                                   "value": 0.1}).json()["index"])
+_mul = str(c.post("/api/item", json={"kind": "operation", "op": "multiply"}).json()["index"])
+_dS = str(c.post("/api/item", json={"kind": "variable", "name": "dS",
+                                    "var_type": "flow"}).json()["index"])
+c.post("/api/wire", json={"src": _g, "dst": _mul, "port": 1})
+c.post("/api/wire", json={"src": "0", "dst": _mul, "port": 2})
+c.post("/api/wire", json={"src": _mul, "dst": _dS, "port": 1})
+c.post("/api/wire", json={"src": _dS, "dst": _iop, "port": 1})
+c.post("/api/solver", json={"tmax": 8.0})
+
+def _stream(**first):
+    """Run and return (frames, closing message)."""
+    fr, end = [], None
+    with c.websocket_connect("/ws/sim") as ws:
+        ws.send_json(dict({"cmd": "run", "steps": 4000, "tmax": 8.0}, **first))
+        while True:
+            m = ws.receive_json()
+            if "error" in m:
+                return fr, m
+            if m.get("done") or m.get("stopped"):
+                end = m
+                break
+            fr.append(m)
+    return fr, end
+
+_full, _e1 = _stream()                 # the default: one frame per step
+_thin, _e2 = _stream(maxFps=20)        # the cap the interface asks for
+check("the default reports every step and reaches tmax",
+      _e1 and _e1.get("reason") == "tmax", str(_e1)[:110])
+check("and a capped run reaches the same place",
+      _e2 and _e2.get("reason") == "tmax", str(_e2)[:110])
+check("the cap sends fewer frames than there are steps",
+      0 < len(_thin) < len(_full), f"{len(_thin)} of {len(_full)}")
+# The one that matters: thinning what is REPORTED must not change what is COMPUTED, and
+# the last frame must be the true final state rather than the last one the throttle let
+# through. Both runs solve the same ODE, so their final values must agree exactly.
+check("a capped run's last frame is the true final state",
+      _full and _thin
+      and abs(_thin[-1]["values"][":S"] - _full[-1]["values"][":S"]) < 1e-12
+      and abs(_thin[-1]["t"] - _full[-1]["t"]) < 1e-12,
+      f"thin S={_thin[-1]['values'][':S'] if _thin else None} "
+      f"full S={_full[-1]['values'][':S'] if _full else None}")
+check("and it is right, against the analytic solution",
+      _thin and abs(_thin[-1]["values"][":S"] - math.exp(0.1 * _thin[-1]["t"]))
+      / math.exp(0.1 * _thin[-1]["t"]) < 1e-8,
+      f"S={_thin[-1]['values'][':S'] if _thin else None}")
+_ev, _e3 = _stream(every=5)
+check("every=N reports one frame in N", 0 < len(_ev) < len(_full), f"{len(_ev)} frames")
+check("and lands in the same place",
+      _ev and abs(_ev[-1]["values"][":S"] - _full[-1]["values"][":S"]) < 1e-12,
+      f"{_ev[-1]['values'][':S'] if _ev else None}")
+
+# Running out of steps is not finishing, and a bare "done" read as though it were.
+_short, _e4 = _stream(steps=12, tmax=500.0)
+check("running out of steps says so, with where it got to",
+      _e4 and _e4.get("reason") == "steps" and _e4.get("steps") == 12
+      and "short of tmax" in (_e4.get("note") or ""), str(_e4)[:160])
+check("and the last frame is still the true state",
+      _short and abs(_short[-1]["t"] - _e4["t"]) < 1e-12,
+      f"frame t={_short[-1]['t'] if _short else None} end t={_e4.get('t')}")
+check("a stalled run names the tolerances as the usual cause",
+      "stepSize" in (_e4 or {}), str(_e4)[:120])
+
+for _bad in ("x", -1, 1.5, True):
+    _f, _m = _stream(every=_bad)
+    check(f"every={_bad!r} is refused", bool(_m and "error" in _m), str(_m)[:90])
+for _bad in ("x", 0, -3):
+    _f, _m = _stream(maxFps=_bad)
+    check(f"maxFps={_bad!r} is refused", bool(_m and "error" in _m), str(_m)[:90])
+# the cap must not change the answer, only the reporting
+_c1, _ = _stream(maxFps=5)
+_c2, _ = _stream(maxFps=200)
+check("the frame cap changes only what is sent, never the result",
+      abs(_c1[-1]["values"][":S"] - _c2[-1]["values"][":S"]) < 1e-12
+      and abs(_c1[-1]["values"][":S"] - _full[-1]["values"][":S"]) < 1e-12,
+      f"{_c1[-1]['values'][':S']} vs {_c2[-1]['values'][':S']}")
+c.post("/api/clear")
+
+
+print("\n76. a model with no chart cannot be watched")
+# There was no way to create a plot at all, so a model built through the API had nothing
+# to look at. And a plot is born with room for ONE line, so without a way to grow it every
+# extra series needed its own chart.
+c.post("/api/clear")
+_r = c.post("/api/item", json={"kind": "plot", "at": [500, 300]})
+check("a plot can be created", _r.status_code == 200, _r.text[:110])
+_pl = str(_r.json()["index"])
+_it = lambda: next(i for i in c.get("/api/state").json()["items"] if i["ref"] == _pl)
+check("and it is a plot", _it()["classType"] == "PlotWidget", _it()["classType"])
+check("with one line to start", _it()["plot"]["lines"] == 1, str(_it()["plot"]["lines"]))
+check("and ten ports: six bounds, then y and x for that line",
+      len(_it()["ports"]) == 10, str(len(_it()["ports"])))
+
+_r = c.post(f"/api/item/{_pl}/attrs", json={"numLines": 3})
+check("a plot can be given more lines", _r.status_code == 200, _r.text[:110])
+check("and the ports follow the count", len(_it()["ports"]) == 18 and
+      _it()["plot"]["lines"] == 3, f"{len(_it()['ports'])} ports")
+for _k, _nm in enumerate(("aa", "bb", "cc")):
+    c.post("/api/item", json={"kind": "parameter", "name": _nm, "value": float(_k + 1)})
+    _v = next(i["ref"] for i in c.get("/api/state").json()["items"]
+              if i.get("name") == _nm)
+    c.post("/api/wire", json={"src": _v, "dst": _pl, "port": 6 + _k})
+check("three series land on the left axis",
+      [x["name"] for x in _it()["plot"]["left"]] == ["aa", "bb", "cc"],
+      str(_it()["plot"]))
+_r = c.post(f"/api/item/{_pl}/rename", json={"name": "Rates"})
+check("a plot's name is its title, and it can be set",
+      _r.status_code == 200 and _it()["plot"]["title"] == "Rates", _r.text[:110])
+
+_r = c.post(f"/api/item/{_pl}/attrs", json={"numLines": 99})
+check("an absurd line count is refused", _r.status_code == 422 and "30" in _r.text,
+      _r.text[:110])
+_r = c.post(f"/api/item/{_pl}/attrs", json={"numLines": 0})
+check("and so is none at all", _r.status_code == 422, _r.text[:110])
+_v = next(i["ref"] for i in c.get("/api/state").json()["items"] if i.get("name") == "aa")
+_r = c.post(f"/api/item/{_v}/attrs", json={"numLines": 2})
+check("numLines on something that is not a plot is refused",
+      _r.status_code == 422 and "plot" in _r.text, _r.text[:110])
+_op = str(c.post("/api/item", json={"kind": "operation",
+                                    "op": "multiply"}).json()["index"])
+_r = c.post(f"/api/item/{_op}/rename", json={"name": "nope"})
+check("an operation still has no name to change", _r.status_code in (400, 422)
+      and "no name to change" in _r.text, _r.text[:110])
+check("an unknown kind is still refused",
+      c.post("/api/item", json={"kind": "chart"}).status_code == 422)
+
+# a plot must not disturb what it is watching
+c.post("/api/clear")
+_iop = str(c.post("/api/item", json={"kind": "operation",
+                                     "op": "integrate"}).json()["index"])
+c.post("/api/item/0/rename", json={"name": "S"})
+c.post("/api/init", json={"name": "S", "value": 1.0})
+_g = str(c.post("/api/item", json={"kind": "parameter", "name": "g",
+                                   "value": 0.1}).json()["index"])
+_mul = str(c.post("/api/item", json={"kind": "operation", "op": "multiply"}).json()["index"])
+c.post("/api/wire", json={"src": _g, "dst": _mul, "port": 1})
+c.post("/api/wire", json={"src": "0", "dst": _mul, "port": 2})
+c.post("/api/wire", json={"src": _mul, "dst": _iop, "port": 1})
+c.post("/api/solver", json={"tmax": 4.0})
+_pl2 = str(c.post("/api/item", json={"kind": "plot", "at": [800, 300]}).json()["index"])
+c.post("/api/wire", json={"src": "0", "dst": _pl2, "port": 6})
+_fr = []
+with c.websocket_connect("/ws/sim") as ws:
+    ws.send_json({"cmd": "run", "steps": 4000, "tmax": 4.0})
+    while True:
+        _m = ws.receive_json()
+        if "error" in _m:
+            check("plotted run streamed", False, _m["error"]); break
+        if _m.get("done") or _m.get("stopped"): break
+        _fr.append(_m)
+check("a plot watching a run does not change it",
+      _fr and abs(_fr[-1]["values"][":S"] - math.exp(0.1 * _fr[-1]["t"]))
+      / math.exp(0.1 * _fr[-1]["t"]) < 1e-8,
+      f"S={_fr[-1]['values'][':S'] if _fr else None}")
+c.post("/api/clear")
+
+
 # Whatever any section forgot: the suite must not leave files among the user's models.
 # Minsky renames the old file to "<name>.mky;1" on every save, so both go.
 _left = [f for f in SAVE_DIR.iterdir()

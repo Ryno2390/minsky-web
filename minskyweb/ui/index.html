@@ -52,6 +52,9 @@ body{background:var(--bg);color:var(--ink);
   stroke-linecap:round}
 .brand .wordmark{font-size:17px;line-height:.92;letter-spacing:-.02em}
 .spacer{flex:1}
+select{font:inherit;font-size:12.5px;color:var(--ink-2);background:var(--panel-2);
+  border:1px solid var(--line);border-radius:7px;padding:5px 7px}
+select:hover{color:var(--ink)}
 button{font:inherit;font-size:13px;color:var(--ink);background:var(--panel-2);
   border:1px solid var(--line-2);border-radius:6px;padding:5px 12px;cursor:pointer;
   transition:background .12s,border-color .12s}
@@ -378,6 +381,13 @@ svg#board.panning{cursor:grabbing}
   <div class="spacer"></div>
   <span class="pill" id="status">idle</span>
   <span class="tval">t = <span id="tval">0</span></span>
+  <select id="speed" title="How long the run should take to watch">
+    <option value="0">Full speed</option>
+    <option value="10">Over ~10s</option>
+    <option value="20">Over ~20s</option>
+    <option value="45">Over ~45s</option>
+    <option value="90">Over ~90s</option>
+  </select>
   <button id="stop" disabled>Stop</button>
   <button id="run" class="primary">Run</button>
 </div>
@@ -1771,6 +1781,14 @@ function readSolver(){
   return out;
 }
 
+try {
+  const saved = localStorage.getItem("minsky.speed");
+  if (saved !== null && [...$("#speed").options].some(o => o.value === saved))
+    $("#speed").value = saved;
+} catch {}
+$("#speed").addEventListener("change", () => {
+  try { localStorage.setItem("minsky.speed", $("#speed").value); } catch {}
+});
 $("#run").onclick = guard(async () => {
   const cfg = readSolver();
   if (!cfg) return;
@@ -1783,7 +1801,15 @@ $("#run").onclick = guard(async () => {
   ws.onopen = () => {
     $("#run").disabled = true; $("#stop").disabled = false;
     $("#status").textContent = "running"; $("#status").className = "pill live";
-    ws.send(JSON.stringify({cmd:"run", steps: cfg.steps, tmax: cfg.tmax}));
+    // The control asks how long the run should TAKE, which is what someone watching
+    // actually wants; the server wants model units per second. Deriving one from the
+    // other here means the same choice behaves the same on a model that runs to t=10
+    // and one that runs to t=500.
+    const secs = +$("#speed").value;
+    const span = (cfg.tmax ?? 0) - (state.solver?.t0 ?? 0);
+    const msg = {cmd:"run", steps: cfg.steps, tmax: cfg.tmax};
+    if (secs > 0 && span > 0) msg.rate = span / secs;
+    ws.send(JSON.stringify(msg));
   };
   ws.onmessage = ev => {
     const m = JSON.parse(ev.data);

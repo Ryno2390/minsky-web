@@ -37,6 +37,7 @@ import shutil
 import subprocess
 import tempfile
 import threading
+import time
 from pathlib import Path
 from typing import Any
 
@@ -3312,6 +3313,26 @@ def create_app() -> FastAPI:
                 # the run before it
                 await say({"error": f"steps must be at least 1, not {steps}"})
                 return
+            # How fast to play the run back, in MODEL time units per real second.
+            # Absent means as fast as the solver goes, which is how it behaved before --
+            # and on a loaded model that is far too fast to watch: EndogenousMoney
+            # reaches t=10 in well under a second.
+            #
+            # Pacing by MODEL time rather than by frames is what makes this stable. The
+            # solver takes adaptive steps, so a fixed delay per step runs fast where the
+            # steps are small and slow where they are large -- exactly backwards.
+            rate = first.get("rate")
+            if rate is not None:
+                try:
+                    rate = float(rate)
+                except (TypeError, ValueError):
+                    await say({"error": f"rate must be a number, not {first.get('rate')!r}"})
+                    return
+                if not math.isfinite(rate) or rate <= 0:
+                    await say({"error": "rate must be a positive number of model time "
+                                        "units per second"})
+                    return
+
             tmax = first.get("tmax")
             if tmax is not None:
                 try:
@@ -3366,6 +3387,9 @@ def create_app() -> FastAPI:
             names = await call(
                 lambda: [k for k in engine().minsky.variableValues.keys()
                          if k in live_value_ids()])
+            t_start = await call(lambda: engine().minsky.t())
+            wall_start = time.monotonic()
+
             for i in range(steps):
                 if stop.is_set():
                     await say({"stopped": True, "step": i})
@@ -3389,6 +3413,25 @@ def create_app() -> FastAPI:
                     # keep going past this and every later frame is noise
                     await say({"done": True, "reason": "diverged", "variables": bad})
                     break
+                if rate is not None:
+                    # Wait until the wall clock catches up with model time. Measured
+                    # against the START of the run, not the previous frame, so a step
+                    # that took too long is absorbed rather than accumulating drift.
+                    #
+                    # One wait, not a capped one: stop.wait() returns the moment Stop is
+                    # pressed, so a long sleep is already interruptible. Capping it made
+                    # the loop fall through and take another step while still behind,
+                    # which ran ahead of the requested rate.
+                    behind = (t - t_start) / rate - (time.monotonic() - wall_start)
+                    if behind > 0:
+                        try:
+                            await asyncio.wait_for(stop.wait(), timeout=behind)
+                        except asyncio.TimeoutError:
+                            pass
+                    if stop.is_set():
+                        await say({"stopped": True, "step": i})
+                        break
+
                 if tmax is not None and t >= tmax:
                     await say({"done": True, "reason": "tmax", "t": t})
                     break

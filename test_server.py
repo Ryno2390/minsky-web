@@ -3475,6 +3475,99 @@ check("and so is the dead clipboard",
       "clipboard is a no-op" in _doc.lower() or "no-op headless" in _doc)
 
 
+print("\n67. running slowly enough to watch")
+# A loaded model reaches its horizon in well under a second, which is too fast to see
+# anything develop. The run is paced by MODEL time per real second rather than by a
+# delay per step: the solver takes adaptive steps, so a fixed per-step delay runs fast
+# where the steps are small and slow where they are large -- exactly backwards.
+import time as _time
+c.post("/api/clear")
+c.post("/api/item", json={"kind":"variable","name":"s","var_type":"stock","at":[200,200]})
+c.post("/api/item", json={"kind":"operation","op":"integrate","at":[400,200]})
+
+def _stream(body, cap=4000):
+    """Run and return (frames, wall seconds)."""
+    got, t0 = [], _time.monotonic()
+    with c.websocket_connect("/ws/sim") as _ws:
+        _ws.send_json(body)
+        while len(got) < cap:
+            m = _ws.receive_json()
+            if "error" in m:
+                return m, _time.monotonic() - t0
+            if m.get("done") or m.get("stopped"):
+                break
+            got.append(m)
+    return got, _time.monotonic() - t0
+
+_gw = "/Users/ryneschultz/minsky/examples/GoodwinLinear.mky"
+if Path(_gw).exists():
+    c.post(f"/api/load?path={_gw}")
+    _fast, _t_fast = _stream({"cmd":"run","steps":4000,"tmax":2.0})
+    check("an unpaced run still streams", isinstance(_fast, list) and len(_fast) > 5,
+          str(_fast)[:110])
+
+    # 0.8 units/s over 2 units is 2.5s, comfortably above the ~1s the solver needs --
+    # a rate the compute could meet anyway would prove nothing
+    _slow, _t_slow = _stream({"cmd":"run","steps":4000,"tmax":2.0,"rate":0.8})
+    check("a paced run streams too", isinstance(_slow, list) and len(_slow) > 5,
+          str(_slow)[:110])
+    if isinstance(_fast, list) and isinstance(_slow, list):
+        check("pacing makes the run take longer", _t_slow > _t_fast * 1.5,
+              f"unpaced {_t_fast:.2f}s, paced {_t_slow:.2f}s")
+        # 2 units at 0.8/s is 2.5s. The solver's own compute time is a floor this can
+        # never go below, so the window is generous on the upper side.
+        check("and roughly as long as asked", 2.0 < _t_slow < 5.0,
+              f"{_t_slow:.2f}s for 2 model units at 0.8/s")
+        check("without dropping any frames",
+              abs(len(_slow) - len(_fast)) <= 2,
+              f"unpaced {len(_fast)} frames, paced {len(_slow)}")
+        check("and reaching the same place",
+              abs(_slow[-1]["t"] - _fast[-1]["t"]) < 1e-9,
+              f'{_fast[-1]["t"]} vs {_slow[-1]["t"]}')
+
+# a rate that cannot be honoured must be refused, not silently ignored
+for _bad, _why in ((0, "zero"), (-1, "negative"), ("soon", "not a number")):
+    _r, _ = _stream({"cmd":"run","steps":10,"tmax":1.0,"rate":_bad})
+    check(f"a {_why} rate is refused", isinstance(_r, dict) and "error" in _r,
+          str(_r)[:100])
+
+# Stop must not have to sit out the wait it is in the middle of.
+if Path(_gw).exists():
+    c.post(f"/api/load?path={_gw}")
+    _t0 = _time.monotonic()
+    with c.websocket_connect("/ws/sim") as _ws:
+        _ws.send_json({"cmd":"run","steps":4000,"tmax":50.0,"rate":0.05})
+        _ws.receive_json()                      # one frame, so the run is under way
+        _ws.send_json({"cmd":"stop"})
+        _seen = None
+        for _ in range(40):
+            _m = _ws.receive_json()
+            if _m.get("stopped") or _m.get("done") or "error" in _m:
+                _seen = _m
+                break
+    _el = _time.monotonic() - _t0
+    check("stop is honoured during a paced run", bool(_seen and _seen.get("stopped")),
+          str(_seen)[:100])
+    # at 0.05 units/s the model would take 1000 seconds; anything near that means Stop
+    # waited for the sleep instead of interrupting it
+    check("and does not wait out the sleep it is in", _el < 20,
+          f"{_el:.1f}s to stop a run paced at 0.05 units/s")
+c.post("/api/clear")
+
+_ui = (Path(__file__).parent / "minskyweb/ui/index.html").read_text()
+check("the run speed can be chosen", 'id="speed"' in _ui)
+check("as a duration, not as units per second",
+      "Over ~" in _ui,
+      "someone watching thinks in how long it takes, not in model units")
+check("and it is turned into a rate against the model's own horizon",
+      "span / secs" in _ui,
+      "a fixed rate means something different on a model that runs to 10 and to 500")
+check("full speed sends no rate at all",
+      "if (secs > 0 && span > 0) msg.rate" in _ui,
+      "an unpaced run should not be paced by accident")
+check("the choice is remembered", '"minsky.speed"' in _ui)
+
+
 # Whatever any section forgot: the suite must not leave files among the user's models.
 # Minsky renames the old file to "<name>.mky;1" on every save, so both go.
 _left = [f for f in SAVE_DIR.iterdir()

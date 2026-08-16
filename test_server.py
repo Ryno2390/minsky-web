@@ -2831,6 +2831,50 @@ check("the button says it is working, since a big model takes a moment",
       "disabled = true" in _tidy_body and "finally" in _tidy_body)
 
 
+print("\n58. fitting a model to the window")
+# Fit is measured in the browser, not here -- what these guard are the four specific
+# mistakes that were in it, each of which the source alone can show has not come back.
+_ui = (Path(__file__).parent / "minskyweb/ui/index.html").read_text()
+
+check("fit measures what is DRAWN, not where items are anchored",
+      "function drawnBox()" in _ui
+      and "const drawn = drawnBox();" in _ui.split("function bounds()")[1],
+      "anchors and ports miss the name label drawn below each icon, which put every "
+      "model low in the window")
+check("and falls back to the model before anything has been drawn",
+      "state.items.flatMap" in _ui.split("function bounds()")[1].split("function fitView")[0],
+      "the first fit runs before the first render")
+
+# Port circles are counter-scaled to hold their size on screen, so measuring them as
+# they stand makes the fit depend on the zoom it is about to replace.
+_dbox = _ui.split("function drawnBox()")[1].split("function bounds()")[0]
+check("ports are pinned before measuring, so a fit cannot chase its own zoom",
+      'setAttribute("r", PORT_R)' in _dbox and "finally" in _dbox,
+      "repeated fits would drift")
+check("and restored afterwards even if measuring throws",
+      _dbox.index("finally") < _dbox.rindex("saved[i]"), "restore is outside finally")
+
+_fit = _ui.split("function fitView()")[1].split("function zoomBy")[0]
+check("a fit may magnify a small model", "ZFIT_MAX" in _fit,
+      "refusing to zoom in left exponentialGrowth using 6% of the window")
+check("but not without limit",
+      "const ZFIT_MAX = 3" in _ui,
+      "one icon filling the window at 597% reads as broken, not as a fit")
+check("the margin is proportional, not a fixed number of model units",
+      "FIT_MARGIN" in _fit and "pad*2" not in _fit,
+      "a 70-unit pad is invisible around a big model and half the picture around a small one")
+check("the fit is centred on the middle of what is drawn",
+      "(b.x0+b.x1)/2 - w/2" in _fit and "(b.y0+b.y1)/2 - h/2" in _fit)
+
+# delimit on the next section: the body holds `${...}` templates, so splitting on "}"
+# cut it off after two lines and found neither call
+_after = _ui.split("function afterLoad")[1].split("/* ---------- view")[0]
+check("loading renders before fitting, since the fit measures the picture",
+      "render(); fitView();" in _after
+      or _after.index("render()") < _after.index("fitView()"),
+      "fitting first sizes the view against the model that was open a moment ago")
+
+
 # Whatever any section forgot: the suite must not leave files among the user's models.
 # Minsky renames the old file to "<name>.mky;1" on every save, so both go.
 _left = [f for f in SAVE_DIR.iterdir()

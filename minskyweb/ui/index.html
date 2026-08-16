@@ -1768,7 +1768,9 @@ $("#fupload").onchange = guard(async () => {
 });
 function afterLoad(name){
   closeFiles(); clearSelection(); series = {}; tSeries = []; colors = {}; drawPlot();
-  fitView(); render();
+  // render BEFORE fitting: the fit measures what is drawn, so fitting first sized the
+  // view against the model that was open a moment ago
+  render(); fitView();
   const d = state.wires.find(w => w.desync);
   if (d) toast(`Loaded ${name}, but ${d.engine - d.tracked} of ${d.engine} wires could `
              + `not be traced and are not drawn.`);
@@ -1788,6 +1790,10 @@ outlines stay crisp and ports stay clickable when zoomed out. Text is deliberate
 counter-scaled: letting labels shrink is what makes zooming out declutter a dense model.
 */
 const PORT_R = 4.5, ZMIN = 0.05, ZMAX = 12;
+//: How far a FIT may magnify, and how much empty space it leaves around the model.
+//: Fitting is capped well below ZMAX because filling the window with one icon is not
+//: what "fit" means -- 3x turns a 34-unit operator into a comfortable 100px.
+const ZFIT_MAX = 3, FIT_MARGIN = 0.05;
 let view = null;                 // {x,y,w,h} in model units
 
 // A hidden or very narrow canvas measures 0 wide. That fed a zero into every divisor
@@ -1817,7 +1823,44 @@ function applyView(){
   board.querySelectorAll(".port.target").forEach(c => c.setAttribute("r", r*1.5));
 }
 
+function drawnBox(){
+  // What is actually DRAWN, in model units.
+  //
+  // Item anchors and port coordinates are not the same thing as the picture. A variable's
+  // name is drawn BELOW its icon, an operation's label below that, and a collapsed group
+  // is drawn as a frame around nothing the item list knows about -- none of which was
+  // counted. The visible effect was that every model sat LOW in the window, by up to 32
+  // units, because the space labels take up below each icon was missing from the bottom
+  // of the box being centred.
+  //
+  // Port circles are counter-scaled so they hold their size on screen, which means their
+  // radius in MODEL units depends on the current zoom. Measuring them as they stand would
+  // make the fit depend on the zoom it is about to replace, so they are pinned first.
+  const ports = board.querySelectorAll(".port");
+  const saved = [];
+  ports.forEach(c => { saved.push(c.getAttribute("r")); c.setAttribute("r", PORT_R); });
+  try {
+    let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
+    for (const layer of [gItems, gWires]) {
+      if (!layer || !layer.childElementCount) continue;
+      let b;
+      try { b = layer.getBBox(); } catch { continue; }
+      if (!b || (!b.width && !b.height)) continue;
+      x0 = Math.min(x0, b.x); y0 = Math.min(y0, b.y);
+      x1 = Math.max(x1, b.x + b.width); y1 = Math.max(y1, b.y + b.height);
+    }
+    return x0 < x1 ? {x0, y0, x1, y1} : null;
+  } finally {
+    ports.forEach((c, i) => saved[i] == null
+      ? c.removeAttribute("r") : c.setAttribute("r", saved[i]));
+  }
+}
+
 function bounds(){
+  // Measure the picture when there is one. The very first fit runs before anything has
+  // been drawn, so fall back to the model itself rather than refusing to fit at all.
+  const drawn = drawnBox();
+  if (drawn) return drawn;
   const xs = state.items.flatMap(i => [i.x, ...i.ports.map(p=>p.x)]);
   const ys = state.items.flatMap(i => [i.y, ...i.ports.map(p=>p.y)]);
   if (!xs.length) return null;
@@ -1827,14 +1870,18 @@ function bounds(){
 function fitView(){
   const b = bounds(), vp = viewport();
   if (!b) { view = {x:0, y:0, w:vp.w||1000, h:vp.h||700}; return applyView(); }
-  const pad = 70;
-  let w = (b.x1-b.x0) + pad*2, h = (b.y1-b.y0) + pad*2;
+  let w = Math.max(b.x1-b.x0, 1), h = Math.max(b.y1-b.y0, 1);
   // match the viewport's aspect so nothing is squashed
   const ar = (vp.w||1000)/(vp.h||700);
   if (w/h < ar) w = h*ar; else h = w/ar;
-  // Fitting means "zoom out until everything is visible", never "zoom in". A model with
-  // one small item otherwise fits at 597%, which reads as broken rather than close.
-  if (w < vp.w) { h *= vp.w / w; w = vp.w; }
+  // Breathing room as a PROPORTION, not a fixed number of model units: a 70-unit pad is
+  // invisible around a 2000-unit model and half the picture around a 300-unit one.
+  w *= 1 + FIT_MARGIN*2; h *= 1 + FIT_MARGIN*2;
+  // A fit may magnify, but not without limit. Refusing to magnify at all left a small
+  // model marooned in the middle of a big window -- exponentialGrowth used 6% of it --
+  // while magnifying freely puts a single item on screen at 597%, which reads as broken.
+  const minW = (vp.w||1000) / ZFIT_MAX;
+  if (w < minW) { h *= minW / w; w = minW; }
   view = {x:(b.x0+b.x1)/2 - w/2, y:(b.y0+b.y1)/2 - h/2, w, h};
   applyView();
 }

@@ -3330,6 +3330,57 @@ check("and a phase portrait plots against its x variable, not time",
       "xk ? (series[xk] || [])[i] : tSeries[i]" in _ui)
 
 
+print("\n65. the logo is a real model run")
+_ui = (Path(__file__).parent / "minskyweb/ui/index.html").read_text()
+_root = Path(__file__).parent
+check("the mark is recorded, not just drawn", (_root / "docs/LOGO.md").exists(),
+      "nobody could say where the curve came from")
+check("and can be regenerated from the model",
+      (_root / "tools/logo_path.py").exists())
+
+# The path is inlined TWICE -- the favicon data URI and the masthead svg -- so the thing
+# most likely to go wrong is changing one and not the other.
+_mast = re.search(r'<svg class="logo"[^>]*><path d="([^"]+)"', _ui)
+_fav = re.search(r'<link rel="icon" href=\'data:image/svg\+xml,<svg[^>]*><path d="([^"]+)"',
+                 _ui)
+check("the masthead carries the mark", bool(_mast))
+check("and so does the favicon", bool(_fav))
+if _mast and _fav:
+    check("and they are the same curve",
+          _mast.group(1).strip() == _fav.group(1).strip(),
+          "the tab icon and the masthead have drifted apart")
+    _pts = _mast.group(1).count("L") + 1
+    check("the curve is small enough to be a favicon", 20 <= _pts <= 60,
+          f"{_pts} points")
+    # An M: two peaks with a trough between, and both feet low. Read it off the path.
+    _ys = [float(p.split(",")[1]) for p in
+           _mast.group(1).replace("M ", "").replace("L ", "").split()]
+    _peaks = [i for i in range(1, len(_ys)-1) if _ys[i] < _ys[i-1] and _ys[i] <= _ys[i+1]]
+    check("it really is two peaks, not one hump", len(_peaks) == 2, str(_peaks))
+    if len(_peaks) == 2:
+        # SVG y grows DOWNWARD: a visual peak is the SMALLEST y, a trough the largest
+        _top = max(_ys[_peaks[0]], _ys[_peaks[1]])          # the lower of the two peaks
+        _mid = max(_ys[_peaks[0]:_peaks[1] + 1])            # the middle vertex
+        check("with a trough between them", _mid > _top,
+              f"peaks at y {_ys[_peaks[0]]:.0f},{_ys[_peaks[1]]:.0f}, "
+              f"middle at {_mid:.0f} -- the middle does not descend")
+        check("that descends most of the way, so it reads as M and not as two humps",
+              (_mid - _top) > 0.55 * (max(_ys) - _top),
+              f"middle drops {(_mid-_top):.0f} of {(max(_ys)-_top):.0f}")
+        check("and both feet below the peaks",
+              _ys[0] > _mid * 0.9 and _ys[-1] > _mid * 0.75,
+              f"feet y {_ys[0]:.0f},{_ys[-1]:.0f} against middle {_mid:.0f}")
+
+check("the mark takes its colour from the theme, so one file serves both",
+      "stroke:var(--ink)" in _ui,
+      "a hardcoded colour would vanish on one theme")
+check("and is not clipped by its own stroke",
+      "overflow:visible" in _ui,
+      "the stroke is centred on the path, so half of it sits outside the viewBox")
+check("the provenance is stated where someone editing would see it",
+      "MinskyNonLinear" in _ui and "docs/LOGO.md" in _ui)
+
+
 # Whatever any section forgot: the suite must not leave files among the user's models.
 # Minsky renames the old file to "<name>.mky;1" on every save, so both go.
 _left = [f for f in SAVE_DIR.iterdir()

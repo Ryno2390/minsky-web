@@ -1,6 +1,9 @@
 <!doctype html>
 <meta charset="utf-8">
 <title>Minsky</title>
+<!-- The M is a real trajectory: net investment in MinskyNonLinear over
+     t=6.404..12.130. See docs/LOGO.md to regenerate it. -->
+<link rel="icon" href='data:image/svg+xml,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 120"><path d="M 6.00,114.00 L 12.44,112.14 L 19.79,106.70 L 27.60,98.12 L 34.96,87.51 L 48.29,61.37 L 67.13,13.40 L 70.35,7.79 L 72.65,6.03 L 74.49,6.72 L 75.87,8.85 L 78.63,18.31 L 89.66,89.13 L 93.33,100.01 L 97.47,105.45 L 99.77,106.61 L 102.53,106.86 L 108.96,104.23 L 116.32,97.58 L 123.67,87.94 L 137.46,62.29 L 157.23,13.86 L 160.90,7.75 L 163.66,6.01 L 166.88,8.93 L 170.10,19.01 L 178.83,69.66 L 182.97,86.66 L 188.02,96.90 L 190.78,99.23 L 194.00,100.08" fill="none" stroke="%23E6EDF0" stroke-width="16" stroke-linejoin="round" stroke-linecap="round"/></svg>'>
 <style>
 :root{
   --bg:#0E1113; --panel:#161A1D; --panel-2:#1D2327; --line:#2A3237; --line-2:#3A454B;
@@ -40,8 +43,16 @@ body{background:var(--bg);color:var(--ink);
 .top{grid-area:top;display:flex;align-items:center;gap:10px;padding:0 14px;
   min-width:0;overflow-x:auto;overflow-y:hidden;scrollbar-width:none;
   background:var(--panel);border-bottom:1px solid var(--line)}
-.brand{font-weight:600;letter-spacing:-.01em;margin-right:6px}
-.brand span{color:var(--ink-3);font-weight:400;font-size:12px;margin-left:7px}
+/* The M is a real model run -- net investment in MinskyNonLinear, t=6.404..12.130,
+   plotted raw. docs/LOGO.md says how to regenerate it. */
+.brand{display:flex;align-items:flex-end;gap:1px;margin-right:8px;font-weight:600;
+  letter-spacing:-.01em}
+.brand .logo{height:19px;width:auto;overflow:visible;display:block}
+.brand .logo path{fill:none;stroke:var(--ink);stroke-width:14;stroke-linejoin:round;
+  stroke-linecap:round}
+.brand .wordmark{font-size:17px;line-height:.92;letter-spacing:-.02em}
+.brand .sub{color:var(--ink-3);font-weight:400;font-size:12px;margin-left:7px;
+  line-height:1.5}
 .spacer{flex:1}
 button{font:inherit;font-size:13px;color:var(--ink);background:var(--panel-2);
   border:1px solid var(--line-2);border-radius:6px;padding:5px 12px;cursor:pointer;
@@ -302,7 +313,9 @@ svg#board.panning{cursor:grabbing}
 </style>
 
 <div class="top">
-  <div class="brand">Minsky <span>headless</span></div>
+  <div class="brand">
+    <svg class="logo" viewBox="0 0 200 120" aria-hidden="true"><path d="M 6.00,114.00 L 12.44,112.14 L 19.79,106.70 L 27.60,98.12 L 34.96,87.51 L 48.29,61.37 L 67.13,13.40 L 70.35,7.79 L 72.65,6.03 L 74.49,6.72 L 75.87,8.85 L 78.63,18.31 L 89.66,89.13 L 93.33,100.01 L 97.47,105.45 L 99.77,106.61 L 102.53,106.86 L 108.96,104.23 L 116.32,97.58 L 123.67,87.94 L 137.46,62.29 L 157.23,13.86 L 160.90,7.75 L 163.66,6.01 L 166.88,8.93 L 170.10,19.01 L 178.83,69.66 L 182.97,86.66 L 188.02,96.90 L 190.78,99.23 L 194.00,100.08"/></svg>
+    <span class="wordmark">insky</span><span class="sub">headless</span></div>
   <button id="open">Open…</button>
   <button id="undo" title="Undo (⌘Z)">↶</button>
   <button id="redo" title="Redo (⇧⌘Z)">↷</button>

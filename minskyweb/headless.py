@@ -460,6 +460,35 @@ class Model:
         return self._adopt(f"op:{op}", None, at,
                            expect=self._OP_CLASS.get(op, f"Operation:{op}"))
 
+    def sheet(self, at=None) -> Item:
+        """A Sheet: a variable's values shown as a table."""
+        self.minsky.canvas.addSheet()
+        return self._adopt("sheet", None, at, expect="Sheet")
+
+    def switch(self, at=None) -> Item:
+        """A SwitchIcon: picks between its inputs by case."""
+        self.minsky.canvas.addSwitch()
+        return self._adopt("switch", None, at, expect="SwitchIcon")
+
+    def copy_icon(self, item: Item) -> Item:
+        """Another icon of the SAME variable, the way Minsky's "copy item" does it.
+
+        Not a new variable: the copy shares the original's valueId, so both icons show
+        one value and renaming either renames both. That is the point -- it is how a
+        model avoids dragging a wire across the whole canvas.
+        """
+        item.refresh()
+        raw = item._raw
+        # copyItem works on whatever the canvas is pointed at, so point it first
+        self.minsky.canvas.getItemAt(raw.x(), raw.y())
+        before = len(self.minsky.model.items)
+        self.minsky.canvas.copyItem()
+        if len(self.minsky.model.items) <= before:
+            raise RuntimeError(
+                f"the engine did not copy {raw.classType()}. Only variables can be "
+                f"copied as another icon of themselves.")
+        return Item(self, len(self.minsky.model.items) - 1, "copy", None)
+
     def godley(self, at=None, flow_rows: int = 1) -> Item:
         """A Godley table, with `flow_rows` blank flow rows.
 

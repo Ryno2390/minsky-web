@@ -395,6 +395,8 @@ svg#board.panning{cursor:grabbing}
   <div id="ops"></div>
   <h3>Blocks</h3>
   <button class="pitem" data-add="godley"><i class="dot" style="background:var(--godley)"></i>Godley table</button>
+  <button class="pitem" data-add="sheet"><i class="dot" style="background:var(--plot)"></i>Sheet</button>
+  <button class="pitem" data-add="switch"><i class="dot" style="background:var(--grp)"></i>Switch</button>
 
   <div class="addform" id="addform">
     <span class="lbl" id="af-title">New variable</span>
@@ -526,6 +528,13 @@ svg#board.panning{cursor:grabbing}
       <button id="initok" style="font-size:12px;padding:4px 10px">Set</button>
     </div>
     <div style="font-size:11.5px;color:var(--ink-3);padding:0 2px" id="initnote"></div>
+  </div>
+  <div id="varact" style="display:none;margin-top:8px;display:none">
+    <div style="display:flex;gap:6px">
+      <button id="copyicon" style="flex:1;font-size:12px;padding:5px 8px">Copy icon</button>
+      <button id="findinst" style="flex:1;font-size:12px;padding:5px 8px">Find uses</button>
+    </div>
+    <div style="font-size:11.5px;color:var(--ink-3);padding:5px 2px" id="varactnote"></div>
   </div>
   <div id="attrwrap" style="display:none;margin-top:10px">
     <div class="field" style="gap:6px">
@@ -1123,6 +1132,13 @@ function render() {
 
   // Units, slider bounds and rotation -- the rest of Minsky's variable dialog.
   const isVar = !!selItem && (ct.startsWith("Variable") || ct === "VarConstant");
+  $("#varact").style.display = isVar ? "" : "none";
+  if (isVar) {
+    const n = state.items.filter(i => i.valueId && i.valueId === selItem.valueId).length;
+    $("#varactnote").textContent = n > 1
+      ? `${n} icons of this variable are on the canvas`
+      : "a copy is another icon of the SAME variable, not a new one";
+  }
   $("#attrwrap").style.display = isVar ? "" : "none";
   // Slider bounds only where a slider is the point: they are what the Parameters panel
   // draws its range from, and a stock has no slider to bound.
@@ -1375,6 +1391,39 @@ for (const [id, btn] of [["#units","#unitsok"], ["#rot","#rotok"],
     if (e.key === "Enter") { e.preventDefault(); $(btn).click(); }
     if (e.key === "Escape") { e.preventDefault(); $(id).blur(); render(); }
   });
+}
+$("#copyicon").onclick = guard(async () => {
+  if (sel === null) return;
+  const r = await api(`/item/${encodeURIComponent(sel)}/copy`, {method:"POST"});
+  state = r; selectOnly(refOfIndex(r.index)); render();
+  toast("Another icon of the same variable — renaming either renames both.", true);
+});
+$("#findinst").onclick = guard(async () => {
+  if (sel === null) return;
+  const r = await api(`/item/${encodeURIComponent(sel)}/instances`);
+  selectMany(r.icons.map(i => i.ref));
+  render(); fitSelection();
+  const d = r.definedBy[0];
+  const where = !d ? "nothing defines it — it is an input"
+    : d.classType === "GodleyIcon"
+      ? `defined by a Godley table (column ${d.column})`
+      : `defined by ${pretty(d.name || d.classType)}`;
+  toast(`${r.icons.length} icon${r.icons.length === 1 ? "" : "s"} of `
+      + `${pretty(r.name || "")} — ${where}.`, true);
+});
+
+// Bring a set of items into view without changing the zoom more than it must.
+function fitSelection(){
+  const chosen = state.items.filter(i => selSet.has(i.ref));
+  if (!chosen.length || !view) return;
+  const xs = chosen.map(i => i.x), ys = chosen.map(i => i.y);
+  const x0 = Math.min(...xs), x1 = Math.max(...xs);
+  const y0 = Math.min(...ys), y1 = Math.max(...ys);
+  const pad = 90;
+  const need = Math.max((x1-x0+pad*2)/view.w, (y1-y0+pad*2)/view.h, 1);
+  const w = view.w*need, h = view.h*need;
+  view = {w, h, x:(x0+x1)/2 - w/2, y:(y0+y1)/2 - h/2};
+  applyView();
 }
 $("#editgodley").onclick = guard(async () => {
   // Double-clicking the icon opens this too, but nothing on screen said so.

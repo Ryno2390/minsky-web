@@ -811,3 +811,36 @@ level), so it cannot be used to tell whether a grouping worked: count top-level 
 it: on GoodwinLinear02, 18 top-level items and 19 top-level wires become 26 and 27, the
 group is gone, every freed item answers the hit test, and the model still resets. Undo
 puts it back. `canvas.select(x0,y0,x1,y1)` + `groupSelection()` can build one again.
+
+
+## `canvas.findVariableDefinition` kills the process
+
+Do not call it. In this build it **segfaults for every input** -- a valid name, a
+mangled valueId, a name that does not exist, and the empty string all take the process
+down, and with it the unsaved model and the whole undo history.
+
+```
+findVariableDefinition('K')          -> SIGSEGV
+findVariableDefinition(':K')         -> SIGSEGV
+findVariableDefinition('nosuchvar')  -> SIGSEGV
+findVariableDefinition('')           -> SIGSEGV
+```
+
+`Minsky::definingVar(valueId)` is the safe call and takes a string properly. What
+`/api/item/{ref}/instances` actually does is simpler still: it walks our own wire record
+for whatever feeds the variable's input port, and falls back to `godley_owner()` for a
+table stock, which has no incoming wire because the table's initial-conditions row
+defines it.
+
+## The clipboard is a no-op headless
+
+`minsky.copy()`, `cut()` and `paste()` all run without error and do nothing. From
+`model/minsky.cc`, copy serialises the selection into `clipboard.putClipboard()` and
+paste reads `clipboard.getClipboard()` -- a platform clipboard supplied by the desktop
+shell, which a headless build does not have. Copying then pasting leaves the item count
+unchanged, with no error to say why.
+
+`canvas.copyItem()` is different and does work: it adds another ICON of the variable the
+canvas is currently pointed at, sharing its valueId. That is Minsky's "copy item", and
+it is what `/api/item/{ref}/copy` uses. Point the canvas first with
+`canvas.getItemAt(x, y)`, or it copies whatever was last touched.

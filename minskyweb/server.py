@@ -1689,6 +1689,10 @@ def create_app() -> FastAPI:
 
         def _add():
             m = engine()
+            if spec.kind == "sheet":
+                return m.sheet(at=spec.at)
+            if spec.kind == "switch":
+                return m.switch(at=spec.at)
             if spec.kind == "parameter":
                 if not spec.name:
                     raise HTTPException(422, "a parameter needs a name")
@@ -1888,6 +1892,118 @@ def create_app() -> FastAPI:
         mark_dirty()
         # indices shift after a delete -- the client must re-render from this snapshot
         return await call(snapshot)
+
+    @app.post("/api/item/{ref}/copy")
+    async def copy_icon(ref: str):
+        """Another icon of the SAME variable, which is what Minsky's copy does.
+
+        Not a duplicate variable: the copy shares the original's valueId, so both show
+        one value and renaming either renames both. It is how a model avoids dragging a
+        wire across the whole canvas.
+        """
+        require_idle()
+        await call(check_ref, ref)
+        await call(checkpoint)
+
+        def _go():
+            from .headless import Item
+            m = engine()
+            raw = _resolve(m.minsky, ref)
+            cls = raw.classType()
+            if not (cls.startswith("Variable") or cls == "VarConstant"):
+                raise HTTPException(
+                    422, f"{cls} cannot be copied as another icon. Only a variable can "
+                         f"appear more than once in a model.")
+            was = raw.valueId()
+            it = m.copy_icon(Item(m, 0, "?", ref=ref))
+            new = _resolve(m.minsky, str(it.index))
+            if new.valueId() != was:
+                raise HTTPException(
+                    500, "the copy is a different variable, not another icon of this "
+                         "one. Nothing was added.")
+            # beside the original, not on top of it -- the engine leaves the copy at
+            # the same point, where it hides the icon it was copied from
+            new.moveTo(raw.x() + 40.0, raw.y() + 62.0)
+            settle()
+            return it.index, was
+
+        try:
+            index, vid = await call(_go)
+        except HTTPException:
+            rollback()
+            raise
+        except Exception as ex:
+            rollback()
+            raise HTTPException(422, str(ex))
+        # no wire re-derivation: the copy is appended, and appending cannot disturb the
+        # index of anything already wired
+        mark_dirty()
+        out = await call(snapshot)
+        out["index"] = index
+        out["valueId"] = vid
+        return out
+
+    @app.get("/api/item/{ref}/instances")
+    async def instances(ref: str):
+        """Every icon of this variable, and what defines it.
+
+        Minsky's own `canvas.findVariableDefinition` is not used: in this build it
+        SEGFAULTS for every input, including an empty string, taking the process and the
+        unsaved model with it. The definition is found by walking our own wire record
+        instead -- whatever feeds the variable's input port.
+        """
+        await call(check_ref, ref)
+
+        def _go():
+            m = engine().minsky
+            raw = _resolve(m, ref)
+            try:
+                vid = raw.valueId()
+            except Exception:
+                vid = None
+            if not vid:
+                return None
+            icons = []
+            for r, it in _iter_items(m):
+                try:
+                    if it.valueId() == vid:
+                        icons.append(dict(ref=r, x=it.x(), y=it.y(),
+                                          classType=it.classType()))
+                except Exception:
+                    continue
+            # what defines it: whatever is wired INTO any icon of this variable
+            defs = []
+            for si, _sp, di, _dp in _WIRES:
+                if di not in {i["ref"] for i in icons}:
+                    continue
+                try:
+                    src = _resolve(m, si)
+                    defs.append(dict(ref=si, classType=src.classType(),
+                                     name=(src.name() if hasattr(src, "name") else None)))
+                except Exception:
+                    continue
+            # A Godley table's stocks have no incoming wire: the TABLE defines them,
+            # and its initial-conditions row is rewritten over anything set elsewhere.
+            # Reporting "nothing defines this" would send someone looking for a wire.
+            try:
+                nm = (raw.name() or "").lstrip(":")
+            except Exception:
+                nm = ""
+            if nm and not defs:
+                own = godley_owner(nm)
+                if own:
+                    gref, title, col = own
+                    defs.append(dict(ref=gref, classType="GodleyIcon",
+                                     name=title or None, column=col,
+                                     note="a table stock: its value comes from the "
+                                          "table's initial-conditions row"))
+            return dict(valueId=vid, name=(raw.name() or None),
+                        icons=icons, definedBy=defs)
+
+        got = await call(_go)
+        if not got:
+            raise HTTPException(422, "that item is not a variable, so it has no instances")
+        return got
 
     @app.post("/api/item/{ref}/attrs")
     async def set_attrs(ref: str, spec: AttrSpec):

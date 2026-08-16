@@ -3381,6 +3381,100 @@ check("the provenance is stated where someone editing would see it",
       "MinskyNonLinear" in _ui and "docs/LOGO.md" in _ui)
 
 
+print("\n66. sheets, switches, copying an icon, finding uses")
+c.post("/api/clear")
+for _k, _cls in (("sheet", "Sheet"), ("switch", "SwitchIcon")):
+    _r = c.post("/api/item", json={"kind": _k, "at": [200, 200]})
+    check(f"a {_k} can be added", _r.status_code == 200, _r.text[:120])
+    check(f"and arrives as {_cls}",
+          c.get("/api/state").json()["items"][-1]["classType"] == _cls,
+          str(c.get("/api/state").json()["items"][-1]["classType"]))
+
+# Copying gives another ICON of the same variable, not a second variable. Getting this
+# wrong would quietly double a model's state.
+c.post("/api/clear")
+c.post("/api/item", json={"kind":"parameter","name":"alpha","value":2.5,"at":[300,300]})
+_st = c.get("/api/state").json()
+_ref = _st["items"][0]["ref"]
+_r = c.post(f"/api/item/{_ref}/copy")
+check("a variable can be copied", _r.status_code == 200, _r.text[:120])
+_st = c.get("/api/state").json()
+check("which adds an icon", len(_st["items"]) == 2, str(len(_st["items"])))
+check("of the SAME variable, not a new one",
+      len({i["valueId"] for i in _st["items"]}) == 1,
+      str([i["valueId"] for i in _st["items"]]))
+check("and the copy is not left on top of the original",
+      (_st["items"][0]["x"], _st["items"][0]["y"])
+      != (_st["items"][1]["x"], _st["items"][1]["y"]),
+      "the engine leaves it at the same point, hiding the icon it came from")
+check("copying is undoable", c.post("/api/undo").status_code == 200)
+check("and the icon is gone again",
+      len(c.get("/api/state").json()["items"]) == 1)
+
+c.post("/api/item", json={"kind":"godley","at":[600,300]})
+_gref = [i["ref"] for i in c.get("/api/state").json()["items"]
+         if i["classType"] == "GodleyIcon"][0]
+check("a table cannot be copied as an icon",
+      c.post(f"/api/item/{_gref}/copy").status_code == 422,
+      "only a variable can appear more than once")
+c.post("/api/clear")
+
+# find uses. Minsky's own findVariableDefinition SEGFAULTS on every input in this build,
+# so this walks the wire record instead -- see docs/MINSKY_HEADLESS.md.
+_gw = "/Users/ryneschultz/minsky/examples/GoodwinLinear.mky"
+if Path(_gw).exists():
+    _st = c.post(f"/api/load?path={_gw}").json()
+    _byname = {(i.get("name") or "").lstrip(":"): i for i in _st["items"] if i.get("name")}
+    if "L" in _byname:
+        _r = c.get(f"/api/item/{_byname['L']['ref']}/instances")
+        check("every icon of a variable is found", _r.status_code == 200, _r.text[:110])
+        _j = _r.json()
+        check("including the ones elsewhere on the canvas", len(_j["icons"]) == 2,
+              str(len(_j["icons"])))
+        check("and what defines it is reported", len(_j["definedBy"]) >= 1,
+              "nothing was found feeding it")
+    if "v" in _byname:
+        check("a variable nothing feeds says so, rather than guessing",
+              c.get(f"/api/item/{_byname['v']['ref']}/instances").json()["definedBy"] == [],
+              "a parameter is an input; nothing defines it")
+
+_em = "/Users/ryneschultz/minsky/examples/EndogenousMoney.mky"
+if Path(_em).exists():
+    _st = c.post(f"/api/load?path={_em}").json()
+    _ln = next((i for i in _st["items"]
+                if (i.get("name") or "").lstrip(":") == "Loans"), None)
+    if _ln:
+        _j = c.get(f"/api/item/{_ln['ref']}/instances").json()
+        check("a table stock is traced to its table, not reported as undefined",
+              _j["definedBy"] and _j["definedBy"][0]["classType"] == "GodleyIcon",
+              str(_j["definedBy"])[:110])
+        check("with the column it sits in",
+              _j["definedBy"][0].get("column") is not None,
+              "someone would have to hunt the table for it")
+c.post("/api/clear")
+
+check("an item that is not a variable has no instances to find",
+      c.get("/api/item/0/instances").status_code in (422, 404))
+
+_ui = (Path(__file__).parent / "minskyweb/ui/index.html").read_text()
+check("sheets and switches are offered in the palette",
+      'data-add="sheet"' in _ui and 'data-add="switch"' in _ui)
+check("the inspector offers both actions",
+      'id="copyicon"' in _ui and 'id="findinst"' in _ui)
+check("and says a copy is the same variable, not a new one",
+      "not a new one" in _ui,
+      "someone would expect copy to give them a separate quantity")
+check("finding uses brings them into view",
+      "fitSelection" in _ui, "the icons would be selected somewhere off screen")
+
+_doc = (Path(__file__).parent / "docs/MINSKY_HEADLESS.md").read_text()
+check("the segfault is written down",
+      "findVariableDefinition" in _doc and "SIGSEGV" in _doc,
+      "the next person to reach for it would take the server down")
+check("and so is the dead clipboard",
+      "clipboard is a no-op" in _doc.lower() or "no-op headless" in _doc)
+
+
 # Whatever any section forgot: the suite must not leave files among the user's models.
 # Minsky renames the old file to "<name>.mky;1" on every save, so both go.
 _left = [f for f in SAVE_DIR.iterdir()

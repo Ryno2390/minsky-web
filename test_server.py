@@ -3143,6 +3143,40 @@ check("and disables plot export until a plot is chosen",
       "it would offer an export that can only fail")
 
 
+print("\n62. resizing the side panes")
+_ui = (Path(__file__).parent / "minskyweb/ui/index.html").read_text()
+check("the pane widths are variables, not baked into the grid",
+      "--pal-w:210px" in _ui and "--side-w:320px" in _ui
+      and "grid-template-columns:var(--pal-w) minmax(0,1fr) var(--side-w)" in _ui,
+      "a hardcoded column cannot be dragged")
+check("both panes have a divider", 'id="gut-pal"' in _ui and 'id="gut-side"' in _ui)
+
+# The canvas changes size WITHOUT a window resize when a pane is dragged, and every zoom
+# calculation depends on the view's aspect matching the viewport's.
+check("the aspect fix is a function, not buried in the resize handler",
+      "function reflow()" in _ui, "a pane drag could not reach it")
+_drag = _ui.split("const PANE = {")[1].split("placeGutters();\n</script>")[0] \
+    if "const PANE = {" in _ui else ""
+check("and a drag calls it", _drag.count("reflow()") >= 3,
+      "the board letterboxes after a drag and the zoom readout lies")
+
+check("a pane cannot be dragged shut", "min:150" in _ui and "min:240" in _ui)
+check("nor wide enough to squeeze the canvas away",
+      "innerWidth - other - 360" in _ui,
+      "every zoom calculation divides by the canvas width")
+check("the width is remembered between sessions",
+      'localStorage.setItem("minsky."' in _ui)
+check("a divider can be moved from the keyboard",
+      "ArrowLeft" in _drag and "ArrowRight" in _drag)
+check("and double-clicking it restores the default",
+      'addEventListener("dblclick"' in _drag)
+
+# Below 1000px the side panel is dropped entirely; a divider for a pane that is not
+# there would sit over the canvas and resize nothing.
+check("a divider goes when its pane does",
+      "#gut-side{display:none}" in _ui and "#gut-pal,#gut-side{display:none}" in _ui)
+
+
 # Whatever any section forgot: the suite must not leave files among the user's models.
 # Minsky renames the old file to "<name>.mky;1" on every save, so both go.
 _left = [f for f in SAVE_DIR.iterdir()

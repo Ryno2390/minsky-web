@@ -15,7 +15,9 @@
 html,body{height:100%;margin:0}
 body{background:var(--bg);color:var(--ink);
   font:14px/1.5 -apple-system,BlinkMacSystemFont,"Inter","Segoe UI",sans-serif;
-  display:grid;grid-template-columns:210px minmax(0,1fr) 320px;grid-template-rows:44px 1fr;
+  --pal-w:210px; --side-w:320px;
+  display:grid;grid-template-columns:var(--pal-w) minmax(0,1fr) var(--side-w);
+  grid-template-rows:44px 1fr;
   grid-template-areas:"top top top" "pal canvas side";overflow:hidden}
 
 /* The two side columns are fixed at 210px and 320px, so below 530px the canvas column
@@ -23,11 +25,14 @@ body{background:var(--bg);color:var(--ink);
    divides by that width, so the board blanked and stayed blank. Drop the panels rather
    than the thing the whole window is for. */
 @media (max-width:1000px){
-  body{grid-template-columns:210px minmax(0,1fr);grid-template-areas:"top top" "pal canvas"}
+  body{grid-template-columns:var(--pal-w) minmax(0,1fr);
+       grid-template-areas:"top top" "pal canvas"}
+  #gut-side{display:none}
   .side{display:none}
 }
 @media (max-width:640px){
   body{grid-template-columns:minmax(0,1fr);grid-template-areas:"top" "canvas"}
+  #gut-pal,#gut-side{display:none}
   .pal{display:none}
 }
 
@@ -88,6 +93,17 @@ button.danger:hover:not(:disabled){border-color:var(--bad);color:var(--bad)}
 .opgrp .n{margin-left:auto;font-variant-numeric:tabular-nums;opacity:.6}
 
 /* ---------- canvas ---------- */
+/* Fixed strips over the pane borders rather than extra grid columns: the two narrow
+   layouts rewrite grid-template-columns wholesale, and threading gutters through those
+   would mean three templates to keep in step instead of one. */
+.gutter{position:fixed;top:44px;bottom:0;width:9px;margin-left:-4px;z-index:25;
+  cursor:col-resize;background:none;border:0;padding:0}
+.gutter::after{content:"";position:absolute;inset:0 4px;background:var(--acc);
+  opacity:0;transition:opacity .12s}
+.gutter:hover::after,.gutter.dragging::after{opacity:.55}
+.gutter:focus-visible{outline:none}
+.gutter:focus-visible::after{opacity:.85}
+body.resizing{cursor:col-resize;user-select:none}
 .canvas{grid-area:canvas;min-width:0;position:relative;overflow:hidden;background:
   radial-gradient(circle at 1px 1px,#1B2226 1px,transparent 0) 0 0/22px 22px,var(--bg)}
 svg#board{position:absolute;inset:0;width:100%;height:100%;touch-action:none;
@@ -315,6 +331,11 @@ svg#board.panning{cursor:grabbing}
       <button id="af-ok" class="primary">Add</button></div>
   </div>
 </div>
+
+<button id="gut-pal" class="gutter" aria-label="Resize the palette"
+        title="Drag to resize · double-click to reset"></button>
+<button id="gut-side" class="gutter" aria-label="Resize the side panel"
+        title="Drag to resize · double-click to reset"></button>
 
 <div class="canvas">
   <svg id="board">
@@ -2277,18 +2298,90 @@ addEventListener("keydown", e => {
   else if (e.key === "=" || e.key === "+") { e.preventDefault(); zoomBy(1.25, null, null); }
   else if (e.key === "-")               { e.preventDefault(); zoomBy(1/1.25, null, null); }
 });
-addEventListener("resize", () => {
+// Keep the view's aspect equal to the viewport's. Otherwise the SVG letterboxes: the
+// zoom readout disagrees with what is drawn, and dragging stops following the pointer
+// because the two axes are then at different scales.
+function reflow(){
   if (!view) return;
-  // Keep the view's aspect equal to the viewport's. Otherwise the SVG letterboxes after
-  // a window resize: the zoom readout disagrees with what is drawn, and dragging stops
-  // following the pointer because the two axes are then at different scales.
   const vp = viewport(), ar = vp.w / vp.h;
   const cx = view.x + view.w/2, cy = view.y + view.h/2;
   let {w, h} = view;
   if (w/h < ar) w = h*ar; else h = w/ar;
   view = {w, h, x: cx - w/2, y: cy - h/2};
   applyView();
-});
+}
+addEventListener("resize", () => { reflow(); placeGutters(); });
+
+/* ---------- resizable side panes ---------- */
+const PANE = {
+  "gut-pal":  {v:"--pal-w",  min:150, max:460, def:210, edge:"right"},
+  "gut-side": {v:"--side-w", min:240, max:620, def:320, edge:"left"},
+};
+const paneW = k => parseFloat(getComputedStyle(document.body).getPropertyValue(PANE[k].v));
+
+function setPane(k, px){
+  const c = PANE[k];
+  // Leave the canvas a usable column whatever the window size: the two panels are the
+  // only fixed tracks, so without this a wide pair squeezes the board -- which every
+  // zoom calculation divides by -- down to nothing.
+  const other = k === "gut-pal" ? paneW("gut-side") : paneW("gut-pal");
+  const room = Math.max(c.min, innerWidth - other - 360);
+  const w = Math.round(Math.min(Math.max(px, c.min), Math.min(c.max, room)));
+  document.body.style.setProperty(c.v, w + "px");
+  try { localStorage.setItem("minsky." + c.v, String(w)); } catch {}
+  return w;
+}
+
+function placeGutters(){
+  const pal = document.querySelector(".pal"), side = document.querySelector(".side");
+  for (const [k, el] of [["gut-pal", $("#gut-pal")], ["gut-side", $("#gut-side")]]) {
+    const box = (k === "gut-pal" ? pal : side).getBoundingClientRect();
+    // sit ON the border between the pane and the canvas
+    el.style.left = `${Math.round(PANE[k].edge === "right" ? box.right : box.left)}px`;
+  }
+}
+
+for (const k of Object.keys(PANE)) {
+  const saved = (() => { try { return localStorage.getItem("minsky." + PANE[k].v); }
+                         catch { return null; } })();
+  if (saved && Number.isFinite(+saved)) setPane(k, +saved);
+  const el = document.getElementById(k);
+  el.addEventListener("pointerdown", e => {
+    e.preventDefault();
+    el.setPointerCapture(e.pointerId);
+    el.classList.add("dragging");
+    document.body.classList.add("resizing");
+    const startX = e.clientX, startW = paneW(k);
+    const move = ev => {
+      const d = ev.clientX - startX;
+      setPane(k, PANE[k].edge === "right" ? startW + d : startW - d);
+      placeGutters(); reflow();
+    };
+    const up = ev => {
+      el.releasePointerCapture(ev.pointerId);
+      el.classList.remove("dragging");
+      document.body.classList.remove("resizing");
+      el.removeEventListener("pointermove", move);
+      el.removeEventListener("pointerup", up);
+      placeGutters(); reflow();
+    };
+    el.addEventListener("pointermove", move);
+    el.addEventListener("pointerup", up);
+  });
+  el.addEventListener("dblclick", () => {
+    setPane(k, PANE[k].def); placeGutters(); reflow();
+  });
+  // a mouse is not the only way to move a divider
+  el.addEventListener("keydown", e => {
+    const step = e.shiftKey ? 40 : 10;
+    const dir = e.key === "ArrowLeft" ? -1 : e.key === "ArrowRight" ? 1 : 0;
+    if (!dir) return;
+    e.preventDefault();
+    setPane(k, paneW(k) + (PANE[k].edge === "right" ? dir * step : -dir * step));
+    placeGutters(); reflow();
+  });
+}
+placeGutters();
 
 refresh().then(() => { fitView(); drawPlot(); }).catch(e => toast(e.message));
 </script>

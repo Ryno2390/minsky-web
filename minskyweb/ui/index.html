@@ -196,6 +196,8 @@ svg#board.panning{cursor:grabbing}
   vector-effect:non-scaling-stroke}
 .port.output{fill:var(--accent)}
 .port.input{fill:var(--ink-3)}
+.miniline{fill:none;stroke-width:1.6;vector-effect:non-scaling-stroke;
+  stroke-linejoin:round;stroke-linecap:round}
 
 .port.target{fill:var(--ok)}
 .wire{stroke:var(--line-2);stroke-width:2;fill:none;marker-end:url(#arrow);
@@ -214,8 +216,6 @@ svg#board.panning{cursor:grabbing}
 /* ---------- side ---------- */
 .side{grid-area:side;background:var(--panel);border-left:1px solid var(--line);
   overflow-y:auto;padding:12px 12px 20px}
-.plot{width:100%;height:170px;background:var(--bg);border:1px solid var(--line);
-  border-radius:7px;display:block}
 /* A model can have forty-odd variables, and an unbounded list of them pushed the Solver
    and Selection panels 300 and 500px below the bottom of the window -- so clicking an
    item appeared to do nothing, because everything it changed was off screen. */
@@ -693,9 +693,8 @@ svg#board.panning{cursor:grabbing}
   </div>
 <h3 id="parmhead" style="display:none">Parameters</h3>
   <div id="parms" style="display:none"></div>
-<h3>Simulation</h3>
-  <canvas class="plot" id="plot"></canvas>
-  <div id="series" style="margin-top:8px"></div>
+<h3>Values</h3>
+  <div id="series"></div>
   <h3>Solver</h3>
   <div class="field"><label>epsRel</label><input id="epsRel" value="1e-8"></div>
   <div class="field"><label>epsAbs</label><input id="epsAbs" value="1e-10"></div>
@@ -1037,6 +1036,10 @@ function render() {
       // captions printed over each other. Ports outside the box already get a stub.
       hh = Math.max(hh, Math.min(22, Math.abs(p.y - it.y) + 5));
     }
+    // A plot is a chart, not a token: give it the room the engine gives it, so the
+    // series drawn inside are readable. Everything else keeps the port-derived box.
+    const isChart = cls === "plot" && it.w > 0 && it.h > 0;
+    if (isChart) { hw = it.w / 2; hh = it.h / 2; }
     const L = it.x - hw, R = it.x + hw, T = it.y - hh, B = it.y + hh;
     for (const p of it.ports) {
       if (p.x >= L-1 && p.x <= R+1 && p.y >= T-1 && p.y <= B+1) continue;
@@ -1068,6 +1071,29 @@ function render() {
     shape.dataset.ref = it.ref;
     if (it.index !== null) shape.dataset.idx = it.index;
     g.appendChild(shape);
+
+    if (isChart && it.plot) {
+      // One path per wired series, updated in place as the run streams. Built here and
+      // repainted by paintCanvasPlots(), because render() does not run per frame.
+      const pad = 6;
+      const box = {x: L + pad, y: T + pad, w: hw*2 - 2*pad, h: hh*2 - 2*pad};
+      const mini = document.createElementNS("http://www.w3.org/2000/svg","g");
+      mini.setAttribute("class", "miniplot");
+      mini.dataset.ref = it.ref;
+      const keys = [...(it.plot.left||[]), ...(it.plot.right||[])]
+        .map(v => v.valueId).filter(Boolean);
+      const xk = (it.plot.x||[])[0];
+      mini.__spec = {keys, right: (it.plot.right||[]).map(v=>v.valueId).filter(Boolean),
+                    x: xk ? xk.valueId : null, box};
+      for (const k of keys) {
+        const pth = document.createElementNS("http://www.w3.org/2000/svg","path");
+        pth.setAttribute("class","miniline");
+        pth.setAttribute("stroke", colors[k] || "var(--plot)");
+        pth.dataset.k = k;
+        mini.appendChild(pth);
+      }
+      g.appendChild(mini);
+    }
 
     const glyph = {multiply:"×", add:"+", subtract:"−", divide:"÷", integrate:"∫",
                    time:"t", exp:"eˣ", ln:"ln", sqrt:"√", pow:"xʸ"}[label] ||
@@ -1319,6 +1345,9 @@ function render() {
   }
 
   renderParams();
+  // render() rebuilds the item groups, so the series inside each plot have to be put
+  // back with them. Doing it here means no caller has to remember the order.
+  paintCanvasPlots();
 }
 
 // Every parameter in the model, with the slider its bounds describe. They used to be
@@ -1923,8 +1952,62 @@ function paintPlot(cv, spec){
   if (ry) for (const k of R) line(k, Yof(ry), true);   // dashed = the other axis
 }
 
+// Draw each plot's series inside its own icon on the canvas, the way Minsky does. This
+// is why the sidebar's single chart is gone: variables in one model span orders of
+// magnitude, so one shared axis showed almost nothing. Each plot has only what is wired
+// into it, so its scale means something.
+function paintCanvasPlots(){
+  for (const mini of gItems.querySelectorAll(".miniplot")) {
+    const sp = mini.__spec;
+    if (!sp) continue;
+    const live = k => series[k] && series[k].some(v => v !== null);
+    const L = sp.keys.filter(live);
+    if (!L.length || tSeries.length < 2) {
+      for (const pth of mini.children) pth.removeAttribute("d");
+      continue;
+    }
+    const xk = sp.x && live(sp.x) ? sp.x : null;
+    const rights = new Set(sp.right || []);
+    const span = ks => {
+      let lo = Infinity, hi = -Infinity;
+      for (const k of ks) for (const v of series[k])
+        if (v !== null && isFinite(v)) { lo = Math.min(lo, v); hi = Math.max(hi, v); }
+      if (!isFinite(lo)) return null;
+      if (hi - lo < 1e-12) { hi = lo + 1; lo -= 1; }
+      const pad = (hi - lo) * 0.06;
+      return [lo - pad, hi + pad];
+    };
+    // the two axes are scaled apart here as well, or the smaller one is a flat line
+    const ly = span(L.filter(k => !rights.has(k)));
+    const ry = span(L.filter(k => rights.has(k)));
+    const xs = xk ? span([xk])
+                  : [tSeries[0], tSeries[tSeries.length - 1] || tSeries[0] + 1];
+    const b = sp.box;
+    const X = v => b.x + (v - xs[0]) / ((xs[1] - xs[0]) || 1) * b.w;
+    const Y = sc => v => b.y + b.h - (v - sc[0]) / ((sc[1] - sc[0]) || 1) * b.h;
+    for (const pth of mini.children) {
+      const k = pth.dataset.k;
+      const sc = rights.has(k) ? ry : ly;
+      if (!sc || !live(k)) { pth.removeAttribute("d"); continue; }
+      const yy = Y(sc);
+      let d = "", pen = false;
+      const n = series[k].length;
+      for (let i = 0; i < n; i++) {
+        const v = series[k][i];
+        const xv = xk ? (series[xk] || [])[i] : tSeries[i];
+        if (v === null || !isFinite(v) || xv === undefined || xv === null || !isFinite(xv)) {
+          pen = false; continue;
+        }
+        d += `${pen ? "L" : "M"}${X(xv).toFixed(1)},${yy(v).toFixed(1)}`;
+        pen = true;
+      }
+      d ? pth.setAttribute("d", d) : pth.removeAttribute("d");
+    }
+  }
+}
+
 function drawPlot(){
-  paintPlot($("#plot"), {keys: Object.keys(series)});
+  paintCanvasPlots();
   paintWorkspace();
 }
 addEventListener("resize", drawPlot);
@@ -2520,8 +2603,10 @@ function planePanes(){
     id: "sel", title: `Selection — ${uniq.length} variable${uniq.length===1?"":"s"}`,
     keys: uniq, right: [], x: null, sub: uniq.map(pretty).join(", "),
   });
-  out.push({id: "all", title: "Every variable", keys: Object.keys(series), right: [],
-            x: null, sub: "everything the run tracked"});
+  // No "every variable" pane: one axis shared by variables spanning orders of magnitude
+  // shows almost nothing, which is the same reason the sidebar chart is gone. A pane is
+  // either a plot the model defines, or a selection the user chose -- both have a scale
+  // that means something.
   return out;
 }
 
@@ -2539,6 +2624,15 @@ function drawWorkspace(){
   $("#pcount").textContent =
     `${panes.length} pane${panes.length === 1 ? "" : "s"}`;
   grid.innerHTML = "";
+  if (!panes.length) {
+    grid.classList.remove("focused");
+    const d = document.createElement("div");
+    d.style.cssText = "padding:26px 8px;color:var(--ink-3);font-size:13px;max-width:60ch";
+    d.textContent = "This model has no plots. Add one from the palette and wire a "
+      + "variable into it, or select some variables on the canvas to chart just those.";
+    grid.appendChild(d);
+    return;
+  }
   grid.classList.toggle("focused", pFocus !== null);
   for (const sp of panes) {
     const el = document.createElement("div");

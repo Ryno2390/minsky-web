@@ -1492,6 +1492,14 @@ def snapshot() -> dict[str, Any]:
             entry["rotation"] = it.rotation()
         except Exception:
             pass
+        try:
+            # The drawn size, so the canvas can give a plot the room the engine gives it.
+            # Our own box is derived from port spread and caps at 60x44; a plot is 210-260
+            # wide, which is the difference between an icon and a readable chart.
+            entry["w"] = it.right() - it.left()
+            entry["h"] = it.bottom() - it.top()
+        except Exception:
+            pass
         if entry["classType"] == "UserFunction":
             for attr in ("expression", "description", "name"):
                 try:

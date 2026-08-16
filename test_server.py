@@ -2924,7 +2924,7 @@ check("the client asks for the key instead of rebuilding it",
 # which put Solver 300px and Selection 500px below the bottom of the window.
 _side = _ui.split('<div class="side">')[1].split("<script>")[0]
 check("the selection panel comes before the rest of the sidebar",
-      _side.index("Selection") < _side.index("Simulation") < _side.index("Solver"),
+      _side.index("Selection") < _side.index("Values") < _side.index("Solver"),
       "it is the only part of the panel that answers a click")
 check("and the variable list cannot push it off screen",
       "#series{max-height" in _ui, "an unbounded list buried everything after it")
@@ -3053,7 +3053,7 @@ c.post("/api/clear")
 _ui = (Path(__file__).parent / "minskyweb/ui/index.html").read_text()
 _side = _ui.split('<div class="side">')[1].split("<script>")[0]
 check("the parameters you tune sit above the values you only read",
-      _side.index("Parameters") < _side.index("Simulation"),
+      _side.index("Parameters") < _side.index("Values"),
       "they were mixed alphabetically into the read-only list")
 check("and the parameter list cannot grow without bound either",
       "#parms{max-height" in _ui)
@@ -3897,6 +3897,52 @@ _white = [m for m in _re.findall(r"[^{}]*\{[^}]*\}", _css)
           if _re.search(r"\b(input|select|textarea)\b", m.split("{")[0])
           and _re.search(r"background(-color)?\s*:\s*(#fff|#ffffff|white)\b", m, _re.I)]
 check("no control is painted white anywhere", not _white, str(_white)[:140])
+
+
+print("\n71. the plots are in the flow, not in one shared chart")
+_ui = (Path(__file__).parent / "minskyweb/ui/index.html").read_text()
+
+# One axis shared by every variable in a model shows almost nothing: they span orders of
+# magnitude. Each plot draws only what is wired into it, in its own icon.
+check("the sidebar no longer holds a chart of everything",
+      'id="plot"' not in _ui and ".plot{width:100%" not in _ui,
+      "one axis for variables spanning orders of magnitude")
+check("nor does the workspace",
+      'title: "Every variable"' not in _ui,
+      "the same flaw at a larger size")
+check("and a model with nothing to plot says what to do instead",
+      "no plots" in _ui and "select some variables" in _ui,
+      "an empty workspace with no explanation")
+
+check("each plot icon draws its own series", "miniplot" in _ui and "miniline" in _ui)
+check("built once and repainted per frame, not rebuilt",
+      "function paintCanvasPlots" in _ui
+      and "paintCanvasPlots()" in _ui.split("function drawPlot()")[1].split("function ")[0],
+      "rebuilding every icon per solver step")
+check("and repainted when the canvas is rebuilt too",
+      "paintCanvasPlots();" in _ui.split("renderParams();")[1][:400],
+      "the series would vanish on the next render")
+check("the two axes are scaled apart inside an icon as well",
+      "const ly = span(L.filter" in _ui,
+      "the smaller series draws as a flat line against the larger")
+
+# The engine gives a plot 210-260px; our port-derived box caps at 60x44, which is the
+# difference between an icon and a readable chart.
+check("a plot is drawn at the size the engine gives it",
+      "const isChart = cls === \"plot\"" in _ui and "hw = it.w / 2" in _ui)
+
+_gw = "/Users/ryneschultz/minsky/examples/GoodwinLinear.mky"
+if Path(_gw).exists():
+    _st = c.post(f"/api/load?path={_gw}").json()
+    _p = next((i for i in _st["items"] if i["classType"].startswith("Plot")), None)
+    check("the snapshot reports a drawn size", _p and _p.get("w", 0) > 100,
+          str(_p.get("w") if _p else None))
+    check("which is bigger than the box ports alone would give", _p["w"] > 60,
+          f'{_p["w"]}x{_p.get("h")}')
+    _v = next((i for i in _st["items"] if i["classType"].startswith("Variable")), None)
+    check("and every item carries one, not just plots",
+          _v and _v.get("w", 0) > 0, str(_v.get("w") if _v else None))
+c.post("/api/clear")
 
 
 # Whatever any section forgot: the suite must not leave files among the user's models.

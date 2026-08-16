@@ -3583,6 +3583,36 @@ if Path(_gw).exists():
     check("an unknown equation format is refused",
           c.get("/api/equations?format=tex").status_code == 422)
 
+    # The engine draws black on TRANSPARENT, so neither theme can be had by leaving it
+    # alone: without an explicit ground, "light" is really "transparent", which a viewer
+    # compositing over black renders as black on black.
+    _lsvg = c.get("/api/equations?format=svg&theme=light").text
+    _dsvg = c.get("/api/equations?format=svg&theme=dark").text
+    check("light keeps the engine's black ink",
+          'fill="rgb(0%, 0%, 0%)"' in _lsvg, "the ink was recoloured when it need not be")
+    check("dark recolours it", 'fill="rgb(0%, 0%, 0%)"' not in _dsvg
+          and "rgb(90%, 93%, 94%)" in _dsvg, "the ink is still black on a dark ground")
+    for _th, _bg in (("light", "#FFFFFF"), ("dark", "#0E1113")):
+        _doc = _lsvg if _th == "light" else _dsvg
+        check(f"{_th} paints a ground rather than leaving it transparent",
+              f'<rect width="100%" height="100%" fill="{_bg}"' in _doc,
+              "a transparent export renders as black on black in some viewers")
+
+    from PIL import Image as _Im
+    import io as _io
+    for _th, _ground, _ink in (("light", (255, 255, 255), (0, 0, 0)),
+                               ("dark", (14, 17, 19), (230, 237, 240))):
+        _r = c.get(f"/api/equations?format=png&theme={_th}")
+        check(f"the {_th} png is opaque", _r.status_code == 200, _r.text[:90])
+        _im = _Im.open(_io.BytesIO(_r.content))
+        check(f"and has no alpha left to composite wrongly", _im.mode == "RGB", _im.mode)
+        _cols = sorted(_im.convert("RGB").getcolors(maxcolors=200000) or [], reverse=True)
+        _top = [c2 for _n, c2 in _cols[:2]]
+        check(f"{_th} is ink on its own ground",
+              _ground in _top and _ink in _top, str(_top))
+    check("an unknown theme is refused",
+          c.get("/api/equations?theme=neon").status_code == 422)
+
     # Dimensional analysis says NOTHING when it is happy and raises when it is not, so
     # a bare call cannot be told from one that did nothing. Both are reported.
     _r = c.post("/api/analysis/units").json()
@@ -3631,9 +3661,14 @@ c.post("/api/clear")
 
 _ui = (Path(__file__).parent / "minskyweb/ui/index.html").read_text()
 check("equations have a view of their own", 'id="eqwrap"' in _ui and 'id="eqns"' in _ui)
-check("drawn on a page, not on the app's dark ground",
-      ".eqbody{" in _ui and "background:#fff" in _ui,
-      "inverting mathematical typesetting reads as a rendering fault")
+check("the equation theme can be chosen", 'class="gbtn eqth"' in _ui)
+check("and the export follows what is on screen",
+      "format=svg&theme=${eqTheme}" in _ui and "format=png&theme=${eqTheme}" in _ui,
+      "saving a different theme from the one being looked at")
+check("the page behind them matches the theme they were drawn in",
+      ".eqbody.dark{" in _ui,
+      "a white margin round a dark image frames it rather than surrounding it")
+check("the choice is remembered", '"minsky.eqTheme"' in _ui)
 check("units can be checked from there", 'id="checkunits"' in _ui)
 check("and a model with no units is told so, rather than told it passed",
       "nothing to check" in _ui,

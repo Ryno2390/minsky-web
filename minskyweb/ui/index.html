@@ -176,8 +176,15 @@ svg#board.panning{cursor:grabbing}
 /* The engine draws equations as black ink on transparency, the way it draws the canvas.
    They are a document, so they get a page to sit on rather than the app's dark ground --
    inverting mathematical typesetting looks like a rendering fault. */
+/* The page follows whichever theme the equations were drawn in, so the margin round
+   them matches the background baked into the image rather than framing it. */
 .eqbody{flex:1;min-height:0;overflow:auto;background:#fff;border-radius:0 0 12px 12px;
   padding:20px}
+.eqbody.dark{background:#0E1113}
+.toggle2{display:inline-flex;border:1px solid var(--line);border-radius:7px;overflow:hidden}
+.toggle2 .gbtn{border:0;border-radius:0}
+.toggle2 .gbtn+.gbtn{border-left:1px solid var(--line)}
+.toggle2 .gbtn[aria-pressed="true"]{background:var(--accent);color:#08121F}
 .eqbody img{display:block;max-width:100%;height:auto}
 .eqbody .msg{color:#5B6763;font-size:13px;font-family:var(--mono)}
 .pgrid{flex:1;min-height:0;overflow-y:auto;display:grid;gap:12px;padding:12px;
@@ -351,6 +358,10 @@ svg#board.panning{cursor:grabbing}
       <span id="eqnote" style="font-size:12px;color:var(--ink-3)"></span>
       <div class="spacer"></div>
       <button class="gbtn" id="checkunits">Check units</button>
+      <div class="toggle2">
+        <button class="gbtn eqth" data-th="dark">Dark</button>
+        <button class="gbtn eqth" data-th="light">Light</button>
+      </div>
       <button class="gbtn" id="eqsvg">SVG</button>
       <button class="gbtn" id="eqpng">PNG</button>
       <button class="gbtn" id="eqclose">Close</button></div>
@@ -2269,13 +2280,19 @@ $("#sa-name").addEventListener("keydown", e => {
 function closeExport(){ $("#expmenu").classList.remove("open"); }
 
 /* ---------- equations, and whether the units add up ---------- */
+// Which theme the equations are drawn in -- for the view AND the export, so what is
+// saved is what was on screen. Defaults to dark, matching the rest of the app.
+let eqTheme = (() => {
+  try { return localStorage.getItem("minsky.eqTheme") || "dark"; } catch { return "dark"; }
+})();
+
 async function openEqns(){
   $("#eqwrap").classList.add("open");
   $("#eqbody").innerHTML = `<div class="msg">Deriving…</div>`;
   $("#eqnote").textContent = "";
   try {
     // cache-busted: the equations follow the wiring, so they change as the model does
-    const r = await fetch(`/api/equations?format=svg&at=${Date.now()}`);
+    const r = await fetch(`/api/equations?format=svg&theme=${eqTheme}&at=${Date.now()}`);
     if (!r.ok) {
       let d; try { d = (await r.json()).detail; } catch { d = `HTTP ${r.status}`; }
       throw new Error(d);
@@ -2287,6 +2304,7 @@ async function openEqns(){
     img.onload = () => setTimeout(() => URL.revokeObjectURL(img.src), 30000);
     $("#eqbody").innerHTML = "";
     $("#eqbody").appendChild(img);
+    $("#eqbody").classList.toggle("dark", eqTheme === "dark");
   } catch (e) {
     $("#eqbody").innerHTML = `<div class="msg"></div>`;
     $("#eqbody").firstChild.textContent = e.message;
@@ -2296,8 +2314,19 @@ function closeEqns(){ $("#eqwrap").classList.remove("open"); }
 $("#eqns").onclick = () => openEqns();
 $("#eqclose").onclick = closeEqns;
 $("#eqwrap").addEventListener("click", e => { if (e.target === $("#eqwrap")) closeEqns(); });
-$("#eqsvg").onclick = () => { location.href = "/api/equations?format=svg"; };
-$("#eqpng").onclick = () => { location.href = "/api/equations?format=png"; };
+$("#eqsvg").onclick = () => { location.href = `/api/equations?format=svg&theme=${eqTheme}`; };
+$("#eqpng").onclick = () => { location.href = `/api/equations?format=png&theme=${eqTheme}`; };
+function markEqTheme(){
+  for (const b of document.querySelectorAll(".eqth"))
+    b.setAttribute("aria-pressed", String(b.dataset.th === eqTheme));
+}
+for (const b of document.querySelectorAll(".eqth")) b.onclick = () => {
+  eqTheme = b.dataset.th;
+  try { localStorage.setItem("minsky.eqTheme", eqTheme); } catch {}
+  markEqTheme();
+  openEqns();
+};
+markEqTheme();
 $("#checkunits").onclick = guard(async () => {
   const r = await api("/analysis/units", {method:"POST"});
   $("#eqnote").textContent = r.ok

@@ -3067,8 +3067,17 @@ def create_app() -> FastAPI:
               "pdf": ("application/pdf", "renderToPDF", "renderCanvasToPDF"),
               "ps":  ("application/postscript", "renderToPS", "renderCanvasToPS")}
 
+    #: What the engine draws equations in, and what each theme wants instead. The engine
+    #: emits pure black on TRANSPARENT -- measured: 58 `fill="rgb(0%, 0%, 0%)"` and 4
+    #: strokes, and no background rect at all. So both themes get an explicit ground:
+    #: without one, "light" is really "transparent", which a viewer that composites over
+    #: black renders as black on black.
+    _EQ_INK = 'rgb(0%, 0%, 0%)'
+    EQ_THEME = {"light": ("#FFFFFF", "rgb(0%, 0%, 0%)", (255, 255, 255), (0, 0, 0)),
+                "dark":  ("#0E1113", "rgb(90%, 93%, 94%)", (14, 17, 19), (230, 237, 240))}
+
     @app.get("/api/equations")
-    async def equations(format: str = "svg"):
+    async def equations(format: str = "svg", theme: str = "dark"):
         """The model written out as equations, drawn by the engine.
 
         This is the same view Minsky's own equation tab shows -- it is derived from the
@@ -3079,19 +3088,48 @@ def create_app() -> FastAPI:
         fmt = format.lower()
         if fmt not in ("svg", "png"):
             raise HTTPException(422, f"unknown format {format!r}. Use svg or png")
-        out = _SCRATCH / f"equations.{fmt}"
+        th = theme.lower()
+        if th not in EQ_THEME:
+            raise HTTPException(
+                422, f"unknown theme {theme!r}. Use {' or '.join(EQ_THEME)}")
+        bg_hex, ink_rgb, bg_px, ink_px = EQ_THEME[th]
+        raw = _SCRATCH / f"equations-raw.{fmt}"
+        out = _SCRATCH / f"equations-{th}.{fmt}"
 
         def _draw():
             settle()
             ed = engine().minsky.equationDisplay
-            getattr(ed, "renderToSVG" if fmt == "svg" else "renderToPNG")(str(out))
+            getattr(ed, "renderToSVG" if fmt == "svg" else "renderToPNG")(str(raw))
         await call(_draw)
-        if not out.exists() or out.stat().st_size == 0:
+        if not raw.exists() or raw.stat().st_size == 0:
             raise HTTPException(500, "the engine drew no equations")
+
+        def _recolour():
+            if fmt == "svg":
+                doc = raw.read_text()
+                # Only the exact black the engine writes is touched. A blanket colour
+                # rewrite would be a guess; this is the one value it actually emits.
+                doc = doc.replace(_EQ_INK, ink_rgb)
+                i = doc.find(">", doc.find("<svg"))
+                bg = f'\n<rect width="100%" height="100%" fill="{bg_hex}"/>'
+                out.write_text(doc[:i + 1] + bg + doc[i + 1:])
+                return
+            from PIL import Image
+            with Image.open(raw) as im:
+                im = im.convert("RGBA")
+                # The alpha channel IS the glyph shape, so the ink is painted through it
+                # rather than the pixels being inverted -- inverting would take the
+                # transparent ground to white and swallow the equations.
+                ground = Image.new("RGB", im.size, bg_px)
+                ink = Image.new("RGB", im.size, ink_px)
+                ground.paste(ink, mask=im.split()[-1])
+                ground.save(out)
+
+        await run_in_threadpool(_recolour)
         stem = Path(_CURRENT).stem if _CURRENT else "model"
         return FileResponse(str(out),
                             media_type="image/svg+xml" if fmt == "svg" else "image/png",
-                            filename=f"{stem}-equations.{fmt}")
+                            filename=f"{stem}-equations-{th}.{fmt}")
 
     @app.post("/api/analysis/units")
     async def check_units():

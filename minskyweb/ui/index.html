@@ -185,7 +185,13 @@ svg#board.panning{cursor:grabbing}
 .toggle2 .gbtn{border:0;border-radius:0}
 .toggle2 .gbtn+.gbtn{border-left:1px solid var(--line)}
 .toggle2 .gbtn[aria-pressed="true"]{background:var(--accent);color:#08121F}
-.eqbody img{display:block;max-width:100%;height:auto}
+/* Equations are a document: natural size, scrolled. A Phillips diagram is a picture:
+   scaled to fill the panel. Both are SVG, so scaling up costs nothing. */
+.eqbody img{display:block;max-width:100%;height:auto;margin:0 auto}
+.eqbody.fit{overflow:hidden}
+/* object-fit scales UP as well as down, which max-width does not: the SVG is
+   resolution-free, so filling the panel costs nothing and a small diagram is legible. */
+.eqbody.fit img{width:100%;height:100%;object-fit:contain}
 .eqbody .msg{color:#5B6763;font-size:13px;font-family:var(--mono)}
 .pgrid{flex:1;min-height:0;overflow-y:auto;display:grid;gap:12px;padding:12px;
   grid-template-columns:repeat(var(--pcols,2),minmax(0,1fr));align-content:start}
@@ -362,6 +368,10 @@ svg#board.panning{cursor:grabbing}
       <span id="eqnote" style="font-size:12px;color:var(--ink-3)"></span>
       <div class="spacer"></div>
       <button class="gbtn" id="checkunits">Check units</button>
+      <div class="toggle2" id="eqlay">
+        <button class="gbtn eqlaybtn" data-lay="upright">Upright</button>
+        <button class="gbtn eqlaybtn" data-lay="spokes">Spokes</button>
+      </div>
       <div class="toggle2">
         <button class="gbtn eqth" data-th="dark">Dark</button>
         <button class="gbtn eqth" data-th="light">Light</button>
@@ -2334,6 +2344,13 @@ let eqTheme = (() => {
   try { return localStorage.getItem("minsky.eqTheme") || "dark"; } catch { return "dark"; }
 })();
 let eqView = "equations";
+// How the Phillips stocks are arranged. Minsky rotates each label to point outward,
+// which never collides but is hard to read; upright lays them on an ellipse grown until
+// nothing overlaps. Both are offered because the spokes are the engine's own picture.
+let eqLayout = (() => {
+  try { return localStorage.getItem("minsky.eqLayout") || "upright"; }
+  catch { return "upright"; }
+})();
 const EQ_VIEWS = {equations: "Equations", phillips: "Phillips diagram"};
 
 async function openEqns(view){
@@ -2346,7 +2363,9 @@ async function openEqns(view){
   $("#eqnote").textContent = "";
   try {
     // cache-busted: both views follow the wiring, so they change as the model does
-    const r = await fetch(`/api/${eqView}?format=svg&theme=${eqTheme}&at=${Date.now()}`);
+    const q = eqView === "phillips" ? `&layout=${eqLayout}` : "";
+    const r = await fetch(
+      `/api/${eqView}?format=svg&theme=${eqTheme}${q}&at=${Date.now()}`);
     if (!r.ok) {
       let d; try { d = (await r.json()).detail; } catch { d = `HTTP ${r.status}`; }
       throw new Error(d);
@@ -2357,6 +2376,7 @@ async function openEqns(view){
     img.src = URL.createObjectURL(blob);
     img.onload = () => setTimeout(() => URL.revokeObjectURL(img.src), 30000);
     $("#eqbody").innerHTML = "";
+    $("#eqbody").classList.toggle("fit", eqView === "phillips");
     $("#eqbody").appendChild(img);
   } catch (e) {
     $("#eqbody").innerHTML = `<div class="msg"></div>`;
@@ -2367,8 +2387,10 @@ function closeEqns(){ $("#eqwrap").classList.remove("open"); }
 $("#eqns").onclick = () => openEqns();
 $("#eqclose").onclick = closeEqns;
 $("#eqwrap").addEventListener("click", e => { if (e.target === $("#eqwrap")) closeEqns(); });
-$("#eqsvg").onclick = () => { location.href = `/api/${eqView}?format=svg&theme=${eqTheme}`; };
-$("#eqpng").onclick = () => { location.href = `/api/${eqView}?format=png&theme=${eqTheme}`; };
+const eqQuery = f => `/api/${eqView}?format=${f}&theme=${eqTheme}`
+  + (eqView === "phillips" ? `&layout=${eqLayout}` : "");
+$("#eqsvg").onclick = () => { location.href = eqQuery("svg"); };
+$("#eqpng").onclick = () => { location.href = eqQuery("png"); };
 function markEqTheme(){
   for (const b of document.querySelectorAll(".eqth"))
     b.setAttribute("aria-pressed", String(b.dataset.th === eqTheme));
@@ -2376,8 +2398,11 @@ function markEqTheme(){
 function markEqView(){
   for (const b of document.querySelectorAll(".eqview"))
     b.setAttribute("aria-pressed", String(b.dataset.view === eqView));
-  // units belong to the equations; the Phillips diagram has nothing to say about them
+  // each control belongs to one view: units to the equations, arrangement to the diagram
   $("#checkunits").style.display = eqView === "equations" ? "" : "none";
+  $("#eqlay").style.display = eqView === "phillips" ? "" : "none";
+  for (const b of document.querySelectorAll(".eqlaybtn"))
+    b.setAttribute("aria-pressed", String(b.dataset.lay === eqLayout));
 }
 for (const b of document.querySelectorAll(".eqth")) b.onclick = () => {
   eqTheme = b.dataset.th;
@@ -2385,6 +2410,11 @@ for (const b of document.querySelectorAll(".eqth")) b.onclick = () => {
   openEqns();
 };
 for (const b of document.querySelectorAll(".eqview")) b.onclick = () => openEqns(b.dataset.view);
+for (const b of document.querySelectorAll(".eqlaybtn")) b.onclick = () => {
+  eqLayout = b.dataset.lay;
+  try { localStorage.setItem("minsky.eqLayout", eqLayout); } catch {}
+  openEqns("phillips");
+};
 markEqTheme(); markEqView();
 $("#checkunits").onclick = guard(async () => {
   const r = await api("/analysis/units", {method:"POST"});

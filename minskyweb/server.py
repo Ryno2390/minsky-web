@@ -3147,6 +3147,59 @@ def create_app() -> FastAPI:
         _FALLBACK_PNG[0](str(eng_png))
         _themed(eng_png, out, "png", th)
 
+    #: Clear space between neighbouring Phillips labels, in model units.
+    PHILLIPS_GAP = 18.0
+
+    def _phillips_upright(pd):
+        """Lay the stocks out with HORIZONTAL labels.
+
+        Minsky places them on a circle and rotates each by its angle, so the boxes
+        radiate like spokes and cannot collide however tight the circle is. Upright
+        labels read far better but are wide and short, so they need a bigger and wider
+        ring: an ellipse, grown until no two boxes overlap. A circle large enough to
+        separate them horizontally wastes a great deal of vertical space.
+        """
+        import math
+        st = pd.stocks
+        keys = list(st.keys())
+        if len(keys) < 2:
+            return 0
+        boxes = []
+        for k in keys:
+            st[k].rotation(0.0)
+            st[k].updateBoundingBox()
+            boxes.append((k, st[k].width(), st[k].height()))
+        n = len(boxes)
+        gap = PHILLIPS_GAP
+        a = max(sum(w + gap for _k, w, _h in boxes) / (2 * math.pi), 60.0)
+        b = max(a * 0.55, (max(h for *_x, h in boxes) + gap) * n / (2 * math.pi))
+        pos = {}
+        for _ in range(200):
+            for i, (k, _w, _h) in enumerate(boxes):
+                t = 2 * math.pi * i / n - math.pi / 2       # first stock at the top
+                pos[k] = (a * math.cos(t), b * math.sin(t))
+            clash = False
+            for i in range(n):
+                ki, wi, hi = boxes[i]
+                for j in range(i + 1, n):
+                    kj, wj, hj = boxes[j]
+                    if (abs(pos[ki][0] - pos[kj][0]) < (wi + wj) / 2 + gap
+                            and abs(pos[ki][1] - pos[kj][1]) < (hi + hj) / 2 + gap):
+                        clash = True
+                        break
+                if clash:
+                    break
+            if not clash:
+                break
+            a *= 1.06
+            b *= 1.06
+        # into positive coordinates; the renderer crops to the drawing either way
+        ox = min(pos[k][0] - w / 2 for k, w, _h in boxes)
+        oy = min(pos[k][1] - h / 2 for k, _w, h in boxes)
+        for k, _w, _h in boxes:
+            st[k].moveTo(pos[k][0] - ox + 40.0, pos[k][1] - oy + 40.0)
+        return n
+
     def _rasterise(svg: Path, png: Path, scale: float = RENDER_SCALE) -> bool:
         """SVG -> PNG at `scale`. False if there is no rasteriser to do it with."""
         if not shutil.which("rsvg-convert"):
@@ -3193,7 +3246,8 @@ def create_app() -> FastAPI:
                             filename=f"{stem}-equations-{th}.{fmt}")
 
     @app.get("/api/phillips")
-    async def phillips(format: str = "svg", theme: str = "dark"):
+    async def phillips(format: str = "svg", theme: str = "dark",
+                       layout: str = "upright"):
         """The Phillips diagram: the model's stocks and the flows between them.
 
         It is built from Godley tables, so a model without any has nothing to draw. The
@@ -3203,13 +3257,26 @@ def create_app() -> FastAPI:
         """
         require_idle()
         fmt, th = _check_render_args(format, theme)
+        lay = layout.lower()
+        if lay not in ("upright", "spokes"):
+            raise HTTPException(
+                422, f"unknown layout {layout!r}. Use upright or spokes")
         raw = _SCRATCH / "phillips-raw.svg"
         out = _SCRATCH / f"phillips-{th}.{fmt}"
 
         def _draw():
             settle()
             pd = engine().minsky.phillipsDiagram
+            # init() keeps the position of any stock it already knows, so the layout has
+            # to be reset before asking for Minsky's own arrangement back
+            for k in list(pd.stocks.keys()):
+                try:
+                    pd.stocks.erase(k)
+                except Exception:
+                    pass
             pd.init()
+            if lay == "upright":
+                _phillips_upright(pd)
             pd.renderToSVG(str(raw))
             _FALLBACK_PNG[0] = pd.renderToPNG
             n = sum(1 for _r, it in _iter_items(engine().minsky)

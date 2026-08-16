@@ -3666,9 +3666,11 @@ c.post("/api/clear")
 _ui = (Path(__file__).parent / "minskyweb/ui/index.html").read_text()
 check("equations have a view of their own", 'id="eqwrap"' in _ui and 'id="eqns"' in _ui)
 check("the equation theme can be chosen", 'class="gbtn eqth"' in _ui)
+# the export URL is built in one place now, so assert that place carries the state
+_eqq = _ui.split("const eqQuery")[1].split(";")[0] if "const eqQuery" in _ui else ""
 check("and the export follows what is on screen",
-      "format=svg&theme=${eqTheme}" in _ui and "format=png&theme=${eqTheme}" in _ui,
-      "saving a different theme from the one being looked at")
+      "eqTheme" in _eqq and "eqLayout" in _eqq and "eqView" in _eqq,
+      "saving a different theme or arrangement from the one being looked at")
 check("the page behind them matches the theme they were drawn in",
       ".eqbody.dark{" in _ui,
       "a white margin round a dark image frames it rather than surrounding it")
@@ -3710,6 +3712,30 @@ if Path(_em).exists():
     import io as _io2
     _sz = _I2.open(_io2.BytesIO(_p.content)).size
     check("and is rendered larger than the engine's own 242px", _sz[0] > 500, str(_sz))
+
+    # Minsky rotates every label to point outward, which cannot collide but is hard to
+    # read. Upright lays them on an ellipse grown until nothing overlaps.
+    _up = c.get("/api/phillips?format=svg&layout=upright")
+    _sp = c.get("/api/phillips?format=svg&layout=spokes")
+    check("both arrangements render", _up.status_code == 200 and _sp.status_code == 200,
+          f"{_up.status_code}/{_sp.status_code}")
+    check("and they are different pictures", _up.text != _sp.text,
+          "the layout argument changed nothing")
+
+    def _box(doc):
+        m = re.search(r'viewBox="([-\d.]+) ([-\d.]+) ([\d.]+) ([\d.]+)"', doc)
+        return (float(m.group(3)), float(m.group(4))) if m else (0, 0)
+    _uw, _uh = _box(_up.text)
+    _sw, _sh = _box(_sp.text)
+    # horizontal labels are wide and short, so the ring has to be wider than tall
+    check("upright is wider than it is tall", _uw > _uh, f"{_uw}x{_uh}")
+    check("and wider than the spoked one, which is what makes room for the labels",
+          _uw > _sw, f"upright {_uw}, spokes {_sw}")
+    check("an unknown layout is refused",
+          c.get("/api/phillips?layout=circle").status_code == 422)
+    check("asking for spokes again gives the spoked one back, not a stale layout",
+          _box(c.get("/api/phillips?format=svg&layout=spokes").text) == (_sw, _sh),
+          "init() keeps positions it already knows, so they must be cleared first")
 if Path(_gw).exists():
     c.post(f"/api/load?path={_gw}")
     _r = c.get("/api/phillips?format=svg")
@@ -3783,6 +3809,12 @@ check("both views share one panel rather than two near-identical ones",
 check("and units are offered only where they mean something",
       'eqView === "equations"' in _ui,
       "a Phillips diagram has nothing to say about units")
+check("the Phillips arrangement can be chosen", 'class="gbtn eqlaybtn"' in _ui)
+check("and only on the view it belongs to",
+      'eqView === "phillips"' in _ui, "the toggle would show over the equations")
+check("a diagram is scaled to fill the panel, a document is not",
+      ".eqbody.fit img{width:100%;height:100%;object-fit:contain}" in _ui,
+      "max-width alone does not scale an image up")
 check("a data item can be given a series", 'id="do-file"' in _ui)
 check("with the columns chosen", 'id="do-x"' in _ui and 'id="do-y"' in _ui)
 check("and the same file can be picked twice",

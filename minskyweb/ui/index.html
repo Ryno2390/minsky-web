@@ -2064,8 +2064,14 @@ $("#speed").addEventListener("change", () => {
   syncRerun();
 });
 $("#run").onclick = guard(async () => {
+  // Claim the run SYNCHRONOUSLY. This used to be set in ws.onopen, which does not fire
+  // until the socket connects, so a rapid double-click opened two sockets: the second
+  // was refused by the server and its error handler called finish(), which re-enabled
+  // Run and flipped the status to idle while the first was still streaming.
+  if ($("#run").disabled) return;
+  setRunning(true);
   const cfg = readSolver();
-  if (!cfg) return;
+  if (!cfg) { setRunning(false); return; }
   await api("/solver", {method:"POST", body: JSON.stringify({
     epsRel: cfg.epsRel, epsAbs: cfg.epsAbs,
     order: cfg.order, implicit: $("#implicit").checked})});
@@ -2073,9 +2079,6 @@ $("#run").onclick = guard(async () => {
   const proto = location.protocol === "https:" ? "wss" : "ws";
   ws = new WebSocket(`${proto}://${location.host}/ws/sim`);
   ws.onopen = () => {
-    $("#run").disabled = true; $("#stop").disabled = false;
-    syncRerun();
-    $("#status").textContent = "running"; $("#status").className = "pill live";
     // The control asks how long the run should TAKE, which is what someone watching
     // actually wants; the server wants model units per second. Deriving one from the
     // other here means the same choice behaves the same on a model that runs to t=10
@@ -2117,9 +2120,27 @@ $("#run").onclick = guard(async () => {
   ws.onclose = finish;
   ws.onerror = () => { toast(UNREACHABLE); finish(); };
 });
+// ISSUE-002 (QA): a run blocks every edit on the server, so the controls that edit are
+// disabled while one is streaming rather than left to fail with a toast. The viewers are
+// left alone -- they report the refusal clearly and reopening after the run is cheap.
+const RUN_BLOCKS = ["#tidy", "#clear", "#undo", "#redo"];
+function setRunning(on){
+  $("#run").disabled = on;
+  $("#stop").disabled = !on;
+  const st = $("#status");
+  if (on) { st.textContent = "running"; st.className = "pill live"; }
+  for (const id of RUN_BLOCKS) {
+    const el = $(id);
+    if (!el) continue;
+    if (on) { el.dataset.wasOff = el.disabled ? "1" : ""; el.disabled = true; }
+    // undo/redo own their own enabled state, so hand it back rather than guess
+    else el.disabled = el.dataset.wasOff === "1";
+  }
+  if (typeof syncRerun === "function") syncRerun();
+}
+
 function finish(){
-  $("#run").disabled = false; $("#stop").disabled = true;
-  syncRerun();
+  setRunning(false);
   const st = $("#status");
   if (st.textContent === "running") { st.textContent = "idle"; st.className = "pill"; }
   drawPlot();

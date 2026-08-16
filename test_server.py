@@ -3574,6 +3574,30 @@ if Path(_gw).exists():
 c.post("/api/clear")
 
 _ui = (Path(__file__).parent / "minskyweb/ui/index.html").read_text()
+# ISSUE-003 (QA): the guard lived in ws.onopen, which does not fire until the socket
+# connects, so a rapid double-click opened two sockets. The second was refused, and its
+# error handler called finish(), re-enabling Run and flipping the status to idle while
+# the first was still streaming.
+_runh = _ui.split('$("#run").onclick')[1].split("ws.onmessage")[0]
+check("a run is claimed synchronously, before the socket opens",
+      "setRunning(true)" in _runh
+      and _runh.index("setRunning(true)") < _runh.index("new WebSocket"),
+      "a double-click opens two sockets and desynchronises the button")
+check("and a second click while running is inert",
+      'if ($("#run").disabled) return;' in _runh)
+
+# ISSUE-002 (QA): a run blocks every edit on the server, so the controls that edit were
+# left to fail with a toast instead of being disabled.
+check("the controls a run blocks are disabled while it streams",
+      "RUN_BLOCKS" in _ui and '"#tidy"' in _ui and '"#clear"' in _ui)
+check("and get their own state back, not a blanket enable",
+      "dataset.wasOff" in _ui,
+      "undo would come back enabled on a model with nothing to undo")
+check("one place decides what running looks like",
+      "function setRunning" in _ui
+      and "setRunning(false)" in _ui.split("function finish()")[1].split("}")[0],
+      "the start and the end of a run would drift apart")
+
 check("the run speed can be chosen", 'id="speed"' in _ui)
 check("as a duration, not as units per second",
       "Over ~" in _ui,

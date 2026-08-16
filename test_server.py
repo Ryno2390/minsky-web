@@ -3323,6 +3323,23 @@ check("panes redraw while the model runs",
       "paintWorkspace()" in
       _ui.split("function drawPlot()")[1].split("function ")[0],
       "the workspace would freeze at whatever was drawn when it opened")
+# Rerun, so a run can be watched in the workspace without closing it first.
+check("the workspace can start a run", 'id="prerun"' in _ui)
+check("by delegating to the toolbar's Run, not by duplicating it",
+      '$("#run").click()' in _ui,
+      "a second run path would drift from the solver settings and the speed")
+_rr = _ui.split("function syncRerun")[1].split("$(\"#prerun\").onclick")[0]
+check("it is disabled while a run is going", '$("#run").disabled' in _rr)
+check("and says how long the run will take, since that is chosen elsewhere",
+      "at full speed" in _rr and "over ~" in _rr)
+check("its state follows a run started from anywhere",
+      _ui.count("syncRerun()") >= 4,
+      "starting from the toolbar would leave the workspace button stale")
+check("its shortcut only applies while the workspace is open",
+      'toLowerCase() === "r"' in _ui and '$("#pwrap").classList.contains("open")' in
+      _ui.split('toLowerCase() === "r"')[1][:200],
+      "it would steal the browser's reload everywhere else")
+
 check("a selection gets a pane of its own",
       'id: "sel"' in _ui, "there is no way to plot part of a model")
 check("the right axis is scaled separately from the left",

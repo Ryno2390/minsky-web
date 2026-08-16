@@ -385,6 +385,8 @@ svg#board.panning{cursor:grabbing}
   <div class="gwrap" id="pwrap"><div class="gpanel ppanel">
     <div class="ghead"><b>Plots</b>
       <span id="pcount" style="font-size:12px;color:var(--ink-3)"></span>
+      <button class="gbtn" id="prerun" title="Reset and run again (⌘R)">↻ Rerun</button>
+      <span id="prunnote" style="font-size:11.5px;color:var(--ink-3)"></span>
       <div class="spacer"></div>
       <span style="font-size:11.5px;color:var(--ink-3)">columns</span>
       <button class="gbtn pcol" data-col="1">1</button>
@@ -1914,6 +1916,7 @@ try {
 } catch {}
 $("#speed").addEventListener("change", () => {
   try { localStorage.setItem("minsky.speed", $("#speed").value); } catch {}
+  syncRerun();
 });
 $("#run").onclick = guard(async () => {
   const cfg = readSolver();
@@ -1926,6 +1929,7 @@ $("#run").onclick = guard(async () => {
   ws = new WebSocket(`${proto}://${location.host}/ws/sim`);
   ws.onopen = () => {
     $("#run").disabled = true; $("#stop").disabled = false;
+    syncRerun();
     $("#status").textContent = "running"; $("#status").className = "pill live";
     // The control asks how long the run should TAKE, which is what someone watching
     // actually wants; the server wants model units per second. Deriving one from the
@@ -1970,6 +1974,7 @@ $("#run").onclick = guard(async () => {
 });
 function finish(){
   $("#run").disabled = false; $("#stop").disabled = true;
+  syncRerun();
   const st = $("#status");
   if (st.textContent === "running") { st.textContent = "idle"; st.className = "pill"; }
   drawPlot();
@@ -2516,7 +2521,23 @@ function drawWorkspace(){
 function openPlots(){
   $("#pwrap").classList.add("open");
   drawWorkspace();
+  syncRerun();
 }
+// Rerun from inside the workspace, so a run can be watched here without closing it.
+// It is the toolbar's Run: same solver settings, same speed, same series reset.
+function syncRerun(){
+  const busy = $("#run").disabled;
+  $("#prerun").disabled = busy;
+  $("#prerun").textContent = busy ? "Running…" : "↻ Rerun";
+  const secs = +$("#speed").value;
+  $("#prunnote").textContent = busy
+    ? "" : (secs > 0 ? `over ~${secs}s` : "at full speed");
+}
+$("#prerun").onclick = () => {
+  if ($("#run").disabled) return;
+  $("#run").click();
+  syncRerun();
+};
 function closePlots(){ $("#pwrap").classList.remove("open"); pFocus = null; }
 $("#plots").onclick = () => openPlots();
 $("#pclose").onclick = closePlots;
@@ -2619,6 +2640,11 @@ addEventListener("keydown", e => {
     // too late
     if (dialogOpen()) return;
     (e.shiftKey ? $("#saveas") : $("#save")).click();
+  }
+  if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "r"
+      && $("#pwrap").classList.contains("open")) {
+    e.preventDefault();
+    $("#prerun").click();
   }
   if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "e") {
     e.preventDefault();

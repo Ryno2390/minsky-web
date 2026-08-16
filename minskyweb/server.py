@@ -1631,7 +1631,7 @@ def snapshot() -> dict[str, Any]:
 
 
 def create_app() -> FastAPI:
-    app = FastAPI(title="Minsky headless server", version="0.1")
+    app = FastAPI(title="Minsky", version="0.1")
 
     @app.on_event("startup")
     async def _boot():

@@ -3600,6 +3600,22 @@ if Path(_gw).exists():
     check("an unknown equation format is refused",
           c.get("/api/equations?format=tex").status_code == 422)
 
+    # ISSUE-001 (QA): an empty model renders as a valid but EMPTY svg, which reached the
+    # user as a blank white page with nothing to say why -- while Phillips and the
+    # figures already explained themselves.
+    c.post("/api/clear")
+    _r = c.get("/api/equations?format=svg")
+    check("an empty model says there is nothing to write out", _r.status_code == 422,
+          f"{_r.status_code}: {_r.text[:90]}")
+    c.post("/api/item", json={"kind":"operation","op":"multiply","at":[300,300]})
+    _r = c.get("/api/equations?format=svg")
+    check("and a model whose items define nothing says that instead",
+          _r.status_code == 422 and "none of them defines a variable" in _r.text,
+          _r.text[:130])
+    c.post(f"/api/load?path={_gw}")
+    check("a real model still renders",
+          c.get("/api/equations?format=svg").status_code == 200)
+
     # The engine draws black on TRANSPARENT, so neither theme can be had by leaving it
     # alone: without an explicit ground, "light" is really "transparent", which a viewer
     # compositing over black renders as black on black.

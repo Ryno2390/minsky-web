@@ -3252,6 +3252,19 @@ def create_app() -> FastAPI:
         await call(_draw)
         if not raw.exists() or raw.stat().st_size == 0:
             raise HTTPException(500, "the engine drew no equations")
+        # A model with nothing in it renders as a valid but EMPTY svg -- a few hundred
+        # bytes of preamble around a 0x0 canvas -- which reaches the user as a blank
+        # white page with nothing to say why. Phillips and the figures already explain
+        # themselves; this did not.
+        if raw.stat().st_size < 900:
+            n = await call(lambda: sum(1 for _r, _i in _iter_items(engine().minsky)))
+            raise HTTPException(
+                422,
+                "there are no equations to write out: the model is empty."
+                if not n else
+                f"there are no equations to write out. The model has {n} item(s), but "
+                f"none of them defines a variable -- wire something into a variable "
+                f"first.")
         await run_in_threadpool(_render_out, raw, out, fmt, th)
         stem = Path(_CURRENT).stem if _CURRENT else "model"
         return FileResponse(str(out),

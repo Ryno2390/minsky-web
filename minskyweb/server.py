@@ -1491,6 +1491,16 @@ def snapshot() -> dict[str, Any]:
             entry["rotation"] = it.rotation()
         except Exception:
             pass
+        if entry["classType"] == "UserFunction":
+            for attr in ("expression", "description", "name"):
+                try:
+                    entry[attr if attr != "name" else "fname"] = getattr(it, attr)()
+                except Exception:
+                    pass
+            try:
+                entry["args"] = list(it.argNames())
+            except Exception:
+                pass
         if entry["classType"].startswith("Variable") or entry["classType"] == "VarConstant":
             # Units and slider bounds belong to the VARIABLE, so every icon of it reports
             # the same thing; rotation belongs to the ICON. The UI has to say which is
@@ -3056,6 +3066,91 @@ def create_app() -> FastAPI:
               "png": ("image/png", "renderToPNG", "renderCanvasToPNG"),
               "pdf": ("application/pdf", "renderToPDF", "renderCanvasToPDF"),
               "ps":  ("application/postscript", "renderToPS", "renderCanvasToPS")}
+
+    @app.get("/api/equations")
+    async def equations(format: str = "svg"):
+        """The model written out as equations, drawn by the engine.
+
+        This is the same view Minsky's own equation tab shows -- it is derived from the
+        wiring, so it is the one place a modeller can check that what they drew is what
+        they meant.
+        """
+        require_idle()
+        fmt = format.lower()
+        if fmt not in ("svg", "png"):
+            raise HTTPException(422, f"unknown format {format!r}. Use svg or png")
+        out = _SCRATCH / f"equations.{fmt}"
+
+        def _draw():
+            settle()
+            ed = engine().minsky.equationDisplay
+            getattr(ed, "renderToSVG" if fmt == "svg" else "renderToPNG")(str(out))
+        await call(_draw)
+        if not out.exists() or out.stat().st_size == 0:
+            raise HTTPException(500, "the engine drew no equations")
+        stem = Path(_CURRENT).stem if _CURRENT else "model"
+        return FileResponse(str(out),
+                            media_type="image/svg+xml" if fmt == "svg" else "image/png",
+                            filename=f"{stem}-equations.{fmt}")
+
+    @app.post("/api/analysis/units")
+    async def check_units():
+        """Are the units consistent?
+
+        The engine raises on the first inconsistency it finds and says nothing at all
+        when everything checks out, so a plain call cannot be told apart from a call that
+        did nothing. Both outcomes are reported here.
+        """
+        require_idle()
+
+        def _go():
+            try:
+                engine().minsky.dimensionalAnalysis()
+            except Exception as ex:
+                return str(ex).strip() or "the engine reported an inconsistency"
+            return None
+        problem = await call(_go)
+        n = await call(lambda: sum(
+            1 for _r, it in _iter_items(engine().minsky)
+            if it.classType().startswith("Variable")
+            and (getattr(it, "unitsStr", lambda: "")() or "")))
+        return dict(ok=problem is None, problem=problem, withUnits=n)
+
+    @app.post("/api/item/{ref}/expression")
+    async def set_expression(ref: str, spec: RenameSpec):
+        """A user function's body. Without one the item computes nothing."""
+        require_idle()
+        await call(check_ref, ref)
+        await call(checkpoint)
+
+        def _go():
+            raw = _resolve(engine().minsky, ref)
+            if raw.classType() != "UserFunction":
+                raise HTTPException(
+                    422, f"{raw.classType()} has no expression to set. Only a user "
+                         f"function does.")
+            raw.expression(spec.name)
+            settle()
+            got = raw.expression()
+            if got != spec.name:
+                raise HTTPException(
+                    409, f"the engine kept {got!r} rather than {spec.name!r}")
+            return got, raw.name(), list(raw.argNames())
+
+        try:
+            expr, name, args = await call(_go)
+        except HTTPException:
+            rollback()
+            raise
+        except Exception as ex:
+            rollback()
+            raise HTTPException(422, str(ex))
+        mark_dirty()
+        out = await call(snapshot)
+        out["expression"] = expr
+        out["fname"] = name
+        out["args"] = args
+        return out
 
     @app.get("/api/export/canvas")
     async def export_canvas(format: str = "svg"):

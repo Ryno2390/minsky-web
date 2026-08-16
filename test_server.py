@@ -3074,10 +3074,12 @@ print("\n61. the whole operation set, and export")
 _ui = (Path(__file__).parent / "minskyweb/ui/index.html").read_text()
 _grp = re.search(r"const OP_GROUPS = \[(.*?)\n\];", _ui, re.S)
 check("the palette is defined in families", bool(_grp), "OP_GROUPS is gone")
-_palette = re.findall(r'"([A-Za-z_]+)"', _grp.group(1)) if _grp else []
-_palette = [o for o in _palette if o not in
-            ("common","constants","trig","elementary","logic","reductions","scans",
-             "tensor","statistics")]
+# Take the names from the INNER arrays only. Filtering out a hardcoded list of group
+# labels meant a new group -- "custom" -- was read as an operation and failed to build.
+_palette = [o for _inner in re.findall(
+                r'\[\s*"[a-z]+"\s*,\s*(?:true|false)\s*,\s*\[(.*?)\]\s*\]',
+                _grp.group(1), re.S)
+            for o in re.findall(r'"([A-Za-z_]+)"', _inner)] if _grp else []
 check("it now offers the full set", len(_palette) >= 70, f"{len(_palette)} operations")
 
 # Each one has to actually build, or the palette is a list of buttons that 400.
@@ -3566,6 +3568,81 @@ check("full speed sends no rate at all",
       "if (secs > 0 && span > 0) msg.rate" in _ui,
       "an unpaced run should not be paced by accident")
 check("the choice is remembered", '"minsky.speed"' in _ui)
+
+
+print("\n68. equations, units, and user functions")
+_gw = "/Users/ryneschultz/minsky/examples/GoodwinLinear.mky"
+if Path(_gw).exists():
+    c.post(f"/api/load?path={_gw}")
+    for _f, _sig in (("svg", b"<?xml"), ("png", b"\x89PNG")):
+        _r = c.get(f"/api/equations?format={_f}")
+        check(f"the model renders as equations ({_f})", _r.status_code == 200,
+              _r.text[:110])
+        check(f"and the {_f} is real", _r.content.startswith(_sig)
+              and len(_r.content) > 2000, f"{len(_r.content)} bytes")
+    check("an unknown equation format is refused",
+          c.get("/api/equations?format=tex").status_code == 422)
+
+    # Dimensional analysis says NOTHING when it is happy and raises when it is not, so
+    # a bare call cannot be told from one that did nothing. Both are reported.
+    _r = c.post("/api/analysis/units").json()
+    check("a model with no units checks out", _r["ok"] is True, str(_r))
+    check("and says how many variables carry units", _r["withUnits"] == 0, str(_r))
+
+    _st = c.get("/api/state").json()
+    _by = {(i.get("name") or "").lstrip(":"): i for i in _st["items"] if i.get("name")}
+    # Y and N feed the same subtraction, so metres and kilograms cannot both be right
+    c.post(f"/api/item/{_by['Y']['ref']}/attrs", json={"units":"m"})
+    c.post(f"/api/item/{_by['N']['ref']}/attrs", json={"units":"kg"})
+    _r = c.post("/api/analysis/units").json()
+    check("inconsistent units are caught", _r["ok"] is False, str(_r))
+    check("and the engine's complaint is passed through",
+          _r["problem"] and "unit" in _r["problem"].lower(), str(_r["problem"]))
+    check("with a count of what carries units", _r["withUnits"] == 2, str(_r))
+    c.post(f"/api/item/{_by['Y']['ref']}/attrs", json={"units":""})
+    c.post(f"/api/item/{_by['N']['ref']}/attrs", json={"units":""})
+    check("clearing them settles it again",
+          c.post("/api/analysis/units").json()["ok"] is True)
+
+# A user function computes nothing until it has a body, which is why it was kept out of
+# the palette until there was a way to set one.
+c.post("/api/clear")
+_r = c.post("/api/item", json={"kind":"operation","op":"userFunction","at":[300,300]})
+check("a user function can be added", _r.status_code == 200, _r.text[:110])
+_uf = c.get("/api/state").json()["items"][0]
+check("it reports its name and arguments",
+      _uf.get("fname") and _uf.get("args"), str(_uf)[:150])
+check("and starts with no body", _uf.get("expression") == "", repr(_uf.get("expression")))
+_r = c.post(f"/api/item/{_uf['ref']}/expression", json={"name":"2*x + y"})
+check("a body can be set", _r.status_code == 200, _r.text[:110])
+check("and is read back", _r.json().get("expression") == "2*x + y",
+      str(_r.json().get("expression")))
+check("the body survives a reload",
+      (lambda p: (c.post(f"/api/load?path={p}"),
+                  c.get("/api/state").json()["items"][0].get("expression"))[1])(
+          c.post("/api/save", json={"name":"uf-probe"}).json()["saved"]) == "2*x + y",
+      "the expression did not persist")
+_rm("uf-probe")
+c.post("/api/clear")
+c.post("/api/item", json={"kind":"parameter","name":"p","value":1,"at":[200,200]})
+check("only a user function has an expression to set",
+      c.post("/api/item/0/expression", json={"name":"x"}).status_code == 422)
+c.post("/api/clear")
+
+_ui = (Path(__file__).parent / "minskyweb/ui/index.html").read_text()
+check("equations have a view of their own", 'id="eqwrap"' in _ui and 'id="eqns"' in _ui)
+check("drawn on a page, not on the app's dark ground",
+      ".eqbody{" in _ui and "background:#fff" in _ui,
+      "inverting mathematical typesetting reads as a rendering fault")
+check("units can be checked from there", 'id="checkunits"' in _ui)
+check("and a model with no units is told so, rather than told it passed",
+      "nothing to check" in _ui,
+      "a green tick on a model with no units means nothing")
+check("a user function gets a body field", 'id="ufexpr"' in _ui)
+check("which says what an empty one means",
+      "computes nothing" in _ui)
+check("and it is in the palette now it can be given one",
+      '"userFunction"' in _ui.split("const OP_GROUPS")[1].split("];")[0])
 
 
 # Whatever any section forgot: the suite must not leave files among the user's models.

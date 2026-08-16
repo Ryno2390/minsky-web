@@ -172,6 +172,14 @@ svg#board.panning{cursor:grabbing}
 #series{max-height:27vh;overflow-y:auto}
 #parms{max-height:26vh;overflow-y:auto;margin-bottom:4px}
 .ppanel{max-width:min(1500px,96vw);width:96vw;height:92vh;display:flex;flex-direction:column}
+.eqpanel{max-width:min(1200px,94vw);width:94vw;height:90vh;display:flex;flex-direction:column}
+/* The engine draws equations as black ink on transparency, the way it draws the canvas.
+   They are a document, so they get a page to sit on rather than the app's dark ground --
+   inverting mathematical typesetting looks like a rendering fault. */
+.eqbody{flex:1;min-height:0;overflow:auto;background:#fff;border-radius:0 0 12px 12px;
+  padding:20px}
+.eqbody img{display:block;max-width:100%;height:auto}
+.eqbody .msg{color:#5B6763;font-size:13px;font-family:var(--mono)}
 .pgrid{flex:1;min-height:0;overflow-y:auto;display:grid;gap:12px;padding:12px;
   grid-template-columns:repeat(var(--pcols,2),minmax(0,1fr));align-content:start}
 .pane{background:var(--bg);border:1px solid var(--line);border-radius:9px;
@@ -338,6 +346,17 @@ svg#board.panning{cursor:grabbing}
     <button data-exp="anim">Record the model running…</button>
   </div>
 
+  <div class="gwrap" id="eqwrap"><div class="gpanel eqpanel">
+    <div class="ghead"><b>Equations</b>
+      <span id="eqnote" style="font-size:12px;color:var(--ink-3)"></span>
+      <div class="spacer"></div>
+      <button class="gbtn" id="checkunits">Check units</button>
+      <button class="gbtn" id="eqsvg">SVG</button>
+      <button class="gbtn" id="eqpng">PNG</button>
+      <button class="gbtn" id="eqclose">Close</button></div>
+    <div class="eqbody" id="eqbody"></div>
+  </div></div>
+
   <div class="gwrap" id="pwrap"><div class="gpanel ppanel">
     <div class="ghead"><b>Plots</b>
       <span id="pcount" style="font-size:12px;color:var(--ink-3)"></span>
@@ -376,6 +395,7 @@ svg#board.panning{cursor:grabbing}
   <button id="clear">Clear</button>
   <button id="tidy" title="Arrange the canvas left to right (⌘L)">⌗ Tidy</button>
   <button id="plots" title="Every plot in the model (⌘P)">◫ Plots</button>
+  <button id="eqns" title="The model written out as equations (⌘E)">∑ Equations</button>
   <button id="del" class="danger" disabled>Delete</button>
   <span id="fname" style="font-size:12.5px;color:var(--ink-3);margin-left:4px"></span>
   <div class="spacer"></div>
@@ -537,6 +557,15 @@ svg#board.panning{cursor:grabbing}
     </div>
     <div style="font-size:11.5px;color:var(--ink-3);padding:0 2px" id="initnote"></div>
   </div>
+  <div id="ufwrap" style="display:none;margin-top:8px">
+    <div class="field" style="gap:6px">
+      <label style="white-space:nowrap" id="uflab">f(x,y)</label>
+      <input id="ufexpr" style="width:100%" autocomplete="off" spellcheck="false"
+             placeholder="2*x + y">
+      <button id="ufok" style="font-size:12px;padding:4px 10px">Set</button>
+    </div>
+    <div style="font-size:11.5px;color:var(--ink-3);padding:0 2px" id="ufnote"></div>
+  </div>
   <div id="varact" style="display:none;margin-top:8px;display:none">
     <div style="display:flex;gap:6px">
       <button id="copyicon" style="flex:1;font-size:12px;padding:5px 8px">Copy icon</button>
@@ -592,6 +621,9 @@ svg#board.panning{cursor:grabbing}
 const OP_GROUPS = [
   ["common",     true,  ["add","subtract","multiply","divide","pow","min","max",
                          "integrate","differentiate","time","exp","ln","log","sqrt"]],
+  // offered now it has an editor: without a body it computes nothing, so putting it in
+  // the palette before there was any way to set one would have been a dead end
+  ["custom",     false, ["userFunction"]],
   ["constants",  false, ["pi","euler","zero","one","inf","percent"]],
   ["trig",       false, ["sin","cos","tan","asin","acos","atan","sinh","cosh","tanh"]],
   ["elementary", false, ["abs","floor","frac","copy","Gamma","fact","polygamma"]],
@@ -687,7 +719,7 @@ function clearSelection(){ selSet = new Set(); sel = null; selWire = null; selGr
 // of these: it is an editor, and blocking undo inside it left a cell edit that could not
 // be taken back at all, because the overlay also covers the Undo button.
 function modalOpen(){
-  return ["#cfwrap", "#sawrap", "#fwrap", "#gwrap", "#animwrap", "#pwrap"].some(
+  return ["#cfwrap", "#sawrap", "#fwrap", "#gwrap", "#animwrap", "#pwrap", "#eqwrap"].some(
     id => $(id) && $(id).classList.contains("open"));
 }
 function dialogOpen(){
@@ -753,6 +785,7 @@ function typeName(ct){
              "Variable:integral":"integral", "Variable:parameter":"parameter",
              "Variable:constant":"constant", "VarConstant":"constant",
              "IntOp":"integration", "GodleyIcon":"Godley table",
+             "UserFunction":"user function", "DataOp":"interpolated data",
              "PlotWidget":"plot", "Sheet":"sheet", "SwitchIcon":"switch"};
   if (T[ct]) return T[ct];
   if (ct.startsWith("Operation:")) return `${ct.slice(10)} operation`;
@@ -1084,6 +1117,17 @@ function render() {
   const selItem = sel === null ? null : byRef.get(sel);
   const ct = selItem?.classType || "";
 
+  // A user function computes nothing until it has a body.
+  const isUF = ct === "UserFunction";
+  $("#ufwrap").style.display = isUF ? "" : "none";
+  if (isUF) {
+    $("#uflab").textContent = `${selItem.fname || "f"}(${(selItem.args||[]).join(",")})`;
+    if (document.activeElement !== $("#ufexpr"))
+      $("#ufexpr").value = selItem.expression || "";
+    $("#ufnote").textContent = selItem.expression
+      ? "" : "until this has a body it computes nothing";
+  }
+
   // Say what can be done with THIS icon. An operation has nothing to edit, and leaving
   // the panel silent about that reads as the panel being broken rather than the icon
   // having no properties.
@@ -1098,6 +1142,8 @@ function render() {
           : "Open the table to edit its stocks, flows and initial conditions.")
     : ct.startsWith("Variable:") || ct === "VarConstant"
       ? "Rename it below, or set its value. Double-click the icon to rename in place."
+    : isUF
+      ? "Give it a body below, in terms of its arguments."
     : ct.startsWith("Operation:") || ct === "IntOp"
       ? "An operation has no settings — what it computes comes from what is wired into it."
     : ct.startsWith("Plot") || ct.startsWith("Sheet")
@@ -1400,6 +1446,17 @@ for (const [id, btn] of [["#units","#unitsok"], ["#rot","#rotok"],
     if (e.key === "Escape") { e.preventDefault(); $(id).blur(); render(); }
   });
 }
+$("#ufok").onclick = guard(async () => {
+  if (sel === null) return;
+  const r = await api(`/item/${encodeURIComponent(sel)}/expression`,
+                      {method:"POST", body: JSON.stringify({name: $("#ufexpr").value.trim()})});
+  state = r; render();
+  toast(`${r.fname}(${(r.args||[]).join(",")}) = ${r.expression}`, true);
+});
+$("#ufexpr").addEventListener("keydown", e => {
+  if (e.key === "Enter") { e.preventDefault(); $("#ufok").click(); }
+  if (e.key === "Escape") { e.preventDefault(); $("#ufexpr").blur(); render(); }
+});
 $("#copyicon").onclick = guard(async () => {
   if (sel === null) return;
   const r = await api(`/item/${encodeURIComponent(sel)}/copy`, {method:"POST"});
@@ -2211,6 +2268,52 @@ $("#sa-name").addEventListener("keydown", e => {
 // All this menu does is reach them.
 function closeExport(){ $("#expmenu").classList.remove("open"); }
 
+/* ---------- equations, and whether the units add up ---------- */
+async function openEqns(){
+  $("#eqwrap").classList.add("open");
+  $("#eqbody").innerHTML = `<div class="msg">Deriving…</div>`;
+  $("#eqnote").textContent = "";
+  try {
+    // cache-busted: the equations follow the wiring, so they change as the model does
+    const r = await fetch(`/api/equations?format=svg&at=${Date.now()}`);
+    if (!r.ok) {
+      let d; try { d = (await r.json()).detail; } catch { d = `HTTP ${r.status}`; }
+      throw new Error(d);
+    }
+    const blob = await r.blob();
+    const img = document.createElement("img");
+    img.alt = "The model as equations";
+    img.src = URL.createObjectURL(blob);
+    img.onload = () => setTimeout(() => URL.revokeObjectURL(img.src), 30000);
+    $("#eqbody").innerHTML = "";
+    $("#eqbody").appendChild(img);
+  } catch (e) {
+    $("#eqbody").innerHTML = `<div class="msg"></div>`;
+    $("#eqbody").firstChild.textContent = e.message;
+  }
+}
+function closeEqns(){ $("#eqwrap").classList.remove("open"); }
+$("#eqns").onclick = () => openEqns();
+$("#eqclose").onclick = closeEqns;
+$("#eqwrap").addEventListener("click", e => { if (e.target === $("#eqwrap")) closeEqns(); });
+$("#eqsvg").onclick = () => { location.href = "/api/equations?format=svg"; };
+$("#eqpng").onclick = () => { location.href = "/api/equations?format=png"; };
+$("#checkunits").onclick = guard(async () => {
+  const r = await api("/analysis/units", {method:"POST"});
+  $("#eqnote").textContent = r.ok
+    ? (r.withUnits ? `units consistent (${r.withUnits} carry units)`
+                   : "no units set on any variable")
+    : r.problem;
+  $("#eqnote").style.color = r.ok ? "var(--ok)" : "var(--bad)";
+  toast(r.ok
+    ? (r.withUnits
+        ? `Units are consistent across ${r.withUnits} variable`
+          + `${r.withUnits === 1 ? "" : "s"}.`
+        : "No variable carries units yet, so there is nothing to check. "
+          + "Set them on a variable in the Selection panel.")
+    : `Units do not balance: ${r.problem}`, r.ok);
+});
+
 /* ---------- the plots workspace ---------- */
 // A model carries its own plots -- EndogenousMoney has five -- and only one small pane
 // in the sidebar ever showed anything. Each PlotWidget becomes a pane here, drawing the
@@ -2398,6 +2501,11 @@ addEventListener("keydown", e => {
     // too late
     if (dialogOpen()) return;
     (e.shiftKey ? $("#saveas") : $("#save")).click();
+  }
+  if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "e") {
+    e.preventDefault();
+    if (dialogOpen() && !$("#eqwrap").classList.contains("open")) return;
+    $("#eqwrap").classList.contains("open") ? closeEqns() : openEqns();
   }
   if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "p") {
     e.preventDefault();

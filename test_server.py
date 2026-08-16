@@ -3594,9 +3594,13 @@ if Path(_gw).exists():
           and "rgb(90%, 93%, 94%)" in _dsvg, "the ink is still black on a dark ground")
     for _th, _bg in (("light", "#FFFFFF"), ("dark", "#0E1113")):
         _doc = _lsvg if _th == "light" else _dsvg
+        # the ground carries x/y because the viewBox is grown to add a margin
         check(f"{_th} paints a ground rather than leaving it transparent",
-              f'<rect width="100%" height="100%" fill="{_bg}"' in _doc,
+              f'width="100%" height="100%" fill="{_bg}"' in _doc,
               "a transparent export renders as black on black in some viewers")
+    check("and the box is grown to leave a margin round the drawing",
+          'viewBox="-18 -18' in _lsvg,
+          "labels sit hard against the edge, which reads as cropped")
 
     from PIL import Image as _Im
     import io as _io
@@ -3697,8 +3701,15 @@ if Path(_em).exists():
     check("but leaves the accents alone, which carry meaning",
           "rgb(0%, 0%, 100%)" in _d or "rgb(100%, 0%, 0%)" in _d,
           "red and blue were rewritten along with the black")
-    check("a png comes back opaque",
-          c.get("/api/phillips?format=png").content[:4] == b"\x89PNG")
+    _p = c.get("/api/phillips?format=png")
+    check("a png comes back opaque", _p.content[:4] == b"\x89PNG")
+    # The engine's own resolutionScaleFactor cannot be used -- ecolab's vectorRender
+    # leaves the device offset unscaled, so any factor but 1 displaces and crops the
+    # drawing. The raster is made from the SVG instead, so it can be any size.
+    from PIL import Image as _I2
+    import io as _io2
+    _sz = _I2.open(_io2.BytesIO(_p.content)).size
+    check("and is rendered larger than the engine's own 242px", _sz[0] > 500, str(_sz))
 if Path(_gw).exists():
     c.post(f"/api/load?path={_gw}")
     _r = c.get("/api/phillips?format=svg")

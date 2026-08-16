@@ -33,6 +33,7 @@ import asyncio
 import atexit
 import math
 import os
+import re
 import shutil
 import subprocess
 import tempfile
@@ -3076,18 +3077,44 @@ def create_app() -> FastAPI:
     EQ_THEME = {"light": ("#FFFFFF", "rgb(0%, 0%, 0%)", (255, 255, 255), (0, 0, 0)),
                 "dark":  ("#0E1113", "rgb(90%, 93%, 94%)", (14, 17, 19), (230, 237, 240))}
 
-    def _themed(raw: Path, out: Path, fmt: str, th: str):
-        """Recolour a render into `th`. Only the one black the engine writes is touched.
+    #: Breathing room around a render, in output pixels. The engine sizes its surface to
+    #: the EXACT bounds of the drawing -- vectorRender measures it on a recording surface
+    #: first -- so nothing is clipped, but labels sit hard against the edge with no
+    #: margin at all, which reads as cropped even though it is not.
+    RENDER_PAD = 18
+    #: Raster renders come out at the drawing's natural size, which is small -- a
+    #: Phillips diagram of EndogenousMoney is 242px across and soft once enlarged. The
+    #: engine's own resolutionScaleFactor cannot be used to fix that: ecolab's
+    #: vectorRender sets the surface's device OFFSET to -left,-top without scaling it
+    #: while setting device SCALE to the factor, so any factor but 1 displaces the
+    #: drawing and crops it. The SVG is correct at 1, so a raster is made from that.
+    RENDER_SCALE = 3.0
 
-        A Phillips diagram also carries red and blue, which mean something -- rewriting
-        every colour, or inverting, would destroy them.
+    def _themed(raw: Path, out: Path, fmt: str, th: str, pad: int = RENDER_PAD):
+        """Recolour a render into `th`, and give it a margin.
+
+        Only the one black the engine writes is touched. A Phillips diagram also carries
+        red and blue, which mean something -- rewriting every colour, or inverting, would
+        destroy them.
         """
         bg_hex, ink_rgb, bg_px, ink_px = EQ_THEME[th]
         if fmt == "svg":
             doc = raw.read_text()
             doc = doc.replace(_EQ_INK, ink_rgb)
+            # Grow the viewBox rather than the content: the drawing keeps its own
+            # coordinates and simply gains a margin on every side.
+            def _grow(m):
+                w, h = float(m.group(1)), float(m.group(2))
+                return (f'width="{w + 2*pad:g}" height="{h + 2*pad:g}" '
+                        f'viewBox="{-pad:g} {-pad:g} {w + 2*pad:g} {h + 2*pad:g}"')
+            doc, n = re.subn(r'width="([\d.]+)" height="([\d.]+)" viewBox="[^"]*"',
+                             _grow, doc, count=1)
             i = doc.find(">", doc.find("<svg"))
-            bg = f'\n<rect width="100%" height="100%" fill="{bg_hex}"/>'
+            # the ground must cover the grown box, so it is placed in user units rather
+            # than as a percentage of a box it no longer starts at
+            bg = (f'\n<rect x="{-pad:g}" y="{-pad:g}" width="100%" height="100%" '
+                  f'fill="{bg_hex}"/>') if n else (
+                  f'\n<rect width="100%" height="100%" fill="{bg_hex}"/>')
             out.write_text(doc[:i + 1] + bg + doc[i + 1:])
             return
         from PIL import Image
@@ -3096,10 +3123,37 @@ def create_app() -> FastAPI:
             # The alpha channel IS the shape, so the ink is painted through it rather
             # than the pixels inverted -- inverting takes the transparent ground to
             # white and swallows the drawing.
-            ground = Image.new("RGB", im.size, bg_px)
+            w, h = im.size
+            ground = Image.new("RGB", (w + 2*pad, h + 2*pad), bg_px)
             ink = Image.new("RGB", im.size, ink_px)
-            ground.paste(ink, mask=im.split()[-1])
+            ground.paste(ink, (pad, pad), mask=im.split()[-1])
             ground.save(out)
+
+    #: how to ask the engine for a PNG directly, set per request for the fallback path
+    _FALLBACK_PNG = [lambda _p: None]
+
+    def _render_out(raw: Path, out: Path, fmt: str, th: str):
+        """Theme the render, and for a raster go via the SVG so it comes out crisp."""
+        if fmt == "svg":
+            _themed(raw, out, "svg", th)
+            return
+        tmp = out.with_suffix(".viasvg.svg")
+        _themed(raw, tmp, "svg", th)
+        if _rasterise(tmp, out):
+            return
+        # No rasteriser available. Fall back to the engine's own PNG, which is correct
+        # at scale 1 -- just small.
+        eng_png = raw.with_name(raw.stem + "-fallback.png")
+        _FALLBACK_PNG[0](str(eng_png))
+        _themed(eng_png, out, "png", th)
+
+    def _rasterise(svg: Path, png: Path, scale: float = RENDER_SCALE) -> bool:
+        """SVG -> PNG at `scale`. False if there is no rasteriser to do it with."""
+        if not shutil.which("rsvg-convert"):
+            return False
+        r = subprocess.run(["rsvg-convert", "-z", str(scale), "-o", str(png), str(svg)],
+                           capture_output=True)
+        return r.returncode == 0 and png.exists() and png.stat().st_size > 0
 
     def _check_render_args(fmt: str, theme: str):
         f, t = fmt.lower(), theme.lower()
@@ -3119,17 +3173,20 @@ def create_app() -> FastAPI:
         """
         require_idle()
         fmt, th = _check_render_args(format, theme)
-        raw = _SCRATCH / f"equations-raw.{fmt}"
+        # ALWAYS render SVG: it is correct at the engine's own scale, and a raster is
+        # made from it so the resolution is ours to choose.
+        raw = _SCRATCH / "equations-raw.svg"
         out = _SCRATCH / f"equations-{th}.{fmt}"
 
         def _draw():
             settle()
             ed = engine().minsky.equationDisplay
-            getattr(ed, "renderToSVG" if fmt == "svg" else "renderToPNG")(str(raw))
+            ed.renderToSVG(str(raw))
+            _FALLBACK_PNG[0] = ed.renderToPNG
         await call(_draw)
         if not raw.exists() or raw.stat().st_size == 0:
             raise HTTPException(500, "the engine drew no equations")
-        await run_in_threadpool(_themed, raw, out, fmt, th)
+        await run_in_threadpool(_render_out, raw, out, fmt, th)
         stem = Path(_CURRENT).stem if _CURRENT else "model"
         return FileResponse(str(out),
                             media_type="image/svg+xml" if fmt == "svg" else "image/png",
@@ -3146,14 +3203,15 @@ def create_app() -> FastAPI:
         """
         require_idle()
         fmt, th = _check_render_args(format, theme)
-        raw = _SCRATCH / f"phillips-raw.{fmt}"
+        raw = _SCRATCH / "phillips-raw.svg"
         out = _SCRATCH / f"phillips-{th}.{fmt}"
 
         def _draw():
             settle()
             pd = engine().minsky.phillipsDiagram
             pd.init()
-            getattr(pd, "renderToSVG" if fmt == "svg" else "renderToPNG")(str(raw))
+            pd.renderToSVG(str(raw))
+            _FALLBACK_PNG[0] = pd.renderToPNG
             n = sum(1 for _r, it in _iter_items(engine().minsky)
                     if "Godley" in it.classType())
             return n
@@ -3168,7 +3226,7 @@ def create_app() -> FastAPI:
                 "and flows of Godley tables, and this model has "
                 + (f"{tables} table(s) but no flows between them."
                    if tables else "no Godley tables."))
-        await run_in_threadpool(_themed, raw, out, fmt, th)
+        await run_in_threadpool(_render_out, raw, out, fmt, th)
         stem = Path(_CURRENT).stem if _CURRENT else "model"
         return FileResponse(str(out),
                             media_type="image/svg+xml" if fmt == "svg" else "image/png",

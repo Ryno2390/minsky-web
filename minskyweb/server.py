@@ -1471,6 +1471,14 @@ def snapshot() -> dict[str, Any]:
             vid = it.valueId()
             if vid:
                 live_ids.add(vid)
+                # Report the key `values` and `inits` are ACTUALLY stored under. It is
+                # not ":name": Minsky mangles the name into the id, so `\tau_L` is held
+                # at `:τ<sub>L</sub>` and `B_C` at `:B<sub>C</sub>`. A client that
+                # rebuilt the key from the name therefore found nothing for any variable
+                # with a subscript or a Greek letter -- 17 of 17 parameters in
+                # EndogenousMoney -- and showed an empty value box for a variable that
+                # has a perfectly good value.
+                entry["valueId"] = vid
         except Exception:
             if entry.get("name"):
                 live_ids.add(":" + entry["name"])

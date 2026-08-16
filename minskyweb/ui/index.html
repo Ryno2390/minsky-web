@@ -113,6 +113,10 @@ svg#board.panning{cursor:grabbing}
   overflow-y:auto;padding:12px 12px 20px}
 .plot{width:100%;height:170px;background:var(--bg);border:1px solid var(--line);
   border-radius:7px;display:block}
+/* A model can have forty-odd variables, and an unbounded list of them pushed the Solver
+   and Selection panels 300 and 500px below the bottom of the window -- so clicking an
+   item appeared to do nothing, because everything it changed was off screen. */
+#series{max-height:34vh;overflow-y:auto}
 .row{display:flex;justify-content:space-between;align-items:center;gap:8px;
   padding:4px 6px;border-radius:5px;font-family:var(--mono);font-size:12px}
 .row:nth-child(odd){background:#12171A}
@@ -342,18 +346,13 @@ svg#board.panning{cursor:grabbing}
 </div></div>
 
 <div class="side">
-  <h3>Simulation</h3>
-  <canvas class="plot" id="plot"></canvas>
-  <div id="series" style="margin-top:8px"></div>
-  <h3>Solver</h3>
-  <div class="field"><label>epsRel</label><input id="epsRel" value="1e-8"></div>
-  <div class="field"><label>epsAbs</label><input id="epsAbs" value="1e-10"></div>
-  <div class="field"><label>order</label><input id="order" value="4"></div>
-  <div class="field"><label>implicit</label><input id="implicit" type="checkbox" checked></div>
-  <div class="field"><label>tmax</label><input id="tmax" value="10"></div>
-  <div class="field"><label>max steps</label><input id="steps" value="2000"></div>
-  <h3>Selection</h3>
-  <div id="selinfo" style="color:var(--ink-3);font-size:12.5px;padding:0 4px">Nothing selected.</div>
+  <h3 id="selhead">Selection</h3>
+  <div id="selinfo" style="font-size:13px;padding:0 4px;color:var(--ink)">Nothing selected.</div>
+  <div id="selhint" style="font-size:11.5px;color:var(--ink-3);padding:4px 4px 0"></div>
+  <div id="selact" style="display:none;margin-top:8px">
+    <button id="editgodley" style="width:100%;font-size:12px;padding:6px 10px">
+      Edit table…</button>
+  </div>
   <div id="renamewrap" style="display:none;margin-top:8px">
     <div class="field" style="gap:6px">
       <input id="rename" style="width:100%;text-align:left" autocomplete="off" spellcheck="false">
@@ -386,7 +385,17 @@ svg#board.panning{cursor:grabbing}
     </div>
     <div style="font-size:11.5px;color:var(--ink-3);padding:0 2px" id="initnote"></div>
   </div>
-</div>
+<h3>Simulation</h3>
+  <canvas class="plot" id="plot"></canvas>
+  <div id="series" style="margin-top:8px"></div>
+  <h3>Solver</h3>
+  <div class="field"><label>epsRel</label><input id="epsRel" value="1e-8"></div>
+  <div class="field"><label>epsAbs</label><input id="epsAbs" value="1e-10"></div>
+  <div class="field"><label>order</label><input id="order" value="4"></div>
+  <div class="field"><label>implicit</label><input id="implicit" type="checkbox" checked></div>
+  <div class="field"><label>tmax</label><input id="tmax" value="10"></div>
+  <div class="field"><label>max steps</label><input id="steps" value="2000"></div>
+  </div>
 
 <script>
 const OPS = ["add","subtract","multiply","divide","integrate","time","exp","ln",
@@ -526,6 +535,17 @@ const guard = fn => async (...a) => {
 };
 
 /* ---------- render ---------- */
+function typeName(ct){
+  const T = {"Variable:flow":"flow variable", "Variable:stock":"stock variable",
+             "Variable:integral":"integral", "Variable:parameter":"parameter",
+             "Variable:constant":"constant", "VarConstant":"constant",
+             "IntOp":"integration", "GodleyIcon":"Godley table",
+             "PlotWidget":"plot", "Sheet":"sheet", "SwitchIcon":"switch"};
+  if (T[ct]) return T[ct];
+  if (ct.startsWith("Operation:")) return `${ct.slice(10)} operation`;
+  return ct || "item";
+}
+
 function kindOf(ct){
   if (ct.startsWith("Variable:parameter")) return ["par","param"];
   if (ct.startsWith("Variable:integral"))  return ["int","integral"];
@@ -827,8 +847,14 @@ function render() {
         return `group · ${n} item${n === 1 ? "" : "s"}`
              + (subs ? `, ${subs} sub-group${subs === 1 ? "" : "s"}` : "");
       })()
-    : sel === null ? "Nothing selected."
-    : `${sel} · ${byRef.get(sel)?.classType ?? "?"}`;
+    : sel === null ? "Nothing selected. Click an icon on the canvas to edit it."
+    : (() => {
+        // "25 · Variable:flow" named a thing by its array index and its C++ class. Say
+        // what the user sees on the canvas instead.
+        const it = byRef.get(sel);
+        const nm = pretty(it?.name || "");
+        return nm ? `${nm} — ${typeName(it.classType)}` : typeName(it?.classType || "");
+      })();
   $("#multiwrap").style.display = selSet.size > 1 ? "" : "none";
   if (selSet.size > 1) $("#multicount").textContent = String(selSet.size);
   $("#groupwrap").style.display = selGrp ? "" : "none";
@@ -844,6 +870,26 @@ function render() {
   // rename call and does nothing with it, so showing the control would be a lie.
   const selItem = sel === null ? null : byRef.get(sel);
   const ct = selItem?.classType || "";
+
+  // Say what can be done with THIS icon. An operation has nothing to edit, and leaving
+  // the panel silent about that reads as the panel being broken rather than the icon
+  // having no properties.
+  const isTable = ct.includes("Godley");
+  $("#selact").style.display = isTable && selItem.index !== null ? "" : "none";
+  $("#selhint").textContent =
+    selSet.size > 1 ? "Drag any one of them to move them together."
+    : selGrp || selWire !== null || !selItem ? ""
+    : isTable
+      ? (selItem.index === null
+          ? "This table is inside a group. Ungroup to open it."
+          : "Open the table to edit its stocks, flows and initial conditions.")
+    : ct.startsWith("Variable:") || ct === "VarConstant"
+      ? "Rename it below, or set its value. Double-click the icon to rename in place."
+    : ct.startsWith("Operation:") || ct === "IntOp"
+      ? "An operation has no settings — what it computes comes from what is wired into it."
+    : ct.startsWith("Plot") || ct.startsWith("Sheet")
+      ? "Draws whatever is wired into it. Wire a variable to one of its ports."
+    : "";
   const canRename = !!selItem && (ct.startsWith("Variable:") || ct.includes("Godley"));
   $("#renamewrap").style.display = canRename ? "" : "none";
   if (canRename && document.activeElement !== $("#rename")) {
@@ -866,7 +912,11 @@ function render() {
   $("#initwrap").style.display = label ? "" : "none";
   if (label && document.activeElement !== $("#initval")) {
     $("#initlab").textContent = label;
-    const vid = ":" + (selItem.name || "");
+    // Ask the engine which key this variable's value lives under rather than rebuilding
+    // it from the name: Minsky mangles names into ids, so `\tau_L` is stored at
+    // `:τ<sub>L</sub>`. Rebuilding it missed every variable with a subscript or a Greek
+    // letter, which in an economic model is most of them.
+    const vid = selItem.valueId || (":" + (selItem.name || ""));
     // the INITIAL value, not the running one: the running value only picks up a new
     // initial condition at the next reset, so the field read back the old number
     const v = state.inits?.[vid] ?? state.values?.[vid];
@@ -991,6 +1041,12 @@ $("#clear").onclick = guard(async () => {
         + "Clearing the canvas throws them away.")) return;
   state = await api("/clear", {method:"POST"});
   clearSelection(); series = {}; tSeries = []; colors = {}; drawPlot(); render();
+});
+$("#editgodley").onclick = guard(async () => {
+  // Double-clicking the icon opens this too, but nothing on screen said so.
+  const it = sel === null ? null : state.items.find(i => i.ref === sel);
+  if (!it || it.index === null) return;
+  openGodley(it.index);
 });
 $("#tidy").onclick = guard(async () => {
   const b = $("#tidy"); const was = b.textContent;

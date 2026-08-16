@@ -2875,6 +2875,93 @@ check("loading renders before fitting, since the fit measures the picture",
       "fitting first sizes the view against the model that was open a moment ago")
 
 
+print("\n59. an item you clicked can actually be edited")
+# Minsky MANGLES a name into the key its value is stored under: `alpha_1` is held at
+# `:alpha<sub>1</sub>`. The client rebuilt that key as ":" + name, which matched only
+# names with no subscript, Greek letter or superscript -- 38 of the 100 variables in
+# EndogenousMoney. The other 62 showed an empty value box for a variable that has a
+# perfectly good value, which reads as "this item cannot be edited".
+c.post("/api/clear")
+c.post("/api/item", json={"kind":"parameter","name":"alpha_1","value":2.5,"at":[200,200]})
+c.post("/api/item", json={"kind":"parameter","name":"plain","value":1.5,"at":[400,200]})
+_st = c.get("/api/state").json()
+_mangled = next(i for i in _st["items"] if i.get("name") == "alpha_1")
+_plain = next(i for i in _st["items"] if i.get("name") == "plain")
+
+check("an item reports the key its value is stored under",
+      "valueId" in _mangled, str(_mangled)[:120])
+check("and that key is the mangled one, not ':' + name",
+      _mangled["valueId"] != ":alpha_1", _mangled.get("valueId"))
+check("the reported key finds the value",
+      _st["inits"].get(_mangled["valueId"]) in (2.5, "2.5"),
+      f'{_mangled.get("valueId")} -> {_st["inits"].get(_mangled.get("valueId"))}')
+check("rebuilding the key from the name would NOT have found it",
+      ":alpha_1" not in _st["inits"],
+      "the mangling this guards against is gone; the guard can go too")
+check("a name with nothing to mangle still works",
+      _st["inits"].get(_plain["valueId"]) in (1.5, "1.5"), _plain.get("valueId"))
+
+# every variable on the canvas must be resolvable, or some of them look uneditable
+_ex = "/Users/ryneschultz/minsky/examples/EndogenousMoney.mky"
+if Path(_ex).exists():
+    _st = c.post(f"/api/load?path={_ex}").json()
+    _vars = [i for i in _st["items"] if i["classType"].startswith("Variable:")]
+    _ok = [i for i in _vars if i.get("valueId") in _st["inits"]]
+    check("every variable in a real model resolves to its value",
+          len(_ok) == len(_vars), f"{len(_ok)} of {len(_vars)}")
+    _old = [i for i in _vars if (":" + (i.get("name") or "")) in _st["inits"]]
+    check("which the old ':' + name would not have done",
+          len(_old) < len(_vars), f"{len(_old)} of {len(_vars)} -- no mangled names here")
+c.post("/api/clear")
+
+_ui = (Path(__file__).parent / "minskyweb/ui/index.html").read_text()
+check("the client asks for the key instead of rebuilding it",
+      "selItem.valueId" in _ui, "it is guessing again")
+
+# The controls existed but sat below a variable list that is 37 rows on EndogenousMoney,
+# which put Solver 300px and Selection 500px below the bottom of the window.
+_side = _ui.split('<div class="side">')[1].split("<script>")[0]
+check("the selection panel comes before the rest of the sidebar",
+      _side.index("Selection") < _side.index("Simulation") < _side.index("Solver"),
+      "it is the only part of the panel that answers a click")
+check("and the variable list cannot push it off screen",
+      "#series{max-height" in _ui, "an unbounded list buried everything after it")
+
+_selinfo = _ui.split('$("#selinfo").textContent')[1].split('$("#multiwrap")')[0]
+check("the panel names the item, not its array index and C++ class",
+      "function typeName(" in _ui and "typeName(" in _selinfo
+      and "classType ?? " not in _selinfo,
+      '"25 · Variable:flow" told the user nothing')
+check("and says what can be done with it",
+      'id="selhint"' in _ui and "no settings" in _ui,
+      "an operation has nothing to edit, and silence about that reads as broken")
+check("a table can be opened without knowing to double-click",
+      'id="editgodley"' in _ui and "openGodley(it.index)" in _ui)
+
+# Renaming a Godley table answered 500 while HAVING ALREADY CHANGED the title. The
+# refresh after the retitle used `model.items[item.index]`, but callers identify an item
+# by ref and leave index at 0 -- so it reached item 0, an unrelated operation, and
+# update() on that raised. The UI offers a rename box for tables, so this was on the
+# first path anyone would take.
+c.post("/api/clear")
+_ti = c.post("/api/item", json={"kind":"godley","at":[300,300]}).json()["index"]
+c.post("/api/item", json={"kind":"operation","op":"divide","at":[600,300]})
+_st = c.get("/api/state").json()
+_op0 = next(i for i in _st["items"] if i["ref"] == "0")
+_r = c.post(f"/api/item/{_ti}/rename", json={"name":"Banking Sector"})
+check("renaming a Godley table succeeds", _r.status_code == 200, _r.text[:140])
+_st2 = c.get("/api/state").json()
+check("and the title is what was asked for",
+      next(i for i in _st2["items"] if i["index"] == _ti).get("name") == "Banking Sector",
+      str([i.get("name") for i in _st2["items"]]))
+check("while item 0 -- which the old code reached by mistake -- is untouched",
+      (lambda a, b: (a["classType"], a["x"], a["y"]) == (b["classType"], b["x"], b["y"]))(
+          _op0, next(i for i in _st2["items"] if i["ref"] == "0")))
+check("and renaming it is undoable like any other edit",
+      c.post("/api/undo").status_code == 200)
+c.post("/api/clear")
+
+
 # Whatever any section forgot: the suite must not leave files among the user's models.
 # Minsky renames the old file to "<name>.mky;1" on every save, so both go.
 _left = [f for f in SAVE_DIR.iterdir()

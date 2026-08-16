@@ -735,7 +735,12 @@ class Model:
 
         if "Godley" in ct:                      # a table's name is its title
             raw.table.title(new)
-            self.minsky.model.items[item.index].update()
+            # Refresh the icon THIS item resolved to, not `model.items[item.index]`.
+            # Callers identify an item by ref and leave index at 0 -- the server passes
+            # `Item(m, 0, "?", ref=ref)` -- so that looked up item 0, an unrelated
+            # operation, and `update()` on it raised AttributeError. Renaming any Godley
+            # table answered 500 while having already changed the title.
+            raw.update()
             return new
 
         if not ct.startswith("Variable:"):

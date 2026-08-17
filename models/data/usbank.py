@@ -89,14 +89,34 @@ def _fetch():
 
 
 def national():
-    """State/charter rows summed to national totals, keyed by year."""
+    """National totals by year, taken from the endpoint's OWN aggregate row.
+
+    DO NOT sum every row. The summary endpoint returns ids of the form
+    `<charter>_<year>_<region>`, and the regions include national aggregates alongside the
+    states: for commercial banks in 2023 the 63 rows are 59 states and territories summing
+    to $11,611.3bn of net loans, plus a `USA` row carrying that same 11,611.3, plus a `US`
+    row carrying 11,566.4, plus `OT` and `PI`. Summing the lot gives $34,835.7bn -- about
+    three times the real loan book -- because the national total is counted twice more.
+
+    Ratios like c and lam survive that (numerator and denominator inflate together) but
+    nothing else does, and it is not worth relying on the inflation being uniform across
+    fields when `US` and `USA` demonstrably differ. So the `USA` row is used directly, and
+    charter classes (CB commercial banks, SI savings institutions) are summed across, since
+    Shaikh's banking sector is depository institutions rather than commercial banks alone.
+    """
     raw = _fetch()
     agg = collections.defaultdict(lambda: collections.defaultdict(float))
+    seen = collections.defaultdict(set)
     for row in raw["data"]:
         x = row["data"]
         year = x.get("YEAR")
-        if not year:
+        ident = x.get("ID", "")
+        if not year or not ident.endswith("_USA"):
             continue
+        charter = ident.split("_", 1)[0]
+        if charter in seen[year]:          # one row per charter class per year
+            continue
+        seen[year].add(charter)
         for f in FIELDS[1:]:
             v = x.get(f)
             if v is not None:
@@ -104,18 +124,51 @@ def national():
     return {int(y): dict(v) for y, v in sorted(agg.items())}
 
 
+def required_reserves():
+    """{year: required reserves in $thousands}, to match the FDIC units.
+
+    Shaikh's lam is p*kappa_fB + rd*d -- fixed capital plus REQUIRED reserves per dollar of
+    loans. It is emphatically not total cash and balances due. `CHBAL` is 91% of the naive
+    measure and swings 0.067 (2007) to 0.322 (2021) as QE inflates reserve balances at the
+    Fed; those are voluntary holdings earning IOR, not capital a bank must tie up to make a
+    loan, and using them makes lam a QE artefact rather than a technical coefficient.
+
+    Required reserves were abolished in March 2020, so this is zero from then on and the
+    series is discontinued. That is a real fact about the coefficient, not missing data.
+    """
+    import fred                                                  # noqa: PLC0415
+    s = fred.series("REQRESNS")                                  # $bn, monthly
+    if s is None:
+        return {}
+    b = {}
+    for dt, v in zip(s["date"], s["value"]):
+        b.setdefault(int(dt[:4]), []).append(v)
+    return {y: (sum(v) / len(v)) * 1e6 for y, v in b.items()}     # $bn -> $thousands
+
+
 def coefficients(nat=None):
     """Shaikh's banking coefficients, year by year. None where an input is unreported."""
     nat = nat or national()
+    try:
+        rr = required_reserves()
+    except Exception:                                            # noqa: BLE001
+        rr = {}
     out = {}
     for y, a in nat.items():
         L = a.get("LNLSNET", 0.0)
         if L <= 0 or a.get("NONIX", 0.0) <= 0:
             continue
         eq = a.get("EQ", 0.0)
+        prem = a.get("BKPREM", 0.0)
+        req = rr.get(y, 0.0 if y >= 2021 else None)
         out[y] = {
             "c":   a["NONIX"] / L,
-            "lam": (a.get("BKPREM", 0.0) + a.get("CHBAL", 0.0)) / L,
+            # Shaikh's lam: fixed capital + REQUIRED reserves, per dollar of loans
+            "lam": (prem + req) / L if req is not None else None,
+            "lamPrem": prem / L,
+            "lamReq": req / L if req is not None else None,
+            # the naive measure that was used before, kept ONLY to show how far off it is
+            "lamCash": (prem + a.get("CHBAL", 0.0)) / L,
             "d":   a.get("DEP", 0.0) / L,
             "i":   a["ILNLS"] / L if a.get("ILNLS") else None,
             "iAll": a.get("INTINC", 0.0) / L,
@@ -156,19 +209,34 @@ def main():
     u = usable(coef)
     ys = sorted(u)
     print(f"\nSHAIKH'S COEFFICIENTS, {ys[0]}-{ys[-1]}, five-year averages")
-    print(f"  {'years':>9} {'c':>8} {'lam':>8} {'d':>8} {'i':>8} {'rB':>8} {'eq/asset':>9}")
+    print(f"  {'years':>9} {'c':>8} {'lam':>8} {'  prem':>8} {'  req':>8} {'lamCash':>8} "
+          f"{'d':>7} {'i':>8} {'rB':>8}")
     for k in range(0, len(ys) - 4, 5):
         blk = ys[k:k + 5]
         def av(f):
             g = [u[y][f] for y in blk if u[y].get(f) is not None]
             return sum(g) / len(g) if g else float("nan")
-        print(f"  {blk[0]}-{str(blk[-1])[2:]} {av('c'):8.4f} {av('lam'):8.4f} {av('d'):8.3f} "
-              f"{av('i'):8.4f} {av('rB'):8.4f} {av('eqRatio'):9.4f}")
+        print(f"  {blk[0]}-{str(blk[-1])[2:]} {av('c'):8.4f} {av('lam'):8.4f} "
+              f"{av('lamPrem'):8.4f} {av('lamReq'):8.4f} {av('lamCash'):8.4f} "
+              f"{av('d'):7.3f} {av('i'):8.4f} {av('rB'):8.4f}")
 
-    lam = [u[y]["lam"] for y in ys]
-    print(f"\n  lam ranges {min(lam):.3f} to {max(lam):.3f}. Shaikh needs lam < 1 for the")
-    print("  interest rate to be feasible at all, and that is what makes i_N < r fall out")
-    print("  of the theory instead of being assumed. It holds with room to spare.")
+    lam = [u[y]["lam"] for y in ys if u[y]["lam"] is not None]
+    cash = [u[y]["lamCash"] for y in ys]
+    print(f"\n  lam (Shaikh's: fixed capital + REQUIRED reserves) {min(lam):.4f} to "
+          f"{max(lam):.4f}")
+    print(f"  lamCash (the naive fixed capital + ALL cash)      {min(cash):.4f} to "
+          f"{max(cash):.4f}")
+    print("\n  The gap between those two rows is the whole correction. lamCash is about ten")
+    print("  times lam and is dominated by reserve balances at the Fed, which swing with QE")
+    print("  rather than with anything technical about lending. Shaikh's lam is a technical")
+    print("  coefficient -- what a bank must tie up to make a loan -- and it is small and")
+    print("  falling. Required reserves went to zero outright in March 2020, so from then on")
+    print("  lam is just premises.")
+    print("\n  Either way lam < 1 with enormous room, which is what makes i_N < r fall out of")
+    print("  the theory rather than being assumed. But the PROFIT TERM lam*r shrinks by an")
+    print("  order of magnitude, and that is a real change to the theory's content: at")
+    print(f"  lam = {sum(lam)/len(lam):.4f} and r = 0.08, lam*r is "
+          f"{sum(lam)/len(lam)*0.08*1e4:.0f} basis points, not 157.")
 
 
 if __name__ == "__main__":

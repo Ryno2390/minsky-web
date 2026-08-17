@@ -24,7 +24,7 @@ from what came before on this repo.
 FIRST, i < r IS DERIVED. Because lam < 1, the normal rate cannot reach the profit rate,
 so the profit rate of enterprise is positive as a matter of banking's balance-sheet
 structure. The previous model on this repo simply assumed it. In US call-report data lam
-runs 0.081 to 0.359, so the condition holds with room to spare.
+runs 0.016 to 0.130, so the condition holds with enormous room.
 
 SECOND, THE SHORT RATE IS AN INPUT COST TO THE LONG RATE, not a forecast of it. Policy
 reaches the long end through bank funding costs, mechanically. No expectations hypothesis,
@@ -48,11 +48,20 @@ anchor.
 CALIBRATION
 -----------
 Every banking coefficient comes from FDIC call reports and the profit rate from NIPA/Z.1,
-via models/data/usbank.py and models/data/uscorp.py. c2 and d2 are the only two solved
-rather than measured: the split of costs between the two divisions is not separately
-reported, so they are pinned by requiring the model to reproduce the observed term spread.
+via models/data/usbank.py and models/data/uscorp.py.
+
+The term structure is fitted, not chosen. As Shaikh writes it, (10.9) counts RUNGS rather
+than YEARS, so its d moves with whichever maturities happen to be published -- 0.35 to 1.02
+across the ladders in models/term_fit.py. Read as a difference equation in maturity it is
+the Euler step of di/dm = alpha - beta*i, so the funding share must decay with the maturity
+GAP: d = exp(-beta*DELTA). Refit that way, istar and beta hold across every ladder (5.7-6.2%
+and 0.14-0.21 per year), and on the eight-rung ladder -- five degrees of freedom, the
+hardest -- the form beats the best naive two-parameter curve by 2.5x. d2 and c2 here are
+DERIVED from the fitted istar and beta and the 1y->10y gap, so the term spread is an output
+of the calibration rather than an input.
 """
 import argparse
+import math
 import sys
 from pathlib import Path
 
@@ -75,11 +84,23 @@ P = dict(
     gw=0.30,         # inflation responds to the wage share
     pi0=0.035,       # inflation at rest
     # --- banking -----------------------------------------------------------------
+    # lam is Shaikh's p*kappa_fB + rd*d: fixed capital plus REQUIRED reserves per dollar
+    # of loans. It was 0.19 here, taken from (premises + ALL cash and balances due), which
+    # is 91% reserve balances at the Fed and therefore a QE artefact rather than a
+    # technical coefficient -- see models/data/usbank.py. The corrected figure is an
+    # order of magnitude smaller, and it matters: at 0.19 the per-rung profit requirement
+    # lam*r was 157bp against an observed per-rung step of about 20bp, which forced the
+    # implied operating cost negative and made the theory look refuted.
     c1b=0.0488,      # nominal operating cost per $ of short loans (FDIC mean)
-    c2b=0.0250,      # ...of long loans: time deposits cost less to service, solved
-    lam1=0.19,       # capital advanced per $ of loans (FDIC mean)
-    lam2=0.19,
-    d2=0.5281,       # time-deposit funding per $ of long loans, solved for the spread
+    lam1=0.0500,     # capital advanced per $ of loans, FDIC premises + required reserves
+    lam2=0.0500,
+    # The term structure is now CALIBRATED rather than assumed. Fitting the maturity-gap
+    # form of (10.9) to the Treasury curve (models/term_fit.py) gives istar and beta; d2
+    # and c2 are then derived from them and the maturity gap, not solved to hit a spread
+    # someone picked. The 1y->10y gap is 9 years.
+    istar=0.0619,    # the level the curve is heading for, fitted
+    beta=0.1900,     # decay per YEAR of maturity, fitted; half-life 3.6 years
+    gap=9.0,         # maturity gap between the two divisions, years
     theta=0.035,     # rate at which REAL banking costs fall; = pi0 keeps c stationary
     phN=0.50,        # speed the market rate gravitates to the normal rate
     phP=1.00,        # speed policy reaches the market rate
@@ -93,28 +114,41 @@ P0 = 1.0
 
 
 def baseline(p):
-    """The rest point, solved. Only rEn and rstar are free, and both are pinned."""
+    """The rest point, solved. Only rEn and rstar are free, and both are pinned.
+
+    d2 and c2 are DERIVED from the fitted (istar, beta) and the maturity gap rather than
+    chosen. Writing the maturity-gap form of (10.9) between two rungs a gap apart,
+
+        i2 = istar*(1 - D) + i1*D          D = exp(-beta*gap)
+
+    and matching it term by term against  i2 = c2 + i1*d2 + lam2*r  gives d2 = D and
+    c2 = istar*(1 - D) - lam2*r. The term spread is then an OUTPUT of the calibration,
+    not an input someone picked.
+    """
     r = (1.0 - p["omN"]) * p["un"] / p["v"]
-    c1, c2 = P0 * p["c1b"], P0 * p["c2b"]
+    c1 = P0 * p["c1b"]
     i1 = c1 + p["lam1"] * r                       # classical normal short rate
-    i2 = c2 + i1 * p["d2"] + p["lam2"] * r        # ...and long rate, Shaikh (10.9)
+    d2 = math.exp(-p["beta"] * p["gap"])          # funding share, from the fitted decay
+    c2 = p["istar"] * (1.0 - d2) - p["lam2"] * r  # ...and the long division's own cost
+    i2 = c2 + i1 * d2 + p["lam2"] * r             # Shaikh (10.9), maturity-gap form
     rEn = r - i1 * p["dF"]
     ip = i1 - p["sbar"]
     rstar = ip - p["pi0"]                         # so Taylor AGREES at the baseline
-    return dict(r=r, c1=c1, c2=c2, i1=i1, i2=i2, slope=i2 - i1, rEn=rEn, ip=ip,
+    return dict(r=r, c1=c1, c2=c2, d2=d2, i1=i1, i2=i2, slope=i2 - i1, rEn=rEn, ip=ip,
                 rstar=rstar, rB1=(i1 - c1) / p["lam1"],
-                rB2=(i2 - c2 - i1 * p["d2"]) / p["lam2"])
+                rB2=(i2 - c2 - i1 * d2) / p["lam2"])
 
 
 def build(p, bl):
     api("/api/clear")
     b = Builder()
     for nm in ("v", "omN", "un", "kappa", "gn", "dF", "thu", "thb", "phi1", "phi2",
-               "gp", "gw", "pi0", "lam1", "lam2", "d2", "theta", "phN", "phP",
+               "gp", "gw", "pi0", "lam1", "lam2", "theta", "phN", "phP",
                "sbar", "api", "auu"):
         b.param(nm, float(p[nm]))
+    b.param("d2", float(bl["d2"]))                 # DERIVED: exp(-beta*gap)
     b.param("ucr1", float(p["c1b"] / P0))          # REAL unit cost, short division
-    b.param("ucr2", float(p["c2b"] / P0))          # ...long division
+    b.param("ucr2", float(bl["c2"] / P0))          # ...long division, DERIVED
     b.param("rEn", float(bl["rEn"]))
     b.param("rstar", float(bl["rstar"]))
     b.param("piT", float(p["pi0"]))
@@ -222,28 +256,42 @@ def validate(R, p, bl):
     print("  Nothing in this model forecasts anything. The long rate is above the short")
     print("  rate because the long division has its own costs and its own capital to")
     print("  earn on, and funds itself at the short rate.\n")
-    print(f"  {'d2':>7} {'c2':>8} {'i1':>9} {'i2':>9} {'spread':>9} {'rB1':>8} {'rB2':>8}")
-    for d2 in (0.30, 0.53, 0.70, 0.90):
-        q = dict(p); q["d2"] = d2
+    print("  The dial is now the MATURITY GAP, in years, because d2 is no longer a free")
+    print("  parameter -- it is exp(-beta*gap) with beta fitted to the Treasury curve.\n")
+    print(f"  {'gap yr':>7} {'d2':>7} {'c2':>8} {'i1':>9} {'i2':>9} {'spread':>9} "
+          f"{'rB1':>8} {'rB2':>8}")
+    for gap in (1.0, 3.0, 9.0, 19.0, 29.0):
+        q = dict(p); q["gap"] = gap
         b2 = baseline(q)
-        print(f"  {d2:7.2f} {b2['c2']:8.4f} {b2['i1']:9.5f} {b2['i2']:9.5f} "
-              f"{b2['slope']:9.5f} {b2['rB1']:8.5f} {b2['rB2']:8.5f}")
-    print("\n  Both divisions earn exactly r at every setting -- that IS the equalisation")
-    print("  among banks, and it is what fixes the slope. More time-deposit funding means")
-    print("  a bigger interest bill for the long division, so it must charge more.")
+        print(f"  {gap:7.0f} {b2['d2']:7.4f} {b2['c2']:8.4f} {b2['i1']:9.5f} "
+              f"{b2['i2']:9.5f} {b2['slope']:9.5f} {b2['rB1']:8.5f} {b2['rB2']:8.5f}")
+    print("\n  Both divisions earn exactly r at every gap -- that IS the equalisation among")
+    print("  banks, and it is what fixes the slope. The spread widens with maturity and")
+    print("  SATURATES, which is the shape a yield curve actually has, and it comes out of")
+    print("  the cost structure rather than being imposed.")
 
     print("\n" + "=" * 78)
     print("VALIDATION 2 · WHEN DOES THE CURVE INVERT?")
     print("=" * 78)
-    print("  Shaikh says an inversion is not a forecast of recession but a symptom of")
-    print("  long-loan demand being weak against long-deposit supply. Here that shows up")
-    print("  as the long division's own costs falling relative to its funding bill.\n")
-    print(f"  {'c2':>8} {'spread':>9}  shape")
-    for c2 in (0.045, 0.035, 0.025, 0.015, 0.005):
-        q = dict(p); q["c2b"] = c2
+    print("  The maturity-gap form makes this exact. Substituting d2 = D into (10.9),")
+    print("\n      spread = i2 - i1 = (istar - i1) * (1 - exp(-beta*gap))\n")
+    print("  The second factor is positive for any positive gap. So the curve slopes up if")
+    print("  and only if the SHORT RATE IS BELOW istar -- the level the curve is heading")
+    print("  for, which is the long-run price of production of finance. Nothing about")
+    print("  expectations, and nothing about forecasting a recession.\n")
+    print(f"  {'i1':>9} {'istar':>9} {'i1 - istar':>11} {'spread':>10}  shape")
+    for shift in (-0.020, -0.010, 0.0, 0.005, 0.010, 0.020):
+        q = dict(p); q["c1b"] = p["c1b"] + shift          # push the short rate around
         b2 = baseline(q)
-        shape = "upward" if b2["slope"] > 0 else "INVERTED"
-        print(f"  {c2:8.4f} {b2['slope']:9.5f}  {shape}")
+        shape = "upward" if b2["slope"] > 0 else ("flat" if abs(b2["slope"]) < 1e-9
+                                                  else "INVERTED")
+        print(f"  {b2['i1']:9.5f} {p['istar']:9.5f} {b2['i1']-p['istar']:11.5f} "
+              f"{b2['slope']:10.5f}  {shape}")
+    print("\n  The sign flips exactly at i1 = istar, as the algebra says. And it gives the")
+    print("  inversion a Shaikhian reading that is testable: an inverted curve says the")
+    print("  short rate has been driven above the rate at which banking can reproduce")
+    print("  itself in the long run. That is a statement about policy relative to a")
+    print("  measured cost structure, not a market forecast.")
 
     print("\n" + "=" * 78)
     print("VALIDATION 3 · POLICY REACHES THE LONG END THROUGH COSTS")

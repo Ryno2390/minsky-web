@@ -54,11 +54,15 @@ def api(path, body=None, method="POST"):
 class Builder:
     """Places items, compiles equations, and remembers what every name refers to."""
 
-    CLEAR = 110.0          # how far a new item must sit from any existing one. An IntOp
-    #                        icon is wider than it looks, and the engine also NUDGES one
-    #                        after creation -- an integral asked for at (120,192) was
-    #                        found afterwards at (52,255) -- so both the margin and the
-    #                        re-snapshot in eq() are needed, not one or the other.
+    # Placement works on RECTANGLES, using the w and h the engine reports for every item.
+    # It used to use a single scalar clearance, which is wrong in both directions at once:
+    # an Operation icon is 29x26 and a PlotWidget is 151x151, so one number is either too
+    # mean for the plots or absurdly wasteful for the operations. Measured on the term
+    # structure model: Operation 29x26, VarConstant 37x22, Variable 36-80 x 26-28,
+    # IntOp 81-121 x 44, PlotWidget 151x151. Godley tables are larger again.
+    PAD = 14.0             # breathing room between two icons
+    NEW_W, NEW_H = 130.0, 60.0   # generous box for whatever is about to be placed; the
+    #                              real size is not known until the engine has made it
 
     def __init__(self):
         self.ref = {}          # name -> ref of the item whose OUTPUT carries that name
@@ -76,8 +80,12 @@ class Builder:
             self._x += 400
 
     def _free(self, x, y):
-        return all(abs(x - px) >= self.CLEAR or abs(y - py) >= self.CLEAR
-                   for px, py in self._taken)
+        """Would a NEW_W x NEW_H box centred here overlap anything already placed?"""
+        for px, py, pw, ph in self._taken:
+            if (abs(x - px) * 2 < self.NEW_W + pw + 2 * self.PAD
+                    and abs(y - py) * 2 < self.NEW_H + ph + 2 * self.PAD):
+                return False
+        return True
 
     def _at(self):
         """Somewhere genuinely free. The real layout comes from /api/layout at the end.
@@ -95,21 +103,50 @@ class Builder:
             self._step()
             guard += 1
         x, y = self._x, self._y
-        self._taken.append((x, y))
+        self._taken.append((x, y, self.NEW_W, self.NEW_H))
         self._step()
         return [x, y]
 
     def _note_engine_items(self):
-        """Record where the engine put things we did not place ourselves."""
-        for i in api("/api/state", method="GET")["items"]:
-            at = i.get("at") or ([i["x"], i["y"]] if "x" in i and "y" in i else None)
-            if at:
-                self._taken.append((float(at[0]), float(at[1])))
+        """Re-read positions and sizes with an explicit GET.
+
+        Only worth calling when something may have moved WITHOUT going through _add --
+        _add already refreshes from its own response, so the normal build path never
+        needs this.
+
+        The size fields are `w` and `h`, not `width`/`height` -- an earlier version of this
+        looked for the latter, found nothing, and silently fell back to treating every icon
+        as a point. That matters most for the two biggest things on a canvas: a PlotWidget
+        is 151x151 and a Godley table is larger again, so a cursor that thinks they are
+        points will march straight through them on a model with a few hundred items.
+
+        This REPLACES the record rather than appending to it, because the engine moves
+        items after creation and a stale entry would fence off ground that is now free.
+        """
+        self._absorb(api("/api/state", method="GET")["items"])
 
     # ---------- items ----------
     def _add(self, spec):
+        """Place an item, and refresh the occupancy map from the SAME response.
+
+        `POST /api/item` already answers with the whole state snapshot, so the map costs
+        nothing extra here. Fetching it separately once per equation instead made the
+        builder quadratic -- measured at 688ms, 1701ms and 2843ms per equation over the
+        first, second and third ten equations of a model, i.e. one extra full round trip
+        whose payload grows with every item placed.
+        """
         spec.setdefault("at", self._at())
-        return str(api("/api/item", spec)["index"])
+        resp = api("/api/item", spec)
+        state = resp.get("state")
+        if state and state.get("items"):
+            self._absorb(state["items"])
+        return str(resp["index"])
+
+    def _absorb(self, items):
+        """Replace the occupancy map from an engine snapshot, positions AND sizes."""
+        self._taken = [(float(i["x"]), float(i["y"]),
+                        float(i.get("w") or self.NEW_W), float(i.get("h") or self.NEW_H))
+                       for i in items if i.get("x") is not None and i.get("y") is not None]
 
     def param(self, name, value, *, slider=None):
         """A named constant the user can pull on."""
@@ -242,7 +279,6 @@ class Builder:
     # ---------- equations ----------
     def eq(self, name, expr):
         """Define flow variable `name` as `expr`, emitting the blocks and the wires."""
-        self._note_engine_items()      # positions move under us between equations
         try:
             tree = ast.parse(expr, mode="eval").body
         except SyntaxError as ex:

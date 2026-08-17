@@ -4,9 +4,34 @@ The model is built entirely over HTTP -- no direct engine calls -- and then chec
 against an analytic solution, so a server that wires the wrong ports fails loudly
 rather than streaming plausible numbers.
 """
-import math, sys
+import math, os, sys
 from fastapi.testclient import TestClient
 from minskyweb.server import app, require_idle, _RUNNING, SAVE_DIR
+from minskyweb.session import find_minsky
+
+
+def _examples():
+    """Locate the engine's own bundled example models.
+
+    Several sections load these to check that a real Minsky document round-trips. The
+    path used to be written out in full, 28 times, which meant the suite only ran on the
+    one machine it was written on -- not on another Mac with a different username, and
+    not on a PC at all. Resolved the same way session.py resolves the engine itself.
+    """
+    home, _ = find_minsky()
+    for cand in (os.environ.get("MINSKY_HOME"), home, os.path.expanduser("~/minsky")):
+        if cand:
+            d = os.path.join(cand, "examples")
+            if os.path.isdir(d):
+                return d
+    raise SystemExit(
+        "cannot find Minsky's examples/ directory. Point MINSKY_HOME at the Minsky "
+        "source tree -- the one containing examples/ -- and run again.")
+
+
+#: Absolute path to Minsky's examples/. Interpolated into the paths below rather than
+#: hardcoded, so the suite travels with the repo.
+EXAMPLES = _examples()
 
 
 _PRE_EXISTING = {f.name for f in SAVE_DIR.iterdir() if f.is_file()}
@@ -174,7 +199,7 @@ check("lists model directories", any(r["files"] for r in roots),
 
 check("refuses non-.mky", c.post("/api/load?path=/etc/passwd").status_code == 422)
 check("refuses traversal", c.post(
-    "/api/load?path=/Users/ryneschultz/minsky/examples/../../../etc/hosts"
+    f"/api/load?path={EXAMPLES}/../../../etc/hosts"
     ).status_code in (403, 404))
 check("refuses .mky outside roots", c.post(
     f"/api/load?path=/tmp/nope.mky").status_code == 404)
@@ -1162,7 +1187,7 @@ check("the diagnosis is kept for the log", bool(body.get("diagnostic")))
 print("\n31. history is ours, not the engine's")
 # The engine's history cannot be driven correctly from outside its own client, and every
 # way it fails reports success. These check the symptoms, one per engine trap.
-EX = "/Users/ryneschultz/minsky/examples/GoodwinLinear02.mky"
+EX = f"{EXAMPLES}/GoodwinLinear02.mky"
 import os
 if os.path.exists(EX):
     def load(): c.post("/api/load", params={"path": EX})
@@ -1294,7 +1319,7 @@ check("Save As my.model writes my.model.mky",
 # load() reports success on any well-formed XML and yields an EMPTY model, so a damaged
 # file replaced the open model with nothing, answered 200, and left its own name in the
 # title bar for the next Save to write over
-EX = "/Users/ryneschultz/minsky/examples/GoodwinLinear02.mky"
+EX = f"{EXAMPLES}/GoodwinLinear02.mky"
 if os.path.exists(EX):
     c.post("/api/load", params={"path": EX})
     n = len(c.get("/api/state").json()["items"])
@@ -1640,7 +1665,7 @@ check("and the canvas agrees with the values panel",
 print("\n42. the unsaved marker means what it says")
 import os
 from minskyweb.server import SAVE_DIR
-EX = "/Users/ryneschultz/minsky/examples/GoodwinLinear02.mky"
+EX = f"{EXAMPLES}/GoodwinLinear02.mky"
 if os.path.exists(EX):
     c.post("/api/load", params={"path": EX})
     check("a freshly opened file is not edited",
@@ -1670,7 +1695,7 @@ if os.path.exists(EX):
 
 print("\n43. editing what is inside a group")
 import os
-EX = "/Users/ryneschultz/minsky/examples/GoodwinLinear02.mky"
+EX = f"{EXAMPLES}/GoodwinLinear02.mky"
 if os.path.exists(EX):
     def load_grouped():
         c.post("/api/load", params={"path": EX})
@@ -2188,7 +2213,7 @@ print("\n50. operations that used to succeed while changing nothing (or the wron
 # Grouping a Godley table re-scopes its stock variables into the group while the table's
 # own references stay outside, so reset fails with "Invalid valueId" -- answered 200 with
 # a full snapshot, on 9 of the 37 shipped examples.
-EXD = "/Users/ryneschultz/minsky/examples"
+EXD = EXAMPLES
 _ex = os.path.join(EXD, "LoanableFunds.mky")
 if os.path.exists(_ex):
     c.post("/api/load", params={"path": _ex})
@@ -2325,7 +2350,7 @@ check("with nothing deleted", len(_pos()) == 6, str(len(_pos())))
 # BasicGrowthModel translates every survivor by (-106,-108), which is exactly what a
 # position-keyed pin cannot survive -- it matched nothing, or worse, matched a DIFFERENT
 # item that had just slid onto the remembered coordinates.
-_ex = "/Users/ryneschultz/minsky/examples/BasicGrowthModel.mky"
+_ex = f"{EXAMPLES}/BasicGrowthModel.mky"
 if os.path.exists(_ex):
     _st = c.post("/api/load", params={"path": _ex}).json()
     _want = {i["ref"]: i.get("name") for i in _st["items"] if i["ref"] in ("12","14","15")}
@@ -2437,7 +2462,7 @@ def _engine_wires():
         if a and b: out.append((typ[a[0]], a[1], typ[b[0]], b[1]))
     return out
 
-EX = "/Users/ryneschultz/minsky/examples/GoodwinLinear02.mky"
+EX = f"{EXAMPLES}/GoodwinLinear02.mky"
 if os.path.exists(EX):
     _st = c.post("/api/load", params={"path": EX}).json()
     _n = len([w for w in _st["wires"] if not w.get("desync")])
@@ -2509,7 +2534,7 @@ check("with no extra item left behind",
 print("\n53. uploads and paths that used to reach further than they should")
 import concurrent.futures as _cf
 from minskyweb.server import UPLOAD_DIR as _UP
-_good = open("/Users/ryneschultz/minsky/examples/GoodwinLinear02.mky", "rb").read()
+_good = open(f"{EXAMPLES}/GoodwinLinear02.mky", "rb").read()
 
 # the move to the destination happened BEFORE the model was read, so an upload that was
 # then rejected had already overwritten the model of the same name -- under a reply
@@ -2527,7 +2552,7 @@ try:
 
     # the staging name was derived from the upload's name, so two uploads of the same
     # name raced and one deleted the other's bytes mid-move
-    _other = open("/Users/ryneschultz/minsky/examples/PredatorPrey.mky", "rb").read()
+    _other = open(f"{EXAMPLES}/PredatorPrey.mky", "rb").read()
     def _up(payload):
         return c.post("/api/upload",
                       files={"file": ("race.mky", payload, "application/xml")}).status_code
@@ -2625,7 +2650,7 @@ print("\n55. saving a Godley model does not churn the history")
 # Saving reads the file back to reconcile a table's column order, and that was reported
 # as "reloaded" for every model containing a table -- forcing a history entry on every
 # save whether or not anything had changed.
-_ex = "/Users/ryneschultz/minsky/examples/LoanableFunds.mky"
+_ex = f"{EXAMPLES}/LoanableFunds.mky"
 if os.path.exists(_ex):
     c.post("/api/load", params={"path": _ex})
     check("a freshly opened model has nothing to undo",
@@ -2720,7 +2745,7 @@ check("arranging an empty canvas says so, and does not 500",
       c.post("/api/layout").status_code in (409, 422),
       str(c.post("/api/layout").status_code))
 
-_gw = "/Users/ryneschultz/minsky/examples/GoodwinLinear.mky"
+_gw = f"{EXAMPLES}/GoodwinLinear.mky"
 if Path(_gw).exists():
     _s0 = c.post(f"/api/load?path={_gw}").json()
     _before = {i["ref"]: (i["x"], i["y"]) for i in _s0["items"]}
@@ -2780,7 +2805,7 @@ if Path(_gw).exists():
 # A group's interior is laid out as its own scope, before the canvas that holds it.
 # Recording "a group carries its members" as a carrier relationship instead collapsed
 # every member onto the group and left the inside exactly as messy as it was.
-_g02 = "/Users/ryneschultz/minsky/examples/GoodwinLinear02.mky"
+_g02 = f"{EXAMPLES}/GoodwinLinear02.mky"
 if Path(_g02).exists():
     _s0 = c.post(f"/api/load?path={_g02}").json()
     _mem0 = {i["ref"]: (i["x"], i["y"]) for i in _s0["items"] if ":" in i["ref"]}
@@ -2904,7 +2929,7 @@ check("a name with nothing to mangle still works",
       _st["inits"].get(_plain["valueId"]) in (1.5, "1.5"), _plain.get("valueId"))
 
 # every variable on the canvas must be resolvable, or some of them look uneditable
-_ex = "/Users/ryneschultz/minsky/examples/EndogenousMoney.mky"
+_ex = f"{EXAMPLES}/EndogenousMoney.mky"
 if Path(_ex).exists():
     _st = c.post(f"/api/load?path={_ex}").json()
     _vars = [i for i in _st["items"] if i["classType"].startswith("Variable:")]
@@ -3110,7 +3135,7 @@ for _op, _cls in (("data","DataOp"), ("userFunction","UserFunction")):
 c.post("/api/clear")
 
 # --- export: the engine draws its own canvas and plots ---
-_gw = "/Users/ryneschultz/minsky/examples/GoodwinLinear.mky"
+_gw = f"{EXAMPLES}/GoodwinLinear.mky"
 if Path(_gw).exists():
     c.post(f"/api/load?path={_gw}")
     # an SVG opens with an XML declaration, not with the <svg tag
@@ -3181,7 +3206,7 @@ check("a divider goes when its pane does",
 
 print("\n63. recording the canvas as it runs")
 import shutil as _sh
-_gw = "/Users/ryneschultz/minsky/examples/GoodwinLinear.mky"
+_gw = f"{EXAMPLES}/GoodwinLinear.mky"
 if not _sh.which("ffmpeg"):
     check("ffmpeg is present to encode with", False, "install ffmpeg to test recording")
 elif Path(_gw).exists():
@@ -3255,7 +3280,7 @@ print("\n64. what each plot on the canvas draws")
 # then 2*numLines y-data ports (first numLines left axis, next right), then 2*numLines
 # x-data ports. Treating every wire as a series plots the axis limits as data, and a
 # wired x port means a phase portrait rather than a time series.
-_ml = "/Users/ryneschultz/minsky/examples/MinskyNonLinear.mky"
+_ml = f"{EXAMPLES}/MinskyNonLinear.mky"
 if Path(_ml).exists():
     _st = c.post(f"/api/load?path={_ml}").json()
     _plots = [i for i in _st["items"] if i["classType"].startswith("Plot")]
@@ -3293,7 +3318,7 @@ if Path(_ml).exists():
     check("and so are its axis labels",
           any(p["plot"].get("xlabel") or p["plot"].get("ylabel") for p in _plots))
 
-_em = "/Users/ryneschultz/minsky/examples/EndogenousMoney.mky"
+_em = f"{EXAMPLES}/EndogenousMoney.mky"
 if Path(_em).exists():
     _st = c.post(f"/api/load?path={_em}").json()
     _plots = [i for i in _st["items"] if i["classType"].startswith("Plot")]
@@ -3440,7 +3465,7 @@ c.post("/api/clear")
 
 # find uses. Minsky's own findVariableDefinition SEGFAULTS on every input in this build,
 # so this walks the wire record instead -- see docs/MINSKY_HEADLESS.md.
-_gw = "/Users/ryneschultz/minsky/examples/GoodwinLinear.mky"
+_gw = f"{EXAMPLES}/GoodwinLinear.mky"
 if Path(_gw).exists():
     _st = c.post(f"/api/load?path={_gw}").json()
     _byname = {(i.get("name") or "").lstrip(":"): i for i in _st["items"] if i.get("name")}
@@ -3457,7 +3482,7 @@ if Path(_gw).exists():
               c.get(f"/api/item/{_byname['v']['ref']}/instances").json()["definedBy"] == [],
               "a parameter is an input; nothing defines it")
 
-_em = "/Users/ryneschultz/minsky/examples/EndogenousMoney.mky"
+_em = f"{EXAMPLES}/EndogenousMoney.mky"
 if Path(_em).exists():
     _st = c.post(f"/api/load?path={_em}").json()
     _ln = next((i for i in _st["items"]
@@ -3518,7 +3543,7 @@ def _stream(body, cap=4000):
             got.append(m)
     return got, _time.monotonic() - t0
 
-_gw = "/Users/ryneschultz/minsky/examples/GoodwinLinear.mky"
+_gw = f"{EXAMPLES}/GoodwinLinear.mky"
 if Path(_gw).exists():
     c.post(f"/api/load?path={_gw}")
     _fast, _t_fast = _stream({"cmd":"run","steps":4000,"tmax":2.0})
@@ -3612,7 +3637,7 @@ check("the choice is remembered", '"minsky.speed"' in _ui)
 
 
 print("\n68. equations, units, and user functions")
-_gw = "/Users/ryneschultz/minsky/examples/GoodwinLinear.mky"
+_gw = f"{EXAMPLES}/GoodwinLinear.mky"
 if Path(_gw).exists():
     c.post(f"/api/load?path={_gw}")
     for _f, _sig in (("svg", b"<?xml"), ("png", b"\x89PNG")):
@@ -3746,8 +3771,8 @@ check("and it is in the palette now it can be given one",
 print("\n69. the Phillips diagram, and loading a data series")
 # A Phillips diagram is built from Godley tables. A model with none produces a near-empty
 # render rather than an error, which would reach the user as a blank panel.
-_em = "/Users/ryneschultz/minsky/examples/EndogenousMoney.mky"
-_gw = "/Users/ryneschultz/minsky/examples/GoodwinLinear.mky"
+_em = f"{EXAMPLES}/EndogenousMoney.mky"
+_gw = f"{EXAMPLES}/GoodwinLinear.mky"
 if Path(_em).exists():
     c.post(f"/api/load?path={_em}")
     _r = c.get("/api/phillips?format=svg&theme=dark")
@@ -3971,7 +3996,7 @@ check("the two axes are scaled apart inside an icon as well",
 check("a plot is drawn at the size the engine gives it",
       "const isChart = cls === \"plot\"" in _ui and "hw = it.w / 2" in _ui)
 
-_gw = "/Users/ryneschultz/minsky/examples/GoodwinLinear.mky"
+_gw = f"{EXAMPLES}/GoodwinLinear.mky"
 if Path(_gw).exists():
     _st = c.post(f"/api/load?path={_gw}").json()
     _p = next((i for i in _st["items"] if i["classType"].startswith("Plot")), None)
@@ -3986,7 +4011,7 @@ c.post("/api/clear")
 
 
 print("\n72. publication tabs")
-_gw = "/Users/ryneschultz/minsky/examples/GoodwinLinear.mky"
+_gw = f"{EXAMPLES}/GoodwinLinear.mky"
 if Path(_gw).exists():
     _st = c.post(f"/api/load?path={_gw}").json()
     _t = c.get("/api/pubtabs").json()["tabs"]
@@ -4083,7 +4108,7 @@ def _is_real(fmt, body):
         ok = ok and b"<svg" in body[:400]
     return ok and len(body) > 300
 
-_gw = "/Users/ryneschultz/minsky/examples/GoodwinLinear.mky"
+_gw = f"{EXAMPLES}/GoodwinLinear.mky"
 if Path(_gw).exists():
     c.post(f"/api/load?path={_gw}")
     _plot = next((i["ref"] for i in c.get("/api/state").json()["items"]
@@ -4119,7 +4144,7 @@ if Path(_gw).exists():
                   for f in ("svg", "png", "pdf", "ps")),
           c.get("/api/equations?format=tiff").text[:120])
 
-_lf = "/Users/ryneschultz/minsky/examples/LoanableFunds.mky"
+_lf = f"{EXAMPLES}/LoanableFunds.mky"
 if Path(_lf).exists():
     c.post(f"/api/load?path={_lf}")
     for _f in ("svg", "png", "pdf", "ps"):

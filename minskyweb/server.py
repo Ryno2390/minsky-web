@@ -3866,21 +3866,19 @@ def create_app() -> FastAPI:
             args = list(raw.argNames())
             known = set(a for a in args if a) | EXPR_BUILTINS
             free = sorted(n for n in _expr_names(body) if n not in known)
-            if free:
-                vars_ = {n for n in free if _variable_named(mk, n)}
-                if vars_:
-                    raise HTTPException(
-                        422,
-                        f"{', '.join(sorted(vars_))} "
-                        f"{'is a variable' if len(vars_) == 1 else 'are variables'} in "
-                        f"this model, not an argument of this function. Minsky will bind "
-                        f"it and then evaluate it as 0 for almost every step of a run, "
-                        f"reporting nothing. Wire the value into the function instead, or "
-                        f"name it as an argument: "
-                        f"{raw.name()}({', '.join(list(args) + sorted(vars_))}) = ...")
+            # A name that IS a model variable is legitimate: the expression reads that
+            # variable, with no wire. That used to be a trap -- the engine bound it to the
+            # variable's own storage while the solver was evaluating into a copy, so it
+            # read correctly at reset and then as 0 for nearly every step of a run -- and
+            # this endpoint refused it for that reason. Fixed in the engine (see
+            # engine-patches/README.md), so it is allowed, and only a name that is nothing at
+            # all is still refused: exprtk will not compile it, and a function that does
+            # not compile evaluates to 0 rather than failing.
+            unknown = [n for n in free if not _variable_named(mk, n)]
+            if unknown:
                 raise HTTPException(
                     422,
-                    f"{', '.join(free)} is not an argument of this function"
+                    f"{', '.join(unknown)} is not an argument of this function"
                     f"{' (its arguments are ' + ', '.join(args) + ')' if any(args) else ''}"
                     f" and is nothing else in the model. The expression will not compile, "
                     f"and a function that does not compile evaluates to 0 rather than "

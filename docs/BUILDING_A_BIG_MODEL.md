@@ -6,25 +6,32 @@ claim here was measured, not inferred.
 
 Ordered by how much damage each one does silently.
 
-## 1. A user function that names a model variable is wrong during a run — fixed
+## 1. A user function naming a model variable was wrong during a run — fixed in the engine
 
-`UserFunction::compile()` walks the identifiers in the expression and binds any that is a
-**model variable** straight to that variable's storage. It looks like a useful shorthand:
-write `0.03*K` and the function reads `K` with no wire at all. It even reads correctly at
-reset.
+`UserFunction::compile()` bound any model variable named in the expression straight to
+that variable's storage. It looks like a useful shorthand: write `0.03*K` and the function
+reads `K` with no wire at all. It even reads correctly at reset.
 
-Then it evaluates as 0 for essentially every step of a run.
+Then it read stale data for the whole run, because `RungeKutta::evalEquations` evaluates
+into a **copy** of the flow vector (`auto flow(flowVars)`), so the global vector the
+expression was bound to is not where the equations are being computed.
 
 Measured on `K' = 0.03·K`, K(0)=100, against the analytic `100·e^{0.03t}`:
 
-| how the derivative is built | implicit solver | explicit solver |
+| how the derivative is built | before | after |
 |---|---|---|
-| wired blocks | exact, 4e-12 | exact, 1e-15 |
-| user function, input **wired** | refused with a clear message | exact, 1e-15 |
-| user function, `K` **by name** | 26% low, `dK` = 0 on 143/144 steps | 26% low, 0 on 145/146 |
+| wired blocks | exact, 4e-12 | unchanged |
+| user function, input **wired** | exact on the explicit solver | unchanged |
+| user function, `K` **by name** | 26% low, `dK` = 0 on 143/144 steps | **exact, 1.26e-15, 0 zeros** |
 
-No error frame on either solver. The model looks right on the canvas, and the run is
-wrong. **Now refused** by `POST /api/item/{ref}/expression`, with the fix spelled out.
+The values now travel as inputs like any other, read from the arrays the solver passes.
+The patch is in `engine-patches/`.
+
+One thing had to be tightened along with it: `deriv()` switches on the argument count, and
+a function that declares none but reads model variables would have taken the zero-argument
+branch and put a **zero into the Jacobian**. The implicit method has never had a
+derivative for a user function, and now still says so rather than integrating with a wrong
+one.
 
 ## 2. A user function's arguments live somewhere else — fixed
 

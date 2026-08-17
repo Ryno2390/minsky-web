@@ -35,27 +35,23 @@ index 55c0015c..9b07e517 100644
    }
  
 diff --git a/engine/equations.cc b/engine/equations.cc
-index 5186e18e..48bad904 100644
+index 5186e18e..2f9c7347 100644
 --- a/engine/equations.cc
 +++ b/engine/equations.cc
-@@ -392,13 +392,34 @@ namespace MathDAG
+@@ -392,13 +392,46 @@ namespace MathDAG
                  ev.push_back(EvalOpPtr(type(), state, result, *argIdx[0][0], *argIdx[1][0])); 
                  break;
                case userFunction:
 -                for (size_t i=0; i<arguments.size(); ++i)
 -                  if (arguments[i].empty())
--                    {
--                      argIdx[i].emplace_back(VariableType::tempFlow);
--                      argIdx[i].back()->allocValue();
--                    }
--                ev.push_back(EvalOpPtr(type(), state, result, *argIdx[0][0], *argIdx[1][0])); 
 +                {
 +                  // A user function takes as many arguments as its name declares, not
 +                  // two. `arguments` holds one entry per input port, plus a final entry
 +                  // listing the variables the expression names -- that one is there to
 +                  // order the evaluation and is not an input, so it is not counted here.
++                  auto* uf=dynamic_cast<UserFunction*>(state.get());
 +                  size_t nArgs=0;
-+                  if (auto uf=dynamic_cast<UserFunction*>(state.get()))
++                  if (uf)
 +                    nArgs=std::min(uf->argNames.size(), arguments.size());
 +                  for (size_t i=0; i<arguments.size(); ++i)
 +                    if (arguments[i].empty())
@@ -72,15 +68,45 @@ index 5186e18e..48bad904 100644
 +                  // the first two travel in in1/in2 like every other operation; the rest
 +                  // have nowhere else to go
 +                  if (auto s=dynamic_cast<ScalarEvalOp*>(e.get()))
-+                    for (size_t i=2; i<nArgs; ++i)
-+                      s->inExtra.emplace_back(unsigned(argIdx[i][0]->idx()),
-+                                              argIdx[i][0]->isFlowVar());
+                     {
+-                      argIdx[i].emplace_back(VariableType::tempFlow);
+-                      argIdx[i].back()->allocValue();
++                      for (size_t i=2; i<nArgs; ++i)
++                        s->inExtra.emplace_back(unsigned(argIdx[i][0]->idx()),
++                                                argIdx[i][0]->isFlowVar());
++                      // then the model variables the expression names. They are inputs
++                      // like any other and are read from the arrays the solver passes;
++                      // reading them from the variable's own storage gave stale values
++                      // for the whole run.
++                      const size_t nExt=uf? uf->externalSymbols().size(): 0;
++                      if (nExt && !argIdx.empty())
++                        for (size_t k=0; k<nExt && k<argIdx.back().size(); ++k)
++                          s->inExtra.emplace_back(unsigned(argIdx.back()[k]->idx()),
++                                                  argIdx.back()[k]->isFlowVar());
+                     }
+-                ev.push_back(EvalOpPtr(type(), state, result, *argIdx[0][0], *argIdx[1][0])); 
 +                  ev.push_back(e);
 +                }
                  break;
                case data:
                  if (!argIdx.empty() && argIdx[0].size()==1)
-@@ -905,7 +926,7 @@ namespace MathDAG
+@@ -742,9 +775,13 @@ namespace MathDAG
+               r->arguments[i-1].push_back(getNodeFromWire(*w));
+         if (auto uf=dynamic_cast<const UserFunction*>(&op))
+           {
+-            // add external variable references as additional "arguments" in order to determine the correct evaluation order
++            // The model variables the expression names go in as an additional "argument"
++            // slot. That was already here to get the evaluation ORDER right; their values
++            // now travel the same way too, so this must list them in exactly the order
++            // UserFunction::compile() bound them -- hence externalSymbols() rather than
++            // symbolNames(), which also contains the function's own arguments.
+             r->arguments.emplace_back();
+-            for (auto& i: uf->symbolNames())
++            for (auto& i: uf->externalSymbols())
+               {
+                 auto vv=minsky.variableValues.find(valueId(op.group.lock(), i));
+                 if (vv!=minsky.variableValues.end())
+@@ -905,7 +942,7 @@ namespace MathDAG
      o << "\\begin{eqnarray*}\n";
      // output user defined functions
      for (auto& i: userDefinedFunctions)
@@ -90,23 +116,28 @@ index 5186e18e..48bad904 100644
        {
          if (dynamic_cast<const IntegralInputVariableDAG*>(i) ||
 diff --git a/engine/evalOp.cc b/engine/evalOp.cc
-index 64c3e3a2..c0964716 100644
+index 64c3e3a2..82df54e1 100644
 --- a/engine/evalOp.cc
 +++ b/engine/evalOp.cc
-@@ -62,6 +62,29 @@ namespace minsky
-             fv[out+i]=evaluate(flow1? fv[in1[i]]: sv[in1[i]], x2);
-           }
-         break;
-+      default:
-+        // More than two arguments: a user function with a longer argument list. Every
-+        // argument is gathered and passed; the third onwards used to be evaluated as
-+        // zero, silently.
+@@ -40,6 +40,35 @@ namespace minsky
+   void ScalarEvalOp::eval(double fv[], size_t n, const double sv[])
+   {
+     assert(out>=0);
++    if (!inExtra.empty() || numArgs()>2)
++      {
++        // More than two inputs. Only a user function has them: its arguments past the
++        // second, and the model variables its expression names. Those named variables
++        // are read from the arrays the SOLVER passes, like every other input -- the
++        // expression used to read them straight out of ValueVector::flowVars, which is
++        // not where the equations are being evaluated during a run.
 +        assert(out+in1.size()<=n);
-+        for (unsigned i=0; i<in1.size(); ++i)
++        const size_t reps=in1.empty()? 1: in1.size();
++        for (size_t i=0; i<reps; ++i)
 +          {
 +            vector<double> args;
 +            args.reserve(2+inExtra.size());
-+            args.push_back(flow1? fv[in1[i]]: sv[in1[i]]);
++            if (!in1.empty())
++              args.push_back(flow1? fv[in1[i]]: sv[in1[i]]);
 +            if (i<in2.size())
 +              {
 +                double x2=0;
@@ -119,11 +150,29 @@ index 64c3e3a2..c0964716 100644
 +              args.push_back(j.second? fv[j.first]: sv[j.first]);
 +            fv[out+i]=evaluateN(args);
 +          }
-+        break;
-       }
- 
-     // This check may well be obsolete. ecolab::Plot will now elide
-@@ -347,6 +370,16 @@ namespace minsky
++        return;
++      }
+     switch (numArgs())
+       {
+       case 0:
+@@ -94,6 +123,16 @@ namespace minsky
+                      const double sv[], const double fv[])
+   {
+     assert(out>=0 && size_t(out)<n);
++    if (!inExtra.empty() || numArgs()>2)
++      {
++        // No derivative is available here. Only a user function has more than two inputs,
++        // and its derivative is unknown -- d1() raises the error that says so. Falling
++        // through to the switch below would take the numArgs()==0 branch for a function
++        // that declares no arguments but reads model variables, and quietly put a ZERO
++        // into the Jacobian rather than refusing.
++        d1(0,0);
++        throw error("no derivative is available for this operation");
++      }
+     switch (numArgs())
+       {
+       case 0:
+@@ -347,6 +386,20 @@ namespace minsky
    double EvalOp<OperationType::userFunction>::evaluate(double in1, double in2) const
    {return state? dynamic_cast<UserFunction&>(*state).evaluate(in1,in2): 0;}
    template <>
@@ -135,7 +184,11 @@ index 64c3e3a2..c0964716 100644
 +  }
 +  template <>
 +  double EvalOp<OperationType::userFunction>::evaluateN(const vector<double>& args) const
-+  {return state? dynamic_cast<UserFunction&>(*state)(args): 0;}
++  {
++    // `args` carries the declared arguments and then the model variables the expression
++    // names, in the order compile() bound them
++    return state? dynamic_cast<UserFunction&>(*state).evaluateAll(args): 0;
++  }
 +  template <>
    double EvalOp<OperationType::userFunction>::d1(double x1, double x2) const
    {throw error("user functions cannot be used with an implicit method");}
@@ -309,10 +362,104 @@ index 527556ba..fafcf5ce 100644
      if (mouseFocus)
        {
 diff --git a/model/userFunction.cc b/model/userFunction.cc
-index bd24621c..aa74c2dc 100644
+index bd24621c..6e695fa7 100644
 --- a/model/userFunction.cc
 +++ b/model/userFunction.cc
-@@ -243,9 +243,57 @@ namespace minsky
+@@ -77,6 +77,9 @@ namespace minsky
+   vector<string> UserFunction::symbolNames() const {return {};}
+   void UserFunction::compile() {}
+   double UserFunction::evaluate(double, double) {return {};}
++  vector<string> UserFunction::externalSymbols() const {return {};}
++  double UserFunction::evaluateAll(const vector<double>&) {return {};}
++  void UserFunction::updatePorts() {}
+   double UserFunction::operator()(const vector<double>& p) {}
+   Units UserFunction::units(bool check) const {return {};}
+   string UserFunction::description(const string&) {return {};}
+@@ -180,15 +183,31 @@ namespace minsky
+     impl->symbols.clear();
+     impl->functions.clear();
+     addTimeVariables(impl->symbols);
++
++    // Arguments first, so that an argument shadows a model variable of the same name
++    // rather than the other way round.
++    argVals.resize(argNames.size());
++    for (size_t i=0; i<argNames.size(); ++i)
++      impl->symbols.add_variable(argNames[i], argVals[i]);
++
++    // Model variables the expression names are bound to storage of OUR OWN, which the
++    // evaluator fills on every call. They used to be bound to the variable's own slot in
++    // ValueVector::flowVars, which reads correctly at reset and then reads STALE data for
++    // the whole run: RungeKutta::evalEquations works in a COPY of that vector
++    // (`auto flow(flowVars)`), so the global one is not where the equations are being
++    // computed. The symptom was an expression that quietly evaluated to 0 for nearly
++    // every step, on either solver, with nothing reported.
++    const auto external=externalSymbols();
++    externalVals.assign(external.size(), 0.0);
++    for (size_t i=0; i<external.size(); ++i)
++      impl->symbols.add_variable(external[i], externalVals[i]);
++
++    // whatever is left that names another user function is bound as a function
++    const set<string> alreadyBound(external.begin(), external.end());
+     for (auto& i: symbolNames())
+       {
++        if (alreadyBound.count(i)) continue;
+         auto scopedName=valueIdFromScope(group.lock(),canonicalName(i));
+-        auto v=minsky().variableValues.find(scopedName);
+-        if (v!=minsky().variableValues.end())
+-          {
+-            impl->symbols.add_variable(i, (*v->second)[0]);
+-            continue;
+-          }
+         auto f=minsky().userFunctions.find(scopedName);
+         if (f!=minsky().userFunctions.end())
+           {
+@@ -196,11 +215,6 @@ namespace minsky
+             impl->symbols.add_function(i,impl->functions.back());
+           }
+       }
+-
+-    // add arguments
+-    argVals.resize(argNames.size());
+-    for (size_t i=0; i<argNames.size(); ++i)
+-      impl->symbols.add_variable(argNames[i], argVals[i]);
+     impl->compiledExpression.register_symbol_table(impl->symbols);
+     
+     if (!parser.compile(expression, impl->compiledExpression))
+@@ -212,6 +226,33 @@ namespace minsky
+       }
+   }
+   
++  vector<string> UserFunction::externalSymbols() const
++  {
++    vector<string> r;
++    const set<string> args(argNames.begin(), argNames.end());
++    for (auto& i: symbolNames())
++      {
++        if (args.count(i)) continue;          // its own argument, not a model variable
++        const auto scopedName=valueIdFromScope(group.lock(),canonicalName(i));
++        if (minsky().variableValues.find(scopedName)!=minsky().variableValues.end())
++          r.push_back(i);
++      }
++    return r;
++  }
++
++  double UserFunction::evaluateAll(const vector<double>& all)
++  {
++    // `all` is the declared arguments followed by the external symbols, in the order
++    // externalSymbols() gave them. Written elementwise rather than assigned, because the
++    // expression holds references INTO these vectors and resizing would invalidate them.
++    size_t i=0;
++    for (size_t k=0; k<argVals.size(); ++k, ++i)
++      argVals[k]= i<all.size()? all[i]: 0;
++    for (size_t k=0; k<externalVals.size(); ++k, ++i)
++      externalVals[k]= i<all.size()? all[i]: 0;
++    return impl->compiledExpression.value();
++  }
++
+   double UserFunction::evaluate(double in1, double in2)
+   {
+     if (!argVals.empty()) argVals[0]=in1;
+@@ -243,9 +284,57 @@ namespace minsky
      for (; end!=string::npos; begin=end+1, end=argList.find(',',begin))
        argNames.push_back(argList.substr(begin,end-begin));
      argNames.push_back(argList.substr(begin));
@@ -371,13 +518,24 @@ index bd24621c..aa74c2dc 100644
    {
      static const regex extractName(R"(([^(]*).*)");
 diff --git a/model/userFunction.h b/model/userFunction.h
-index 85806f57..708d8a6a 100644
+index 85806f57..0a205234 100644
 --- a/model/userFunction.h
 +++ b/model/userFunction.h
-@@ -41,6 +41,14 @@ namespace  minsky
+@@ -41,6 +41,25 @@ namespace  minsky
      void compile();
      double evaluate(double x, double y);
  
++    /// The model variables this expression names, excluding its own arguments, in the
++    /// order their values must be supplied. `compile()` binds them and the evaluator
++    /// fills them, so both must agree on the order -- hence one definition, used twice.
++    std::vector<std::string> externalSymbols() const;
++    /// Values for those variables, filled per evaluation. The expression is bound to
++    /// THIS storage, not to the variables' own: the solver evaluates into a copy of the
++    /// flow vector, so a binding to the original reads stale data all through a run.
++    std::vector<double> externalVals;
++    /// evaluate on the declared arguments followed by the external symbols
++    double evaluateAll(const std::vector<double>& all);
++
 +    /// One input port per declared argument, plus the output. Every other operation has
 +    /// a fixed arity, but a user function's is whatever its name declares, so this
 +    /// cannot come from OperationTypeInfo::numArguments.

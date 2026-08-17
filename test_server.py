@@ -4216,17 +4216,16 @@ _r = c.post(f"/api/item/{_uf}/expression", json={"name": "q(x,y) = x >= y"})
 check("a comparison in the body is a body, not a heading",
       _r.status_code == 200 and _r.json()["expression"] == "x >= y", _r.text[:110])
 
-# The dangerous one. `UserFunction::compile()` binds any MODEL VARIABLE named in the
-# expression straight to its storage. It reads correctly at reset and then evaluates as 0
-# for essentially every step of a run -- measured: dK was 0 on 143 of 144 steps, on both
-# solvers, with no error frame.
+# Naming a model variable in the expression reads that variable with no wire. It used to
+# be a trap -- the engine bound it to the variable's own storage while the solver was
+# evaluating into a copy of the flow vector, so it read correctly at reset and then as 0
+# for essentially every step of a run, on both solvers, with no error anywhere. Fixed in
+# the engine, so it is now allowed; section 78 checks it actually computes.
 _r = c.post(f"/api/item/{_uf}/expression", json={"name": "2*alpha"})
-check("a model variable used as if it were an argument is refused",
-      _r.status_code == 422 and "alpha" in _r.text and "0" in _r.text, _r.text[:150])
-check("and the refusal shows how to write it instead",
-      "alpha" in _r.json()["detail"].split("=")[0].split("(")[-1], _r.text[:150])
+check("naming a model variable is allowed now that the engine reads it properly",
+      _r.status_code == 200, _r.text[:150])
 _r = c.post(f"/api/item/{_uf}/expression", json={"name": "p + zzz"})
-check("a name that is nothing at all is refused too",
+check("but a name that is nothing at all is still refused",
       _r.status_code == 422 and "zzz" in _r.text, _r.text[:150])
 
 # `evaluate(double in1, double in2)` used to zero every argument after the second, and
@@ -4546,6 +4545,102 @@ c.post(f"/api/load?path={SAVE_DIR}/arity-roundtrip.mky")
 check("arity and wires survive save and load", _look()[:3] == _before,
       f"{_look()[:3]} vs {_before}")
 _rm("arity-roundtrip")
+c.post("/api/clear")
+
+
+print("\n78. a user function reading a model variable by name")
+# The engine bound a named variable to the variable's OWN storage, while
+# RungeKutta::evalEquations evaluates into a COPY of the flow vector. So the expression
+# read correctly at reset and then read stale data for the whole run: on K' = 0.03*K with
+# K named inside the function, the derivative was 0 on 143 of 144 steps and K came out 26%
+# low, on both solvers, with no error anywhere. The values now travel as inputs, read from
+# the arrays the solver passes.
+c.post("/api/clear")
+_iop = str(c.post("/api/item", json={"kind": "operation", "op": "integrate",
+                                     "at": [800, 300]}).json()["index"])
+_kv = next(i["ref"] for i in c.get("/api/state").json()["items"]
+           if i["classType"] == "Variable:integral")
+c.post(f"/api/item/{_kv}/rename", json={"name": "K"})
+c.post("/api/init", json={"name": "K", "value": 100.0})
+_uf = str(c.post("/api/item", json={"kind": "operation", "op": "userFunction",
+                                    "at": [400, 300]}).json()["index"])
+_r = c.post(f"/api/item/{_uf}/expression", json={"name": "g() = 0.03*K"})
+check("a function may name a model variable with no wire at all",
+      _r.status_code == 200 and _r.json()["args"] == [], _r.text[:130])
+_dk = str(c.post("/api/item", json={"kind": "variable", "name": "dK8",
+                                    "var_type": "flow",
+                                    "at": [600, 300]}).json()["index"])
+c.post("/api/wire", json={"src": _uf, "dst": _dk, "port": 1})
+c.post("/api/wire", json={"src": _dk, "dst": _iop, "port": 1})
+c.post("/api/solver", json={"implicit": False, "epsRel": 1e-8, "epsAbs": 1e-10,
+                            "tmax": 10.0})
+c.post("/api/reset")
+check("it reads correctly at reset", abs(c.get("/api/state").json()["values"][":dK8"] - 3.0)
+      < 1e-9, str(c.get("/api/state").json()["values"].get(":dK8")))
+
+_fr = []
+with c.websocket_connect("/ws/sim") as ws:
+    ws.send_json({"cmd": "run", "steps": 20000, "tmax": 10.0})
+    while True:
+        _m = ws.receive_json()
+        if "error" in _m:
+            check("name-reference run streamed", False, _m["error"]); break
+        if _m.get("done") or _m.get("stopped"): break
+        _fr.append(_m)
+_zero = sum(1 for f in _fr if abs(f["values"][":dK8"]) < 1e-12)
+check("and through the whole run, not just at reset", _fr and _zero == 0,
+      f"the derivative was 0 on {_zero} of {len(_fr)} steps")
+if _fr:
+    _K, _t = _fr[-1]["values"][":K"], _fr[-1]["t"]
+    _exact = 100 * math.exp(0.03 * _t)
+    check("so it integrates to the analytic solution",
+          abs(_K - _exact) / _exact < 1e-8,
+          f"K={_K:.6f} exact={_exact:.6f} rel={abs(_K-_exact)/_exact:.2e}")
+
+# The implicit method has no derivative for a user function, and must say so rather than
+# integrate with a zero in the Jacobian -- which is what it would do for a function that
+# declares no arguments if `deriv` were left to fall through to its numArgs()==0 branch.
+c.post("/api/solver", json={"implicit": True})
+_err = None
+with c.websocket_connect("/ws/sim") as ws:
+    ws.send_json({"cmd": "run", "steps": 50, "tmax": 10.0})
+    while True:
+        _m = ws.receive_json()
+        if "error" in _m: _err = _m["error"]; break
+        if _m.get("done") or _m.get("stopped"): break
+check("the implicit method still refuses, rather than using a wrong derivative",
+      _err and "implicit" in _err, str(_err)[:120])
+c.post("/api/solver", json={"implicit": False})
+
+# wired arguments and named variables together, which is where an ordering mistake shows
+c.post("/api/clear")
+c.post("/api/item", json={"kind": "parameter", "name": "scale", "value": 4.0})
+_uf = str(c.post("/api/item", json={"kind": "operation", "op": "userFunction",
+                                    "at": [400, 300]}).json()["index"])
+c.post(f"/api/item/{_uf}/expression", json={"name": "h(a,b) = a*100 + b*10 + scale"})
+for _k, _v in ((0, 1.0), (1, 2.0)):
+    _cc = str(c.post("/api/item", json={"kind": "variable", "var_type": "constant",
+                                        "value": _v}).json()["index"])
+    c.post("/api/wire", json={"src": _cc, "dst": _uf, "port": _k + 1})
+_o = str(c.post("/api/item", json={"kind": "variable", "name": "o8",
+                                   "var_type": "flow"}).json()["index"])
+c.post("/api/wire", json={"src": _uf, "dst": _o, "port": 1})
+c.post("/api/solver", json={"implicit": False, "tmax": 2.0})
+c.post("/api/reset")
+check("wired arguments and a named variable in one expression",
+      abs(c.get("/api/state").json()["values"][":o8"] - 124.0) < 1e-9,
+      str(c.get("/api/state").json()["values"].get(":o8")))
+_fr = []
+with c.websocket_connect("/ws/sim") as ws:
+    ws.send_json({"cmd": "run", "steps": 200, "tmax": 2.0})
+    while True:
+        _m = ws.receive_json()
+        if "error" in _m: break
+        if _m.get("done") or _m.get("stopped"): break
+        _fr.append(_m)
+check("and it holds through a run",
+      _fr and all(abs(f["values"][":o8"] - 124.0) < 1e-9 for f in _fr),
+      f"{len(_fr)} frames, last {_fr[-1]['values'][':o8'] if _fr else None}")
 c.post("/api/clear")
 
 

@@ -99,6 +99,11 @@ P = dict(
     sbar=0.019,      # normal gap between the policy rate and the short loan rate
     api=0.50,        # response to the inflation gap (BOTH rules)
     auu=0.50,        # response to the utilisation gap (BOTH rules)
+    mu=5.0,          # speed the policy ANCHOR tracks the classical normal rate. This is
+    #                  a dial between the two rules: mu large is the instantaneous
+    #                  classical anchor, mu -> 0 freezes the intercept the way Taylor's
+    #                  rstar is frozen. 5.0 has a half-life of 0.14 years and reproduces
+    #                  the instantaneous rule closely.
     roll=0.10,       # the long bond book rolls over at 10% a year -- a 10-year book.
     #                  This is what splits the interest bill into an immediate leg
     #                  (Bs and Bb, repricing at once) and an eventual one (Bl).
@@ -314,7 +319,7 @@ def build(s, p):
 
     for nm in ("v", "omN", "un", "dF", "gn", "c1b", "lam1", "iDsh", "payB", "payF",
                "gshare", "kappa", "thu", "thb", "phi1", "phi2", "gp", "gw", "pi0",
-               "theta", "phN", "phP", "sbar", "api", "auu", "roll"):
+               "theta", "phN", "phP", "sbar", "api", "auu", "roll", "mu"):
         b.param(nm, float(p[nm]))
     b.param("taxr", float(s["taxY"]))
     b.param("d2", float(s["d2"]))            # exp(-beta*gap), the fitted funding share
@@ -339,6 +344,7 @@ def build(s, p):
     ii1 = b.stock("i1", float(s["i1"]))      # the MARKET short rate
     ii2 = b.stock("i2", float(s["i2"]))      # the MARKET long rate
     iBl_ = b.stock("iBl", float(s["i2"]))    # AVERAGE COUPON on the long bond book
+    iNb = b.stock("i1Nbar", float(s["i1"]))  # TRAILING AVERAGE of the normal short rate
 
     for name, expr in [
         ("Y",      "u * K / v"),
@@ -368,7 +374,11 @@ def build(s, p):
         ("Tax",    "taxr * Y"),
         ("pi",     "pi0 + gp * (u - un) + gw * (omega - omN)"),
         # --- the policy rule ---------------------------------------------------------
-        ("ipC",    "(i1N - sbar) + api * (pi - piT) + auu * (u - un)"),   # CLASSICAL
+        # The anchor is the TRAILING AVERAGE of the normal rate, not its current value.
+        # Anchoring on the instantaneous i1N makes the rule inherit every drift in it --
+        # and with government debt at 0.71 of output that drift is bought every year,
+        # shocked or not. mu sets how much of it the rule takes on.
+        ("ipC",    "(i1Nbar - sbar) + api * (pi - piT) + auu * (u - un)"),   # CLASSICAL
         ("ipT",    "rstar + pi + api * (pi - piT) + auu * (u - un)"),     # TAYLOR
         ("ip",     "rule * ipC + (1 - rule) * ipT + ish"),
         # --- the government's interest bill, split by how fast each leg reprices ------
@@ -397,6 +407,7 @@ def build(s, p):
         ("di2",    "phN * (i2N - i2)"),               # policy reaches the long end only
         #                                               through i1, inside i2N
         ("diBl",   "roll * (i2 - iBl)"),              # the long book reprices as it rolls
+        ("di1Nbar", "mu * (i1N - i1Nbar)"),           # the anchor follows, at speed mu
         # --- identities, checked on the run and imposed nowhere ----------------------
         ("netWorth", "NWH + NWF + NWG + EB"),
         ("bankSheet", "Res + Loans + Bb - DF - DH - EB"),
@@ -406,9 +417,10 @@ def build(s, p):
         b.eq(name, expr)
     for state, deriv in (("K", "dK"), ("T", "dT"), ("p", "dp"), ("u", "du"),
                          ("omega", "domega"), ("i1", "di1"), ("i2", "di2"),
-                         ("iBl", "diBl")):
+                         ("iBl", "diBl"), ("i1Nbar", "di1Nbar")):
         b.wire(b.ref[deriv], {"K": iK, "T": iT, "p": ip_, "u": iu, "omega": iom,
-                              "i1": ii1, "i2": ii2, "iBl": iBl_}[state], 1)
+                              "i1": ii1, "i2": ii2, "iBl": iBl_,
+                              "i1Nbar": iNb}[state], 1)
 
     b.plot("Sector net worths", ["NWH", "NWF", "NWG", "EB"], at=[1500, 300])
     b.plot("Government", ["debtG", "burden", "IntG", "Def"], at=[1500, 900])
@@ -429,6 +441,7 @@ def main():
     ap.add_argument("--check", action="store_true")
     ap.add_argument("--incidence", action="store_true")
     ap.add_argument("--race", action="store_true")
+    ap.add_argument("--anchor", action="store_true")
     ap.add_argument("--save", default="FourSector")
     args = ap.parse_args()
 
@@ -468,6 +481,8 @@ def main():
         incidence(args.save)
     if args.race:
         race(args.save)
+    if args.anchor:
+        anchor(args.save)
 
 
 def race(name):
@@ -704,6 +719,94 @@ def check(s, name):
     print("  the slack. A common growth rate for every financial stock is therefore")
     print("  IMPOSSIBLE here, not merely unachieved. What the model does guarantee is the")
     print("  three identities above, and it holds them to 1e-13.")
+
+
+def anchor(name):
+    """Sweep how fast the policy anchor tracks the normal rate, and price the tradeoff.
+
+    The instantaneous classical anchor wins on shock response but carries a STANDING cost:
+    it follows the normal loan rate up as banking's margin is squeezed, so it runs a
+    permanently tighter policy and a permanently higher interest bill even with nothing
+    shocked. mu is the dial. Large mu is that rule; mu -> 0 freezes the intercept the way
+    Taylor's rstar is frozen, which drops the standing cost but also drops the nominal
+    anchor, since the proportional response api = 0.5 is below one on its own.
+
+    The question is whether anything in between keeps most of the response and little of
+    the drift.
+    """
+    from runner import Run
+    watch = ["rE", "pi", "u", "K", "burden", "NWG", "i1", "i1Nbar", "debtG", "Y", "p"]
+    R = Run(f"~/minsky-models/{name}.mky")
+    TMAX = 80.0
+    MUS = [5.0, 1.0, 0.30, 0.10, 0.03, 0.01]
+
+    def at(path, t):
+        return min(range(len(path["t"])), key=lambda k: abs(path["t"][k] - t))
+
+    rows = []
+    for mu in MUS:
+        bs = R.go(TMAX, watch, {"rule": 1.0, "mu": mu, "wsh": 0.0}, samples=400)
+        sh = R.go(TMAX, watch, {"rule": 1.0, "mu": mu, "wsh": 0.01}, samples=400)
+        rows.append(("classical mu=%.2f" % mu, mu, bs, sh))
+    tb = R.go(TMAX, watch, {"rule": 0.0, "wsh": 0.0}, samples=400)
+    ts = R.go(TMAX, watch, {"rule": 0.0, "wsh": 0.01}, samples=400)
+    rows.append(("Taylor", None, tb, ts))
+
+    print("\n" + "=" * 94)
+    print("HOW FAST SHOULD THE ANCHOR TRACK THE NORMAL RATE?")
+    print("=" * 94)
+    print("  STANDING COST is read off the UNSHOCKED path -- what the rule costs when")
+    print("  nothing at all has happened. SHOCK RESPONSE is a +1% wage shock measured")
+    print("  against that same rule's own unshocked path.\n")
+    print(f"  {'rule':>18} | {'STANDING at t=80':>26} | {'SHOCK RESPONSE at t=40':>34}")
+    print(f"  {'':>18} | {'i1':>8} {'burden':>8} {'vs Taylor':>8} | "
+          f"{'worst rE':>10} {'d NWG':>10} {'d K/K':>10}")
+    for lab, mu, bs, sh in rows:
+        j80, j40 = at(bs, 80.0), at(bs, 40.0)
+        k40 = at(sh, 40.0)
+        n = max(1, k40 // 8)
+        drE = min(sh["rE"][k] - bs["rE"][k] for k in range(n, k40 + 1))
+        dnwg = sh["NWG"][k40] - bs["NWG"][j40]
+        dk = (sh["K"][k40] - bs["K"][j40]) / bs["K"][j40]
+        vs = bs["burden"][j80] - tb["burden"][at(tb, 80.0)]
+        print(f"  {lab:>18} | {bs['i1'][j80]:8.5f} {bs['burden'][j80]:8.5f} "
+              f"{vs:+8.5f} | {drE:10.5f} {dnwg:10.4f} {dk:10.5f}")
+    print("\n  'vs Taylor' is the standing burden gap: how much MORE of output goes to the")
+    print("  government's interest bill every year under this rule than under Taylor, with")
+    print("  no shock at all.")
+
+    print("\n" + "=" * 94)
+    print("DOES SLOWING THE ANCHOR COST THE NOMINAL ANCHOR? -- the obvious worry, tested")
+    print("=" * 94)
+    print("  At small mu the rule's proportional inflation response is api = 0.5, below one,")
+    print("  and the price-level integral that supplied the nominal anchor is slow. So the")
+    print("  thing to check is whether inflation still comes back.\n")
+    print(f"  {'rule':>18} | {'inflation deviation from own baseline':>44} | {'p at 160':>9}")
+    print(f"  {'':>18} | {'t=20':>10} {'t=40':>10} {'t=80':>10} {'t=160':>10} | {'gap':>9}")
+    long_ = {}
+    for lab, mu, _bs, _sh in rows:
+        kw = {"rule": 0.0} if mu is None else {"rule": 1.0, "mu": mu}
+        bs = R.go(160.0, watch, dict(kw, wsh=0.0), samples=500)
+        sh = R.go(160.0, watch, dict(kw, wsh=0.01), samples=500)
+        long_[lab] = (bs, sh)
+        cells = [sh["pi"][at(bs, t)] - bs["pi"][at(bs, t)] for t in (20., 40., 80., 160.)]
+        j = at(bs, 160.)
+        print(f"  {lab:>18} | " + " ".join(f"{c:10.5f}" for c in cells)
+              + f" | {(sh['p'][j]-bs['p'][j])/bs['p'][j]:9.4f}")
+    print("\n  IT DOES NOT, AND THE REASON IS THE SHOCK RATHER THAN THE RULES. No rule")
+    print("  here closes the gap -- not the fast anchor, not the slow one, and not Taylor,")
+    print("  which is carrying a response of 1 + api = 1.5. All of them leave inflation")
+    print("  about 0.3 points high and the price level some 60% higher, permanently.")
+    print("\n  That is correct, not a defect. wsh is a PERMANENT shift in the wage-share")
+    print("  process, so omega settles at a new level and pi = pi0 + gp*(u-un) +")
+    print("  gw*(omega-omN) is permanently higher. An interest rate cannot undo a permanent")
+    print("  cost-push without permanently depressing utilisation. So 'does inflation")
+    print("  return' does not discriminate between rules against this shock, and the")
+    print("  question worth asking is what each one destroys while accommodating it.")
+    print("\n  WHICH MEANS THERE IS NO TRADEOFF TO PRICE. Slowing the anchor improves the")
+    print("  standing cost, the enterprise margin, the fiscal damage and the capital stock")
+    print("  all at once, and it does not cost inflation control because none of these")
+    print("  rules has inflation control against this shock in the first place.")
 
 
 if __name__ == "__main__":

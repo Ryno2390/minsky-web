@@ -1,0 +1,802 @@
+<title>The Enterprise Margin</title>
+<style>
+/* Ledger palette: pale green account paper, iron-gall ink, and red for negatives --
+   the actual vernacular of double entry, which is what a Godley table is. */
+:root{
+  --paper:#F6F8F5; --raised:#FFFFFF; --ink:#16201C; --ink-2:#4A5C53; --ink-3:#6E8077;
+  --rule:#D5DDD7; --rule-2:#E7ECE8; --accent:#1B6B58; --accent-soft:#E4EFE9;
+  --neg:#A2382A; --neg-soft:#F6E5E2; --pos:#1B6B58;
+  --serif:ui-serif,"Iowan Old Style","Palatino Linotype",Palatino,"Source Serif 4",Georgia,serif;
+  --mono:ui-monospace,"SF Mono",SFMono-Regular,Menlo,Consolas,"Liberation Mono",monospace;
+}
+@media (prefers-color-scheme:dark){
+  :root:not([data-theme="light"]){
+    --paper:#0F1512; --raised:#151D19; --ink:#E3EAE5; --ink-2:#A9B8B0;
+    --ink-3:#84968C; --rule:#26332C; --rule-2:#1C2621; --accent:#63C0A3;
+    --accent-soft:#16302A; --neg:#E28F7E; --neg-soft:#33201C; --pos:#63C0A3;
+  }
+}
+:root[data-theme="dark"]{
+  --paper:#0F1512; --raised:#151D19; --ink:#E3EAE5; --ink-2:#A9B8B0; --ink-3:#84968C;
+  --rule:#26332C; --rule-2:#1C2621; --accent:#63C0A3; --accent-soft:#16302A;
+  --neg:#E28F7E; --neg-soft:#33201C; --pos:#63C0A3;
+}
+*{box-sizing:border-box}
+body{
+  background:var(--paper); color:var(--ink); font-family:var(--serif);
+  font-size:17px; line-height:1.62; margin:0;
+  padding:clamp(2rem,6vw,5.5rem) clamp(1.1rem,5vw,2rem) 6rem;
+  -webkit-font-smoothing:antialiased;
+}
+.wrap{max-width:74ch;margin:0 auto;display:flex;flex-direction:column;gap:2.6rem}
+p{margin:0 0 1.05em}
+p:last-child{margin-bottom:0}
+
+/* masthead */
+.mast{display:flex;flex-direction:column;gap:.9rem;
+  border-bottom:2px solid var(--ink);padding-bottom:1.4rem}
+.eyebrow{font-family:var(--mono);font-size:.68rem;letter-spacing:.14em;
+  text-transform:uppercase;color:var(--ink-3);margin:0}
+h1{font-size:clamp(2.1rem,6vw,3rem);line-height:1.06;margin:0;font-weight:600;
+  letter-spacing:-.018em;text-wrap:balance}
+.standfirst{font-size:1.12rem;color:var(--ink-2);margin:0;max-width:60ch;text-wrap:pretty}
+.byline{font-family:var(--mono);font-size:.72rem;color:var(--ink-3);
+  display:flex;flex-wrap:wrap;gap:.4rem 1.2rem;margin:0}
+
+section{display:flex;flex-direction:column;gap:1rem}
+h2{font-size:1.42rem;line-height:1.2;margin:0;font-weight:600;letter-spacing:-.01em;
+  text-wrap:balance;padding-bottom:.5rem;border-bottom:1px solid var(--rule)}
+h3{font-size:1.03rem;margin:.5rem 0 0;font-weight:600;letter-spacing:-.005em}
+code,.m{font-family:var(--mono);font-size:.87em;font-variant-numeric:tabular-nums}
+code{background:var(--rule-2);padding:.1em .34em;border-radius:2px}
+
+/* equation block: ruled like a ledger entry, not boxed */
+.eq{font-family:var(--mono);font-size:.9rem;line-height:1.85;
+  border-left:2px solid var(--accent);padding:.7rem 0 .7rem 1.1rem;
+  overflow-x:auto;white-space:pre;color:var(--ink)}
+.eq .c{color:var(--ink-3)}
+
+/* tables are the point of this page: rules only, no boxes, figures aligned */
+.scroll{overflow-x:auto;margin:.2rem 0}
+table{border-collapse:collapse;width:100%;font-size:.88rem;
+  font-variant-numeric:tabular-nums}
+th,td{text-align:right;padding:.42rem .7rem;white-space:nowrap}
+th:first-child,td:first-child{text-align:left;padding-left:0}
+th:last-child,td:last-child{padding-right:0}
+thead th{font-family:var(--mono);font-size:.68rem;letter-spacing:.09em;
+  text-transform:uppercase;color:var(--ink-3);font-weight:400;
+  border-bottom:1px solid var(--ink);padding-bottom:.4rem}
+tbody td{border-bottom:1px solid var(--rule-2);font-family:var(--mono)}
+tbody tr:last-child td{border-bottom:1px solid var(--rule)}
+td.lbl{font-family:var(--serif);font-size:.95rem}
+tr.mark td{background:var(--accent-soft)}
+tr.mark td:first-child{box-shadow:inset 2px 0 0 var(--accent)}
+.neg{color:var(--neg)}
+.pos{color:var(--pos)}
+caption{caption-side:bottom;text-align:left;font-size:.8rem;color:var(--ink-3);
+  padding-top:.6rem;font-family:var(--serif)}
+
+/* a finding's state is real information, so it is encoded, not decorated */
+.finding{display:flex;flex-direction:column;gap:.45rem;padding:1rem 0;
+  border-top:1px solid var(--rule-2)}
+.finding:first-of-type{border-top:1px solid var(--rule)}
+.fhead{display:flex;gap:.7rem;align-items:baseline;flex-wrap:wrap}
+.fhead h3{margin:0;flex:1 1 22ch;min-width:0}
+.chip{font-family:var(--mono);font-size:.62rem;letter-spacing:.1em;
+  text-transform:uppercase;padding:.2em .5em;border-radius:2px;white-space:nowrap}
+.chip.fixed{background:var(--accent-soft);color:var(--accent);
+  box-shadow:inset 0 0 0 1px var(--accent)}
+.chip.open{background:var(--neg-soft);color:var(--neg);
+  box-shadow:inset 0 0 0 1px var(--neg)}
+.chip.unsettled{background:var(--rule-2);color:var(--ink-3);
+  box-shadow:inset 0 0 0 1px var(--rule)}
+.finding p{margin:0;font-size:.98rem;color:var(--ink-2)}
+.finding p strong{color:var(--ink);font-weight:600}
+
+/* A superseded figure is marked where it stands, not quietly deleted. The reader should
+   be able to see what was claimed and what replaced it without leaving the paragraph. */
+.revised{display:flex;gap:.55rem .8rem;align-items:baseline;flex-wrap:wrap;
+  background:var(--neg-soft);border-left:2px solid var(--neg);
+  padding:.7rem .95rem;font-size:.93rem;color:var(--ink-2)}
+.revised strong{color:var(--ink);font-weight:600}
+.revised .tag{font-family:var(--mono);font-size:.62rem;letter-spacing:.1em;
+  text-transform:uppercase;color:var(--neg);white-space:nowrap;flex:0 0 auto}
+.revised p{margin:0;flex:1 1 26ch;min-width:0}
+td.stale,span.stale{color:var(--ink-3);text-decoration:line-through;
+  text-decoration-thickness:1px}
+
+.pull{border-left:2px solid var(--ink);padding:.2rem 0 .2rem 1.1rem;
+  font-size:1.06rem;color:var(--ink);margin:.4rem 0}
+a{color:inherit;text-decoration:underline;text-decoration-color:var(--accent);
+  text-underline-offset:.18em;text-decoration-thickness:1px}
+a:hover{text-decoration-thickness:2px}
+a:focus-visible{outline:2px solid var(--accent);outline-offset:2px;border-radius:1px}
+@media (prefers-reduced-motion:reduce){*{animation:none!important;transition:none!important}}
+ul{margin:0;padding-left:1.15rem;display:flex;flex-direction:column;gap:.5rem;
+  color:var(--ink-2)}
+li strong{color:var(--ink);font-weight:600}
+footer{border-top:1px solid var(--rule);padding-top:1.2rem;font-family:var(--mono);
+  font-size:.74rem;color:var(--ink-3);line-height:1.7}
+</style>
+
+<div class="wrap">
+
+<header class="mast">
+  <p class="eyebrow">Minsky · stock-flow consistent · 218 items · calibrated to US data</p>
+  <h1>The Enterprise Margin</h1>
+  <p class="standfirst">A monetary policy model built on Shaikh's principle that what
+    drives accumulation is the profit rate net of interest — and what happened when first
+    the accounting, and then eighty years of US national accounts, were allowed to answer
+    back.</p>
+  <p class="byline"><span>Three Godley tables</span><span>Banks · Firms · Households</span><span>Balance closes to 3.7e-15</span><span>Runs in 0.89s</span><span>US nonfinancial corporate, 1947–2025</span></p>
+  <div class="revised"><span class="tag">read first</span>
+    <p>The model's central claim does not survive contact with the data. Results 1 to 6
+      describe a model that works on its own terms; <a href="#data">Result 7</a> reports
+      what happened when its five variables were pulled from the national accounts. The
+      headline elasticity below, <span class="m">dg/dm = 0.95</span>, was measured at a
+      leverage and an interest burden the US corporate sector has never come close to.
+      Recalibrated it is <strong>0.159</strong>, and the mechanism it describes has never
+      once bound in the historical record.</p></div>
+</header>
+
+<section>
+  <h2>The argument</h2>
+  <p>The profit rate is not what a firm gets to keep. The creditor is paid first, and net
+    investment comes out of what is left — Shaikh's <em>rate of profit of enterprise</em>:</p>
+  <div class="eq">rE = r − iL·d      <span class="c">r   pre-interest profit rate, Π/pK</span>
+                  <span class="c">iL  the rate firms borrow at</span>
+                  <span class="c">d   leverage, L/pK</span></div>
+  <p>If accumulation keys off <span class="m">rE</span> rather than <span class="m">r</span>,
+    monetary policy has an observable anchor — which gives two rules to compare:</p>
+  <div class="eq">SHAIKH   ip = r − m                              <span class="c">keyed to the profit rate</span>
+TAYLOR   ip = r* + π + aπ(π − π*) + aU(u − u*)   <span class="c">keyed to inflation and slack</span></div>
+  <p>Shaikh's second condition is that banking is a business, so competition equalises
+    <em>its</em> profit rate with the general rate. That pins the spread rather than the
+    level, and it is written as a tendency because that is the actual claim — rates are
+    equalised by capital moving in and out, always overshooting:</p>
+  <div class="eq">rB = (iL·L − iD·DH − OpC) / EB       d(spread)/dt = ths·(r − rB)</div>
+  <p>The two rules are calibrated to <strong>agree at the baseline</strong>, so any later
+    difference between them is a difference in how they respond, not in where they start.</p>
+</section>
+
+<section>
+  <h2>The accounting is the test</h2>
+  <p>Three Godley tables — banks, firms, households — sharing the stocks they hold against
+    each other. Every payment appears twice and every row nets to zero. Real capital is
+    deliberately <em>not</em> in a table: it is not a claim on anybody, so it has no
+    counterparty and no place on a balance sheet of claims.</p>
+  <p>Two identities fall out of writing the flows down consistently. Neither is imposed
+    anywhere, which is what makes them worth checking:</p>
+  <div class="scroll">
+  <table>
+    <thead><tr><th>Identity</th><th>Why it holds</th><th>Worst observed</th></tr></thead>
+    <tbody>
+      <tr><td class="lbl"><span class="m">Res + Loans = DF + DH + EB</span></td>
+          <td class="lbl">the banking balance sheet closes</td><td>3.7e−15</td></tr>
+      <tr><td class="lbl"><span class="m">DF</span> constant</td>
+          <td class="lbl">firms borrow exactly their financing gap</td><td>2.3e−13</td></tr>
+    </tbody>
+    <caption>Across every run in this report. If either drifted, the model would be wrong.</caption>
+  </table>
+  </div>
+  <p>The baseline is <strong>solved</strong>, not guessed, and three things are solved
+    because the theory decides them rather than the modeller: the spread, from banking's
+    profit rate equalising on to <span class="m">r</span>; the bank payout ratio that keeps
+    bank capital growing at <span class="m">g</span>; and the enterprise profit rate
+    consistent with the target leverage. Every derivative then sits on its balanced-growth
+    value to 1e−7, and over 30 periods no rate moves by more than 3.7e−04.</p>
+  <div class="scroll">
+  <table>
+    <thead><tr><th>Baseline</th><th>r</th><th>rE</th><th>ip</th><th>iL</th><th>spread</th><th>d</th><th>u</th></tr></thead>
+    <tbody><tr><td class="lbl">balanced path</td><td>0.0685</td><td>0.0200</td><td>0.0385</td>
+      <td>0.0606</td><td>0.0221</td><td>0.800</td><td>0.793</td></tr></tbody>
+    <caption>Interest takes 70.8% of pre-interest profit. Opening balance sheet residual: exactly zero.</caption>
+  </table>
+  </div>
+  <div class="revised"><span class="tag">calibration</span>
+    <p>That 70.8% is the number to hold on to. It is the share of pre-interest profit going
+      to creditors, and every policy conclusion on this page is a statement about it. The
+      highest figure the US nonfinancial corporate sector has recorded since 1947 is
+      <strong>37.1%</strong>, in 1990; the mean is 17%. The baseline was built roughly
+      twice beyond the historical maximum — see <a href="#data">Result 7</a>.</p></div>
+</section>
+
+<section>
+  <h2>Result 1 · The claim, on balanced paths</h2>
+  <p>The table first published here was a twelve-period transient. Each margin on its own
+    balanced path says something different, and sharper.</p>
+  <div class="scroll">
+  <table>
+    <thead><tr><th>margin m</th><th>ip</th><th>r</th><th>rE</th><th>g</th><th>u</th></tr></thead>
+    <tbody>
+      <tr><td>0.040</td><td>0.02514</td><td>0.06514</td><td>0.02000</td><td>0.02500</td><td>0.754</td></tr>
+      <tr class="mark"><td>0.030</td><td>0.03851</td><td>0.06851</td><td>0.02000</td><td>0.02500</td><td>0.793</td></tr>
+      <tr><td>0.020</td><td>0.05219</td><td>0.07219</td><td>0.02000</td><td>0.02500</td><td>0.835</td></tr>
+      <tr><td>0.010</td><td>0.06621</td><td>0.07621</td><td>0.02000</td><td>0.02500</td><td>0.882</td></tr>
+      <tr><td>0.000</td><td>0.08059</td><td>0.08059</td><td>0.02000</td><td>0.02500</td><td>0.933</td></tr>
+    </tbody>
+    <caption>Growth and the enterprise profit rate do not move at all. Utilisation does.</caption>
+  </table>
+  </div>
+  <p>That is not a failure of the mechanism — it is what a labour-constrained growth model
+    must say. Accumulation has to equal α+β, and the investment function then forces
+    <span class="m">rE = rEnorm</span>. Neither is free.</p>
+  <p class="pull">A tighter margin does not slow accumulation. It requires a higher profit
+    rate, and a higher level of activity, to sustain the same accumulation.</p>
+  <p>The burden falls on distribution, not on growth. The growth statement survives where
+    growth is accumulation-determined rather than labour-determined — the core and rungs 1
+    and 2, which have no labour force, where <span class="m">dg*/dm = κ·d* = 0.95</span>
+    exactly. Which regime a real economy is in is an empirical question, not a modelling
+    one.</p>
+</section>
+
+<section>
+  <h2>Result 2 · Protecting the margin and stabilising the economy are different jobs</h2>
+  <p>A money-wage shock. It cuts the profit rate and raises inflation at once, so the
+    rules pull in opposite directions: Shaikh follows <span class="m">r</span> down, Taylor
+    tightens into a falling profit rate. Which rule looks better depends on how long you
+    watch.</p>
+  <div class="scroll">
+  <table>
+    <thead><tr><th>shock</th><th>horizon</th><th>Shaikh K</th><th>lowest rE</th><th>Taylor K</th><th>lowest rE</th><th>better</th></tr></thead>
+    <tbody>
+      <tr><td>+0.5%</td><td>20</td><td>1.656</td><td class="pos">+0.0193</td><td>1.650</td><td class="pos">+0.0172</td><td>Shaikh</td></tr>
+      <tr><td>+1%</td><td>20</td><td>1.660</td><td class="pos">+0.0187</td><td>1.648</td><td class="pos">+0.0144</td><td>Shaikh</td></tr>
+      <tr><td>+2%</td><td>20</td><td>1.652</td><td class="neg">−0.0029</td><td>1.646</td><td class="pos">+0.0087</td><td>Shaikh</td></tr>
+      <tr><td>+0.5%</td><td>30</td><td>2.105</td><td class="neg">−0.0126</td><td>2.118</td><td class="pos">+0.0172</td><td>Taylor</td></tr>
+      <tr><td>+1%</td><td>30</td><td>1.973</td><td class="neg">−0.1465</td><td>2.116</td><td class="pos">+0.0144</td><td>Taylor</td></tr>
+      <tr><td>+2%</td><td>30</td><td>1.856</td><td class="neg">−0.2046</td><td>2.112</td><td class="pos">+0.0087</td><td>Taylor</td></tr>
+    </tbody>
+    <caption>K is growth over the run. Taylor's trough is the same at both horizons — it settles. Shaikh's deepens, which is the instability, not the shock.</caption>
+  </table>
+  </div>
+  <p class="pull">Shaikh preserves more enterprise profit on impact, and then loses it.</p>
+  <p>Over twenty periods the rule does exactly what it claims: the enterprise margin holds
+    up better than under Taylor. Over thirty it has lost, and not because the shock got
+    worse — Taylor's worst reading is identical at both horizons, while Shaikh's keeps
+    falling. That is the balanced path being left, not the shock being absorbed.</p>
+  <p>The reason is the same insulation that makes the rule work on impact. A fixed
+    interest bill squeezes <span class="m">rE</span> when <span class="m">r</span> falls,
+    which cuts investment back — that is stabilising, and a rule that moves
+    <span class="m">ip</span> with <span class="m">r</span> takes it away. So the mechanism
+    in Result 1 is right, and the policy conclusion does not follow from it. Protecting
+    the enterprise margin and stabilising accumulation are two objectives, and here they
+    conflict.</p>
+  <p>A pure policy disturbance separates them cleanly: start the policy rate a point high
+    and change nothing else, and both rules bring it back with the same worst-case margin
+    (+0.0118) and the same growth. The disagreement is about <em>distributive</em> shocks,
+    not about the level of rates.</p>
+</section>
+
+<section>
+  <h2>Result 2b · How much of a policy move reaches the borrower</h2>
+  <p>This table was a transient too. On balanced paths <span class="m">rE</span> is pinned,
+    so the deposit channel cannot change it — what it changes is how much of a policy move
+    reaches the lending rate at all, and how far utilisation must travel to absorb the
+    rest.</p>
+  <div class="scroll">
+  <table>
+    <thead><tr><th>deposits pay</th><th>ip moves</th><th>iL moves</th><th>pass-through</th><th>u moves</th></tr></thead>
+    <tbody>
+      <tr><td>nothing</td><td>0.0400</td><td>0.0000</td><td class="neg">0.000</td><td>0.000</td></tr>
+      <tr><td>0.3 × policy</td><td>0.0455</td><td>0.0068</td><td>0.150</td><td>0.063</td></tr>
+      <tr class="mark"><td>0.6 × policy</td><td>0.0554</td><td>0.0193</td><td>0.348</td><td>0.179</td></tr>
+      <tr><td>0.9 × policy</td><td>0.0833</td><td>0.0541</td><td>0.649</td><td>0.501</td></tr>
+    </tbody>
+    <caption>The full model, on balanced paths, where the demand side pins the spread.</caption>
+  </table>
+  </div>
+  <p>The 0.35 originally published was right in size and wrong in provenance: it is the
+    <em>full</em> model's structural pass-through, not rung 1's — in rung 1 the spread is
+    free and nothing pins it.</p>
+  <p class="pull">With costless bank funding, monetary policy is completely neutral here.</p>
+  <p>The top row is the striking one. Equalisation pins the lending rate outright,
+    <span class="m">iL</span> does not move at all, and neither does utilisation: the whole
+    policy change is absorbed into the spread. So the potency of monetary policy rests
+    entirely on banks having a funding cost that moves with the policy rate — Shaikh's
+    second condition doing real work, with the spread as the distributive variable that
+    decides whether policy reaches enterprise at all.</p>
+</section>
+
+<section>
+  <h2>Result 3 · The balanced path is unstable</h2>
+  <p>The baseline is a genuine rest point and not a stable one. The opening figures are
+    snapped to multiples of 1/1024 so the balance sheet cancels exactly in binary, and that
+    5e−4 nudge is enough to start a departure. It is not numerical noise: departure time
+    scales as <span class="m">1/kappa</span>, which is what an unstable eigenvalue
+    proportional to kappa looks like.</p>
+  <div class="scroll">
+  <table>
+    <thead><tr><th>kappa</th><th>gam = 0.6</th><th>gam = 0.3</th></tr></thead>
+    <tbody>
+      <tr><td>0.40</td><td>t = 52.5</td><td>t = 63.0</td></tr>
+      <tr><td>0.30</td><td>t = 59.5</td><td>t = 73.5</td></tr>
+      <tr class="mark"><td>0.20</td><td>t = 73.5</td><td>t = 96.2</td></tr>
+      <tr><td>0.10</td><td>t = 115.5</td><td>t = 154.0</td></tr>
+      <tr><td>0.05</td><td>t = 183.7</td><td>never</td></tr>
+    </tbody>
+    <caption>When leverage is first 10% away from where it started. Highlighted row is the setting the experiments run at.</caption>
+  </table>
+  </div>
+  <p>The loop is the <strong>accelerator running through the wage-price spiral</strong>.
+    Zeroing either price adjustment or investment response removes it outright; damping
+    wage indexation only delays it. With the level and the response of accumulation tied
+    together as <span class="m">g = kappa·rE</span>, leverage forced
+    <span class="m">kappa = 1.2</span> and the accelerator gain was <strong>1.76</strong> —
+    a Harrod knife-edge. Separating the two is what made a stable baseline possible at all.</p>
+</section>
+
+<section>
+  <h2>Result 4 · The core on its own, solved</h2>
+  <p>The full model has the mechanism in it and also a wage-price spiral, a demand
+    multiplier, an endogenous profit rate and a Harrod instability. Every experiment
+    measures all of them, so a number like "growth falls 0.4 points" cannot be assigned.
+    A second model has the mechanism and <em>nothing else</em> — two stocks, capital and
+    debt, with the profit rate taken as given. Forty items against 218, and small enough
+    to solve on paper.</p>
+  <p>In leverage alone it collapses to one equation:</p>
+  <div class="eq">d' = (r − iL·d)(A − κ·d)              <span class="c">A = κ − 1 + payF</span></div>
+  <p>Two rest points: <span class="m">d* = A/κ</span>, where leverage settles, and
+    <span class="m">d = r/iL</span>, where enterprise profit is nothing. Linearising at
+    the first gives <span class="m">f'(d*) = −κ·rE*</span> — so the growth equilibrium is
+    stable <strong>exactly while rE* &gt; 0</strong>. That is the claim as a stability
+    condition rather than a simulation.</p>
+  <div class="scroll">
+  <table>
+    <thead><tr><th>margin m</th><th>rE*</th><th>deviation after 80 periods</th><th>predicted exp(−κ·rE*·t)</th><th></th></tr></thead>
+    <tbody>
+      <tr><td>0.040</td><td class="pos">+0.02842</td><td>0.066</td><td>0.065</td><td class="lbl">returns to d*</td></tr>
+      <tr><td>0.030</td><td class="pos">+0.02051</td><td>0.142</td><td>0.140</td><td class="lbl">returns to d*</td></tr>
+      <tr><td>0.006</td><td class="pos">+0.00158</td><td>0.913</td><td>0.859</td><td class="lbl">barely</td></tr>
+      <tr><td>0.000</td><td class="neg">−0.00317</td><td class="neg">1.474</td><td>1.355</td><td class="lbl">walks away</td></tr>
+    </tbody>
+    <caption>Leverage nudged 1% off d*. The diagram agrees with the closed form to 6.6e-17.</caption>
+  </table>
+  </div>
+  <p>And growth is linear in the margin, so the elasticity is a number rather than a
+    table: <span class="m">dg*/dm = κ·d* = <strong>0.95</strong></span>. A point of margin
+    is worth about a point of growth.</p>
+  <div class="revised"><span class="tag">calibration</span>
+    <p>At US parameters this is <strong>0.159</strong>. The elasticity is the product of two
+      quantities the accounts can measure — <span class="m">κ</span>, the accumulation
+      response, and <span class="m">d*</span>, leverage — and the model overstated both, by
+      3.2× and 1.9× respectively. The algebra below is unaffected; only the magnitude is.
+      <a href="#data">Result 7</a>.</p></div>
+  <p>The sweep below is a twelve-period transient, and the twelve-fold gap it appears to
+    show is <strong>not a property of either model</strong> — that is the subject of
+    Result 5. It is kept here because the correction is easier to follow with the mistake
+    still visible.</p>
+  <div class="scroll">
+  <table>
+    <thead><tr><th>m</th><th>core g</th><th>core r</th><th>full g</th><th>full r</th></tr></thead>
+    <tbody>
+      <tr><td>0.040</td><td>0.03411</td><td>0.06851</td><td>0.02524</td><td>0.04685</td></tr>
+      <tr class="mark"><td>0.030</td><td>0.02461</td><td>0.06851</td><td>0.02500</td><td>0.06851</td></tr>
+      <tr><td>0.020</td><td>0.01511</td><td>0.06851</td><td>0.02401</td><td>0.07252</td></tr>
+      <tr><td>0.010</td><td>0.00561</td><td>0.06851</td><td>0.02304</td><td>0.07476</td></tr>
+      <tr><td>0.000</td><td class="neg">−0.00389</td><td>0.06851</td><td>0.02211</td><td>0.07627</td></tr>
+    </tbody>
+    <caption>The same sweep in both models, over the same twelve periods.</caption>
+  </table>
+  </div>
+  <p>The reason is the last column. In the core, <span class="m">r</span> is given and the
+    margin does all the work. In the full model it is not given: it climbs from 0.0469 to
+    0.0763 across the same sweep, and that climb offsets most of the squeeze. Whether that
+    offset is a real feature of a monetary economy or an artefact of this model's demand
+    side is the next question — and it is answerable now the two run side by side.</p>
+</section>
+
+<section>
+  <h2>Result 5 · A measurement error, and what the ladder actually says</h2>
+  <p>An earlier version of this page reported <span class="m">dg/dm</span> of 0.950 / 0.332
+    / 0.078 across the rungs, called it a twelve-fold gap, and attributed 71% of it to
+    banking. <strong>That was wrong</strong>, and the defect is worth recording because it
+    is easy to repeat.</p>
+  <p>Each rung's comparison swept the policy margin while leaving the <em>solved</em>
+    quantities — the bank payout and bank capital — at the values solved for the
+    <em>baseline</em> margin. Every run but one therefore started off its own balanced path
+    and drifted. The slope measured a transient, and it grew without bound with the
+    horizon:</p>
+  <div class="scroll">
+  <table>
+    <thead><tr><th>horizon</th><th>rung 1</th><th>full model</th></tr></thead>
+    <tbody>
+      <tr><td>12 periods</td><td>0.36</td><td>0.062</td></tr>
+      <tr><td>30 periods</td><td>0.55</td><td>0.634</td></tr>
+      <tr><td>60 periods</td><td class="neg">1.08</td><td class="neg">3.916</td></tr>
+    </tbody>
+    <caption>The number I published was the first row. It is not a property of the model.</caption>
+  </table>
+  </div>
+  <p>Re-solving the baseline at each margin — so every run sits on <em>its own</em> balanced
+    path — gives an exact rest point every time (rE drifts by 7e-18, bank capital per unit
+    of capital by zero) and a slope that does not move with the horizon at all.</p>
+
+  <h3>The structural answer</h3>
+  <div class="scroll">
+  <table>
+    <thead><tr><th>model</th><th>dg/dm</th><th>theory</th></tr></thead>
+    <tbody>
+      <tr class="mark"><td class="lbl">core</td><td>0.9500</td><td class="lbl">κ·d*</td></tr>
+      <tr><td class="lbl">+ banking</td><td>0.9500</td><td class="lbl">κ·d* — banking changes nothing</td></tr>
+      <tr><td class="lbl">+ equity, ψ=0.25</td><td>0.7125</td><td class="lbl">κ(1−ψ)d₁</td></tr>
+      <tr><td class="lbl">+ equity, ψ=0.50</td><td>0.4750</td><td class="lbl">κ(1−ψ)d₁</td></tr>
+      <tr><td class="lbl">+ equity, ψ=0.75</td><td>0.2375</td><td class="lbl">κ(1−ψ)d₁</td></tr>
+    </tbody>
+    <caption>Every figure in this column scales with <span class="m">κ·d*</span>, so at US
+      parameters each is about a sixth of what is shown — the core's 0.95 becomes 0.159.
+      The <em>relations</em> between the rungs are unaffected; the levels are not.</caption>
+  </table>
+  </div>
+  <p class="pull">Banking does not damp the mechanism. It damps the transition to it.</p>
+  <p>Equalisation pins a <em>relation</em> between the spread and bank capital, not the
+    spread itself — so on a balanced path the spread is free and the margin passes through
+    whole. Over twelve periods from a common start only about a third of it has arrived.
+    That is a real fact about adjustment speed, and it is not the comparative static I
+    reported it as.</p>
+
+  <h3>And the rungs do not all close the same way</h3>
+  <div class="scroll">
+  <table>
+    <thead><tr><th>margin</th><th>g*</th><th>r</th><th>u</th><th>rE</th></tr></thead>
+    <tbody>
+      <tr><td>0.040</td><td>0.02500</td><td>0.06514</td><td>0.754</td><td>0.02000</td></tr>
+      <tr class="mark"><td>0.030</td><td>0.02500</td><td>0.06851</td><td>0.793</td><td>0.02000</td></tr>
+      <tr><td>0.020</td><td>0.02500</td><td>0.07219</td><td>0.835</td><td>0.02000</td></tr>
+      <tr><td>0.010</td><td>0.02500</td><td>0.07621</td><td>0.882</td><td>0.02000</td></tr>
+    </tbody>
+    <caption>The full model, on balanced paths. Growth does not move at all.</caption>
+  </table>
+  </div>
+  <p>The core and rungs 1 and 2 have no labour force, so growth is whatever accumulation
+    delivers and the margin sets it. The full model has productivity and labour-force
+    growth, so <strong>its balanced growth rate is pinned at α+β and the margin cannot
+    change it</strong>. What moves there is the level — utilisation from 0.754 to 0.882,
+    and the profit rate with it.</p>
+  <p>So comparing their slopes as one quantity was a category error. The mechanism acts on
+    the growth <em>rate</em> where growth is accumulation-determined, and on the
+    <em>level and distribution</em> where it is labour-determined. Both are Shaikhian
+    readings. They are not the same claim.</p>
+</section>
+
+<section>
+  <h2>Result 6 · Corporate equity, and a claim of mine that was wrong</h2>
+  <p>Result 5 said deposits were only 0.47 of the loan book <em>because households hold no
+    equity claim on firms' capital</em>, and that giving them one would raise the deposit
+    base and let more of a policy move through. That was wrong, and rung 1's own arithmetic
+    says so. The bank balance sheet there is an identity, <span class="m">DH = L − EB</span>,
+    and bank capital is pinned by equalisation:</p>
+  <div class="eq">EB/L = (iL − iD − ωB) / (r − iD)  =  0.562</div>
+  <p>A function of the lending rate, the deposit rate, operating costs and
+    <span class="m">r</span>, <strong>and of nothing else</strong>. No household portfolio
+    enters it. Bank leverage is high here because banks earn a fat net margin — 3.9% of the
+    loan book — and equalisation then demands the capital to match. Getting
+    <span class="m">EB/L</span> to a realistic 0.1 needs <span class="m">iL</span> near
+    0.040, not a different asset for households to hold.</p>
+  <p>Measured rather than argued: turning the equity dial from 0 to 0.75 moves
+    <span class="m">DH/L</span> from 0.465 to 0.451. It does essentially nothing, exactly as
+    the identity says.</p>
+
+  <h3>What corporate equity actually does</h3>
+  <p>Firms meet the gap between what they invest and what they retain by borrowing
+    <em>or</em> by issuing shares. With ψ the share met by issuance, leverage settles at
+    <span class="m">d* = (1 − ψ)(1 − (1−payF)/κ)</span> — so the financing requirement is
+    split, and <strong>only the debt half carries an interest bill</strong>.</p>
+  <div class="scroll">
+  <table>
+    <thead><tr><th>ψ</th><th>d*</th><th>E/K</th><th>DH/L</th><th>dg/dm (12-period)</th><th>κ·d* (structural)</th><th>ratio</th></tr></thead>
+    <tbody>
+      <tr class="mark"><td>0.00</td><td>0.7917</td><td>0.000</td><td>0.465</td><td>0.332</td><td>0.950</td><td>0.349</td></tr>
+      <tr><td>0.25</td><td>0.5938</td><td>0.198</td><td>0.460</td><td>0.238</td><td>0.713</td><td>0.334</td></tr>
+      <tr><td>0.50</td><td>0.3958</td><td>0.396</td><td>0.456</td><td>0.152</td><td>0.475</td><td>0.320</td></tr>
+      <tr><td>0.75</td><td>0.1979</td><td>0.594</td><td>0.451</td><td>0.073</td><td>0.238</td><td>0.307</td></tr>
+    </tbody>
+    <caption>Leverage and E/K are structural, confirmed on balanced paths. The dg/dm column is a 12-period transient; the structural slope is the next one.</caption>
+  </table>
+  </div>
+  <p class="pull">Equity changes the strength of the mechanism. It does not change the
+    transmission.</p>
+  <p>The two factors of <span class="m">dg/dm = κ·d* × pass-through</span> turn out to be
+    governed by different sectors: <strong>firms' financing mix sets the first, banks'
+    funding mix sets the second.</strong></p>
+  <p>And a policy statement falls out of it. Growth <em>rises</em> with ψ — 0.028 to 0.069
+    at the baseline margin — because equity carries no interest bill. So equity-financed
+    accumulation is faster and nearly untouchable by policy, and debt-financed accumulation
+    is slower and controllable. <strong>The profit-rate-of-enterprise channel is a channel
+    only to the extent that firms borrow.</strong></p>
+  <p>At ψ = 0 the rung reproduces rung 1 exactly. Capital is financed by debt, outside
+    equity and retained earnings, and <span class="m">K = L + E + RE</span> is integrated
+    from four separate flows and checked rather than enforced — it holds to 7e-13.</p>
+</section>
+
+<section id="data">
+  <h2>Result 7 · The data answers back</h2>
+  <p>Every variable in this model has a national-accounts counterpart, so none of it has to
+    stay theoretical. NIPA table 1.14 splits the net value added of US nonfinancial
+    corporate business into compensation, taxes on production, and net operating surplus —
+    then splits net operating surplus into <strong>net interest, transfers, and corporate
+    profits</strong>. That is precisely Shaikh's division of pre-interest profit into the
+    creditor's share and enterprise's. The accounts already draw the line the model draws.</p>
+  <div class="eq">B  = net interest / net operating surplus    <span class="c">the interest burden</span>
+r  = net operating surplus / K
+rE = (net operating surplus − net interest) / K
+d  = debt securities and loans / K</div>
+  <p>The capital stock <span class="m">K</span> is Z.1's nonfinancial assets of the sector.
+    <span class="m">B</span> is the reliable one: a ratio of two lines of the same table,
+    with no capital stock in it and nothing to argue about. It is also, not by accident,
+    the quantity the whole argument turns on.</p>
+
+  <h3>What eighty years say</h3>
+  <div class="scroll">
+  <table>
+    <thead><tr><th>window</th><th>r</th><th>rE</th><th>d</th><th>iL</th><th>B</th><th>g</th><th>g/rE</th></tr></thead>
+    <tbody>
+      <tr><td class="lbl">full sample 1947–2025</td><td>0.0823</td><td>0.0690</td><td>0.336</td><td>0.0388</td><td>0.171</td><td>0.0266</td><td>0.385</td></tr>
+      <tr><td class="lbl">pre-disinflation 1960–89</td><td>0.0802</td><td>0.0661</td><td>0.283</td><td>0.0493</td><td>0.189</td><td>0.0310</td><td>0.470</td></tr>
+      <tr class="mark"><td class="lbl">1990–2019</td><td>0.0799</td><td>0.0625</td><td>0.421</td><td>0.0415</td><td>0.223</td><td>0.0235</td><td>0.377</td></tr>
+      <tr><td class="lbl">2000–2019</td><td>0.0796</td><td>0.0628</td><td>0.422</td><td>0.0396</td><td>0.215</td><td>0.0206</td><td>0.328</td></tr>
+    </tbody>
+    <caption>The last column is the model's <span class="m">κ</span> if <span class="m">g =
+      κ·rE</span> holds literally. It ranges 0.33 to 0.47 across windows, which is the first
+      warning.</caption>
+  </table>
+  </div>
+
+  <h3>The model was parameterised outside the historical range</h3>
+  <div class="scroll">
+  <table>
+    <thead><tr><th></th><th>model</th><th>data 1990–2019</th><th>ratio</th></tr></thead>
+    <tbody>
+      <tr class="mark"><td class="lbl">interest burden B</td><td>0.708</td><td>0.223</td><td class="neg">3.2×</td></tr>
+      <tr><td class="lbl">leverage d</td><td>0.800</td><td>0.421</td><td class="neg">1.9×</td></tr>
+      <tr><td class="lbl">accumulation response κ</td><td>1.188</td><td>0.377</td><td class="neg">3.2×</td></tr>
+      <tr><td class="lbl">enterprise profit rate rE</td><td>0.020</td><td>0.063</td><td class="neg">0.32×</td></tr>
+      <tr><td class="lbl">profit rate r</td><td>0.069</td><td>0.080</td><td>0.86×</td></tr>
+      <tr><td class="lbl">accumulation g</td><td>0.025</td><td>0.024</td><td class="pos">1.06×</td></tr>
+    </tbody>
+    <caption>The profit rate and the growth rate were close. The financial structure was not.</caption>
+  </table>
+  </div>
+  <p class="pull">The baseline put 71% of pre-interest profit in creditors' hands. The US
+    corporate sector has never exceeded 37%.</p>
+
+  <h3>Three verdicts</h3>
+
+  <div class="finding">
+    <div class="fhead"><h3>The constraint has never bound</h3>
+      <span class="chip open">refuted</span></div>
+    <p>The rule proposed from this model was a floor on <span class="m">rE</span>, with
+      <span class="m">rE = 0</span> — equivalently <span class="m">B = 1</span> — as a
+      bright line. Against the record: the lowest enterprise profit rate ever recorded is
+      <strong>+0.0395</strong>, in 1982. <strong>Zero of eighty years</strong> put even half
+      of pre-interest profit to creditors, let alone all of it. A floor nothing approaches
+      is a floor nobody needs.</p>
+  </div>
+
+  <div class="finding">
+    <div class="fhead"><h3>The interest deduction carries no information for accumulation</h3>
+      <span class="chip open">refuted</span></div>
+    <p>The model says <span class="m">g = κ(r − iL·d)</span>, so the interest bill must enter
+      a regression <strong>equal and opposite</strong> to the profit rate. That is a testable
+      restriction, and it fails — the bill enters <em>positive</em> in every linear
+      specification. Repairing the obvious objection, that NIPA's <em>net</em> interest
+      understates what is paid, makes it worse rather than better.</p>
+    <div class="scroll">
+    <table>
+      <thead><tr><th>g on r and the interest bill</th><th>r</th><th>bill</th><th>b(r)+b(bill)=0</th></tr></thead>
+      <tbody>
+        <tr><td class="lbl">levels, NIPA net bill</td><td>0.338 <span class="m">(t 2.35)</span></td><td class="neg">+0.101 <span class="m">(t 0.38)</span></td><td>p = 0.241</td></tr>
+        <tr><td class="lbl">first differences</td><td>0.680 <span class="m">(t 9.13)</span></td><td class="neg">+0.508 <span class="m">(t 1.06)</span></td><td class="neg">p = 0.021</td></tr>
+        <tr><td class="lbl">Baa-imputed gross bill</td><td>0.403 <span class="m">(t 2.97)</span></td><td class="neg">+0.206 <span class="m">(t 1.66)</span></td><td class="neg">p = 0.009</td></tr>
+      </tbody>
+      <caption>Newey-West standard errors, annual, n = 80. The model needs the middle column
+        negative and close to minus the first.</caption>
+    </table>
+    </div>
+    <p>One qualification, and it matters. That positive sign is almost certainly
+      <strong>simultaneity, not economics</strong> — policy tightens into booms, so rates
+      and accumulation rise together, and a reduced form with no instrument for the bill
+      picks that up. So the defensible claim is the weaker one: there is <em>no evidence in
+      the aggregate record</em> for the negative effect the model requires. Establishing one
+      would need a monetary-policy-shock instrument this exercise does not have.</p>
+  </div>
+
+  <div class="finding">
+    <div class="fhead"><h3>The threshold defence is not refuted — it is untestable here</h3>
+      <span class="chip unsettled">not settled</span></div>
+    <p>The model's claim was never linear. It says a <em>high</em> burden chokes
+      accumulation, and the burden has never been high, so a linear test over this sample
+      could miss a real threshold. Given that chance, the data splits: over the top burden
+      quartile the NIPA bill enters at <strong>−1.538 (t −2.33)</strong> — the model's sign,
+      and a large effect — while the Baa-imputed bill enters <strong>+1.082</strong> over the
+      very same twenty years. Twenty observations cannot tell those apart, and the
+      specification that favours the model rests on the weaker interest measure.</p>
+  </div>
+
+  <h3>What survives</h3>
+  <p>The profit-driven half of Shaikh is solid. Accumulation follows the profit rate with
+    <span class="m">dg on dr = 0.653, t = 9.4</span>. It is the <em>enterprise</em> half —
+    the interest deduction that makes this model's policy argument possible — that earns
+    nothing in aggregate US data. And even the surviving relation is not stable: regressing
+    <span class="m">g</span> on <span class="m">rE</span> gives a slope of 0.521
+    (<span class="m">t 5.01</span>) over 1980–99 and <strong>0.078</strong>
+    (<span class="m">t 0.66</span>) over 2000–25. It has essentially disappeared.</p>
+
+  <h3>The model, rebuilt at US parameters</h3>
+  <p>Mapped from the accounts rather than chosen: the profit share and utilisation give
+    <span class="m">v</span> and <span class="m">omega</span>, <span class="m">g/rE</span>
+    gives <span class="m">κ</span>, observed leverage then forces
+    <span class="m">payF</span>, and the mean fed funds rate gives the margin and spread.</p>
+  <div class="scroll">
+  <table>
+    <thead><tr><th></th><th>v</th><th>omega</th><th>kappa</th><th>payF</th><th>s</th><th>m</th></tr></thead>
+    <tbody>
+      <tr><td class="lbl">US, 1990–2019</td><td>1.905</td><td>0.810</td><td>0.377</td><td>0.782</td><td>0.0125</td><td>0.0509</td></tr>
+    </tbody>
+    <caption><span class="m">EnterpriseCoreUS.mky</span> reproduces every target exactly and
+      sits still: worst drift 5.6e−17 over 60 periods, leverage settling at 0.4208 against a
+      theoretical 0.4208.</caption>
+  </table>
+  </div>
+  <p>Two numbers come out of it. The elasticity <span class="m">dg/dm</span> falls from 0.95
+    to <strong>0.159</strong> — the mechanism is six times weaker than the figure this page
+    led with. And the bright line acquires a policy rate:</p>
+  <div class="eq">lending rate that zeroes rE   0.1900
+policy rate that does it      <strong>0.1775</strong>
+highest fed funds ever        0.1638   <span class="c">1981</span></div>
+  <p>At observed leverage the Fed would have to hold the policy rate near <strong>17.8%</strong>
+    to drive the profit of enterprise to zero. Volcker reached 16.4%. So the bright line is
+    not a fantasy — it came within a point and a half of being tested — but it sits well
+    outside anything resembling normal policy, which is the same conclusion by another road.</p>
+  <p class="pull">The mechanism is real in the model, six times weaker at observed
+    parameters, and has never once bound.</p>
+
+  <h3>What would revive it</h3>
+  <ul>
+    <li><strong>Disaggregation.</strong> An aggregate burden of 0.17 is entirely consistent
+      with a leveraged tail sitting near 1. Compustat by firm, or Z.1 by size class, would
+      show whether the constraint binds for the marginal borrower while the sector average
+      stays comfortable. This is the likeliest place for the mechanism to be alive.</li>
+    <li><strong>Identification.</strong> Romer–Romer or high-frequency policy shocks as an
+      instrument for the interest bill, which would separate the model's negative effect
+      from the simultaneity currently swamping it.</li>
+  </ul>
+  <p>Neither is a reinterpretation of these results. Both are new work, and until one of
+    them lands the honest statement is that the enterprise-margin channel is a coherent
+    piece of theory with no aggregate empirical support.</p>
+</section>
+
+<section>
+  <h2>What building it surfaced</h2>
+  <p>Ordered by how much damage each does silently. Every one was measured.</p>
+
+  <div class="finding">
+    <div class="fhead"><h3>A user function that names a model variable is wrong during a run</h3>
+      <span class="chip fixed">fixed</span></div>
+    <p>Minsky binds any model variable named in an expression straight to that variable's
+      storage. It reads correctly at reset, then evaluates as <strong>0 for essentially
+      every step of a run</strong>. On <span class="m">K' = 0.03·K</span> against the
+      analytic solution: wired blocks were exact to 4e−12; the same model written as
+      <span class="m">0.03*K</span> inside a function came out <strong>26% low</strong>,
+      with the derivative zero on 143 of 144 steps — on both solvers, with no error
+      anywhere.</p>
+  </div>
+
+  <div class="finding">
+    <div class="fhead"><h3>A user function's arguments live in a different property</h3>
+      <span class="chip fixed">fixed</span></div>
+    <p>The body is <code>expression</code>; the argument list is parsed out of
+      <code>description</code>. Setting only the body left every function on the
+      <span class="m">x, y</span> a fresh one is born with, so <span class="m">a*b + c</span>
+      was accepted, echoed back verbatim, and computed 0.</p>
+  </div>
+
+  <div class="finding">
+    <div class="fhead"><h3>Two arguments is the hard limit</h3>
+      <span class="chip fixed">fixed</span></div>
+    <p><code>evaluate(in1, in2)</code> zeroes every argument after the second, and the icon
+      only ever grows two input ports. <span class="m">f(a,b,c) = a*100+b*10+c</span> fed 1
+      and 2 returns <strong>120</strong>, not 123.</p>
+  </div>
+
+  <div class="finding">
+    <div class="fhead"><h3>Reporting a run cost ten times more than solving it</h3>
+      <span class="chip fixed">fixed</span></div>
+    <p>A solver step on this model costs 1.56 ms. Streaming that step to a client cost
+      <strong>15.4 ms</strong>, and the setup before a run cost 2.6 seconds — because
+      <code>live_value_ids()</code>, which walks every item, was being called once per
+      value key from inside a comprehension. And nearly all the cost of reading a variable
+      turned out to be the <em>lookup</em>: all 89 values cost 8.54 ms looked up each step,
+      <strong>0.027 ms</strong> through objects bound once per run. Same run, identical
+      result to the last digit: <strong>6.62 s → 0.89 s</strong>, which is within a third
+      of the engine's own floor.</p>
+  </div>
+
+  <div class="finding">
+    <div class="fhead"><h3>Running out of steps looked like finishing</h3>
+      <span class="chip fixed">fixed</span></div>
+    <p>A truncated run reported a bare "done". It now says where it got to, how many steps
+      the current step size would need, and — when the step size is the giveaway — which
+      solver settings to change. The shipped tolerances take 0.0005-long steps at 45 ms
+      each here: <strong>547 s to reach t = 5</strong>, against 3 s explicit, with nothing
+      saying why. The defaults are left alone, because implicit is right for a genuinely
+      stiff model and switching someone's solver silently is not a fix.</p>
+  </div>
+
+  <div class="finding">
+    <div class="fhead"><h3>There was no way to make a chart</h3>
+      <span class="chip fixed">fixed</span></div>
+    <p>A model built through the API had nothing to look at — no plot kind existed, so the
+      Plots workspace correctly said "this model has no plots" and offered no way to get
+      one. A plot is also born with room for a single line, so every extra series needed
+      its own chart. The model now ships with three.</p>
+  </div>
+
+  <div class="finding">
+    <div class="fhead"><h3>Godley rows must balance in exact floating point</h3>
+      <span class="chip open">by design</span></div>
+    <p>The balance check is an exact <span class="m">!= 0</span>, no tolerance — and it is
+      right to be. But it means opening figures written at 10 significant digits leave the
+      row out by 1e−08, and at full precision by 7e−15. Only binary-exact values give a
+      clean zero, so the model snaps its opening figures to multiples of 1/1024.</p>
+  </div>
+
+  <div class="finding">
+    <div class="fhead"><h3>A table's own variable icons cannot be wired</h3>
+      <span class="chip open">by design</span></div>
+    <p>A Godley table draws an icon for every stock and flow, and both are display only.
+      The idiom is to place ordinary copies elsewhere and wire those — in Minsky's own
+      <span class="m">LoanableFunds</span>, every flow has one icon wired into it and
+      several plain copies feeding other blocks. Not discoverable from the outside; it
+      cost an hour.</p>
+  </div>
+
+  <h3>What held up</h3>
+  <ul>
+    <li><strong>The accounting.</strong> Multi-table, shared stocks, per-column asset
+      classes, symbolic row sums that cancel to zero when the flows match. It held to
+      1e−15 across every run without a single imposed constraint.</li>
+    <li><strong>The wiring engine is exact.</strong> Every ODE built from plain operation
+      blocks integrated to 1e−12 or better against closed forms.</li>
+    <li><strong>Tidy</strong> laid out 215 items and 220 wires without overlaps, on a model
+      an order of magnitude larger than any bundled example.</li>
+  </ul>
+</section>
+
+<section>
+  <h2>Limits worth knowing</h2>
+  <ul>
+    <li><strong>Everything measured is an aggregate.</strong> The sharpest limit, and the
+      one that decides whether Result 7 is fatal or merely inconvenient. A sector-wide
+      interest burden of 0.17 is consistent with a leveraged tail at which the constraint
+      genuinely binds. Nothing here can see that tail.</li>
+    <li><strong>The interest line is net of interest received.</strong> That is the right
+      concept for the model — it is what pre-interest profit is actually reduced by — but it
+      is not a contract rate, and after 2022 it diverges sharply from market yields as firms
+      earned on large balances while their own fixed-rate debt had not repriced. The
+      Baa-imputed gross bill is reported alongside throughout for exactly this reason.</li>
+    <li><strong>The capital stock is at market value</strong> (Z.1 nonfinancial assets), so
+      it carries land prices. Ratios like <span class="m">B</span> are immune to this;
+      levels like <span class="m">r</span> and <span class="m">d</span> are not.</li>
+    <li><strong>No instrument, so no causal claim.</strong> The regressions in Result 7 are
+      reduced forms. They can say the model's restriction fails; they cannot recover the
+      structural effect of the interest bill on accumulation.</li>
+    <li><strong>Utilisation is unbounded above.</strong> Output is demand-determined with
+      no capacity ceiling.</li>
+    <li><strong>No government, no central bank balance sheet, no default.</strong> Reserves
+      are fixed.</li>
+    <li><strong>One household sector</strong> — workers and rentiers are not separated, so
+      there is no differential saving propensity, which Shaikh would want.</li>
+  </ul>
+</section>
+
+<footer>
+  models/shaikh_monetary_policy.py · models/build.py · models/runner.py<br>
+  models/calibrate.py · models/data/uscorp.py · models/data/fred.py<br>
+  docs/SHAIKH_MODEL.md · docs/BUILDING_A_BIG_MODEL.md<br>
+  Built through the HTTP API. 218 items, 230 wires, three Godley tables, three charts.<br>
+  Data: BEA NIPA table 1.14 and Federal Reserve Z.1 via FRED, 1947Q4–2026Q1. Every series
+  is fetched with its title and printed before use, so none is used unidentified.
+</footer>
+
+</div>

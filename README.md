@@ -1,12 +1,15 @@
 # minsky-web
 
 A modern browser front end for **[Minsky](https://github.com/highperformancecoder/minsky)**,
-driving the existing engine headlessly. The engine is not forked or modified — only the
-interface is new.
+driving the existing engine headlessly. The interface is the new part. The engine is
+Minsky's own and is used as it ships, with one exception: two silent bugs in **user
+functions** needed fixes in the C++, kept as patches in
+[`engine-patches/`](engine-patches/) rather than as a fork. Everything else — Godley
+tables, wiring, the solver, save and load — runs against stock Minsky unmodified.
 
 Minsky's value is its engine: Godley tables, stock-flow consistency, and models that
 actually run through time rather than being solved as simultaneous equations. What is
-dated is the Tcl/Tk shell around it. This replaces the shell and leaves the engine alone.
+dated is the Tcl/Tk shell around it. This replaces the shell.
 
     python3 -m minskyweb.server        # http://127.0.0.1:8765
 
@@ -47,6 +50,17 @@ it, or place it at `~/minsky`.
     export MINSKY_HOME=/path/to/minsky
     python3 -m minskyweb.server
 
+### Engine patches
+
+Stock Minsky is enough to run everything here except **user functions**, which have two
+bugs that fail silently: a function takes only two arguments and zeroes the rest, and an
+expression naming a model variable reads correct values at reset and then stale ones for
+the whole run. Both are fixed by
+[`engine-patches/0001-userfunction.patch`](engine-patches/0001-userfunction.patch);
+[`engine-patches/README.md`](engine-patches/README.md) has the diagnosis and the exact
+build flags. Apply it and rebuild `pyminsky.so` if you intend to use user functions —
+without it they are quietly wrong rather than broken.
+
 ## Layout
 
     minskyweb/session.py    locate and import pyminsky
@@ -57,8 +71,11 @@ it, or place it at `~/minsky`.
 
 ## Tests
 
-    python3 test_headless.py    # 12 checks
-    python3 test_server.py      # 115 checks
+    python3 test_headless.py    # 6 sections, 13 checks
+    python3 test_server.py      # 78 sections, 942 checks
+
+Set `MINSKYWEB_SAVE_DIR` to a scratch directory before running them, or the suites write
+`.mky` files into your own model library.
 
 Both build models whose answers are known analytically, so a mis-wired model fails loudly
 instead of producing plausible numbers.

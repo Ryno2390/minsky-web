@@ -43,6 +43,16 @@ class Run:
                 continue
             self._ids.setdefault(nm, it.valueId())
 
+    def use(self, path):
+        """Point this runner at a different model.
+
+        pyminsky is one model per process, so comparing two models means loading them
+        alternately rather than holding both.
+        """
+        self.path = os.path.expanduser(path)
+        self._load()
+        return self
+
     def go(self, tmax, watch, overrides=None, samples=400, max_steps=400_000):
         """Reload, apply `overrides`, run to `tmax`, and sample `watch` along the way.
 

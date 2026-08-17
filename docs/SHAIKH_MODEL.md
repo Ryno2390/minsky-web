@@ -97,27 +97,52 @@ policy rate equals `r` and `rE` is still 0.0049, because what matters is the int
 *bill* against profit, `iL·d` against `r`, and leverage here is 0.8 rather than 1. The
 condition is `iL < r/d`. Only at `m = −0.01` is enterprise profit gone.
 
-## Result 2 — and a result that cuts the other way
+## Result 2 — protecting the margin and stabilising are different jobs
 
-A 2% money-wage shock. It cuts the profit rate and raises inflation at once, so the rules
+A money-wage shock. It cuts the profit rate and raises inflation at once, so the rules
 pull in opposite directions: Shaikh follows `r` down, Taylor tightens into a falling
-profit rate.
+profit rate. **Which rule looks better depends on how long you watch.**
 
-| | K growth | final g | final rE | lowest rE |
-|---|---|---|---|---|
-| baseline | 2.120 | 0.0250 | 0.0200 | +0.0200 |
-| Shaikh | 1.856 | 0.0216 | 0.0104 | **−0.2046** |
-| Taylor | 2.112 | 0.0248 | 0.0188 | +0.0087 |
+| shock | horizon | Shaikh K | lowest rE | Taylor K | lowest rE | better |
+|---|---|---|---|---|---|---|
+| +0.5% | 20 | 1.656 | +0.0193 | 1.650 | +0.0172 | Shaikh |
+| +1% | 20 | 1.660 | +0.0187 | 1.648 | +0.0144 | Shaikh |
+| +2% | 20 | 1.652 | −0.0029 | 1.646 | +0.0087 | Shaikh |
+| +0.5% | 30 | 2.105 | −0.0126 | 2.118 | +0.0172 | Taylor |
+| +1% | 30 | 1.973 | −0.1465 | 2.116 | +0.0144 | Taylor |
+| +2% | 30 | 1.856 | −0.2046 | 2.112 | +0.0087 | Taylor |
 
-**The Shaikh rule does worse here, and the reason is instructive.** Keying `ip` to `r`
-insulates the enterprise margin from shocks — which is the point of it — but that
-insulation removes a damper. Normally a fixed interest bill squeezes `rE` when `r` falls
-and cuts investment back; that is stabilising. A rule that moves `ip` with `r` takes the
-damper out, so the accumulation loop is freer to run away, and here it does.
+Over twenty periods the rule does what it claims: the enterprise margin holds up better
+than under Taylor. Over thirty it has lost — and **not because the shock got worse**.
+Taylor's worst reading is identical at both horizons; Shaikh's keeps deepening. That is
+the balanced path being left, not the shock being absorbed.
 
-So the mechanism in Result 1 is right and the policy conclusion does not follow from it
-automatically. Protecting the enterprise margin and stabilising the economy are two
-different objectives, and in this model they conflict.
+The cause is the same insulation that makes the rule work on impact. A fixed interest bill
+squeezes `rE` when `r` falls, which cuts investment back; that is stabilising, and a rule
+that moves `ip` with `r` takes it away. So the mechanism in Result 1 is right and the
+policy conclusion does not follow from it. Protecting the enterprise margin and
+stabilising accumulation are two objectives, and here they conflict.
+
+A pure policy disturbance separates them: start the policy rate a point high and change
+nothing else, and both rules bring it back with the same worst-case margin (+0.0118) and
+the same growth. The disagreement is about **distributive** shocks, not the level of rates.
+
+## Result 2b — what a tightening costs enterprise depends on bank funding
+
+Shaikh's second condition does quantitative work, not just closure. Because banking's
+profit rate is equalised on to `r`, the spread must widen when the banks' own funding cost
+rises — so the lending rate climbs by more than the policy rate.
+
+| deposits pay | m | ip | r | rE | g |
+|---|---|---|---|---|---|
+| 0.6 × policy | 0.040 | 0.0117 | 0.0469 | 0.0194 | 0.0252 |
+| 0.6 × policy | 0.000 | 0.0760 | 0.0763 | **0.0049** | 0.0221 |
+| nothing | 0.040 | 0.0286 | 0.0683 | 0.0270 | 0.0264 |
+| nothing | 0.000 | 0.0762 | 0.0763 | **0.0198** | 0.0251 |
+
+Closing the margin costs four times as much enterprise profit when deposits bear interest.
+Transmission from policy to enterprise runs through the banking sector's balance sheet,
+not just through the policy rate.
 
 ## Result 3 — the balanced path is unstable
 
@@ -148,6 +173,58 @@ possible at all.
 
 The experiments run at `kappa = 0.20` over 30 periods, comfortably inside the window where
 the baseline is still flat.
+
+## The core on its own
+
+`models/enterprise_core.py` is the same mechanism with everything else taken out: two
+stocks, capital and debt, and the profit rate taken as given. No employment, no prices, no
+demand, no banking sector, no Godley table. 40 items against 218.
+
+It is small enough to solve, and what falls out is the claim as a **stability condition**
+rather than a simulation. In leverage alone,
+
+    d' = (r - iL*d) * (A - kappa*d)          A = kappa - 1 + payF
+
+with two rest points: `d* = A/kappa`, where leverage settles, and `d = r/iL`, where the
+enterprise profit rate is nothing. Linearising at the first gives `f'(d*) = -kappa*rE*`,
+so **the growth equilibrium is stable exactly while rE* > 0**. Push the lending rate past
+`r/d*` and the only rest point left is the one with no accumulation.
+
+Measured against that, by nudging leverage 1% off `d*`:
+
+| m | rE* | deviation after 80 periods | predicted `exp(-kappa*rE* t)` |
+|---|---|---|---|
+| 0.040 | +0.02842 | 0.066 | 0.065 |
+| 0.030 | +0.02051 | 0.142 | 0.140 |
+| 0.006 | +0.00158 | 0.913 | 0.859 |
+| 0.000 | −0.00317 | **1.474** | 1.355 |
+
+And growth is linear in the margin, so the elasticity is a number rather than a table:
+
+    g* = kappa * (r*(1 - d*) + (m - s)*d*)        dg*/dm = kappa * d*  =  0.95
+
+The diagram agrees with the paper to **6.6e-17**, and leverage settles on `d*` to 9e-16.
+
+### What the comparison shows
+
+The same sweep in both models, over the same twelve periods:
+
+| m | core g | core r | full g | full r |
+|---|---|---|---|---|
+| 0.040 | 0.03411 | 0.06851 | 0.02524 | 0.04685 |
+| 0.030 | 0.02461 | 0.06851 | 0.02500 | 0.06851 |
+| 0.020 | 0.01511 | 0.06851 | 0.02401 | 0.07252 |
+| 0.010 | 0.00561 | 0.06851 | 0.02304 | 0.07476 |
+| 0.000 | −0.00389 | 0.06851 | 0.02211 | 0.07627 |
+
+**dg/dm: 0.95 in the core, 0.078 in the full model — a factor of twelve.**
+
+The reason is in the last column. In the core, `r` is given and the margin does all the
+work. In the full model `r` is not given: it rises as policy tightens, from 0.0469 to
+0.0763 across the same sweep, and that rise offsets most of the squeeze. Whether that
+offset is a real feature of a monetary economy or an artefact of this model's demand side
+is the obvious next question, and it is answerable now that the two can be run side by
+side.
 
 ## Limits worth knowing
 

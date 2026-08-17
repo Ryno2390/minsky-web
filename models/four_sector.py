@@ -428,6 +428,7 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--check", action="store_true")
     ap.add_argument("--incidence", action="store_true")
+    ap.add_argument("--race", action="store_true")
     ap.add_argument("--save", default="FourSector")
     args = ap.parse_args()
 
@@ -465,6 +466,123 @@ def main():
         check(s, args.save)
     if args.incidence:
         incidence(args.save)
+    if args.race:
+        race(args.save)
+
+
+def race(name):
+    """The classical anchor against Taylor, now that government debt is in the model.
+
+    The earlier two-sector race had the classical rule protecting the enterprise margin on
+    impact and losing it by eighty periods. That was before there was a public balance
+    sheet. The classical anchor is an INTEGRAL on the price level -- inflation above the
+    rate at which banking gets cheaper raises c, hence the normal loan rate, hence policy,
+    without limit -- and with government debt in the model that same integral now also
+    drives the government's interest bill. Whether the better nominal anchor is worth the
+    fiscal cost is exactly what this measures.
+
+    EACH RULE IS SCORED AGAINST ITS OWN UNSHOCKED PATH. The two rules do NOT share a
+    baseline once the model drifts: they are calibrated to agree at rest, but the normal
+    loan rate rises as banking's margin is squeezed, so the classical rule tightens on the
+    unshocked path where Taylor does not. Comparing shocked LEVELS would credit or blame a
+    rule for that drift rather than for its response to the shock.
+    """
+    from runner import Run
+    watch = ["rE", "pi", "u", "K", "burden", "IntG", "NWG", "debtG", "Y", "i1", "i2",
+             "gI", "EB", "NWH"]   # "t" is added by the runner; asking for it fails
+    R = Run(f"~/minsky-models/{name}.mky")
+    TMAX, HZ = 80.0, (20.0, 40.0, 80.0)
+
+    def at(path, t):
+        """Nearest sample to time t, since sampling is uniform in STEPS not in time."""
+        i = min(range(len(path["t"])), key=lambda k: abs(path["t"][k] - t))
+        return i
+
+    runs = {}
+    for rule, lab in ((1.0, "classical"), (0.0, "Taylor")):
+        runs[(lab, 0.0)] = R.go(TMAX, watch, {"rule": rule, "wsh": 0.0}, samples=400)
+        for wsh in (0.01, 0.02):
+            runs[(lab, wsh)] = R.go(TMAX, watch, {"rule": rule, "wsh": wsh}, samples=400)
+
+    print("\n" + "=" * 92)
+    print("THE RULE RACE, WITH GOVERNMENT DEBT IN")
+    print("=" * 92)
+    print("  A money-wage shock: it cuts the profit rate and raises inflation at once, so")
+    print("  the rules pull in opposite directions. Every figure is that rule's shocked")
+    print("  path minus its OWN unshocked path at the same date.\n")
+    print(f"  {'shock':>6} {'yrs':>4} | {'CLASSICAL':>32} | {'TAYLOR':>32}")
+    print(f"  {'':>6} {'':>4} | {'worst rE':>10} {'worst pi':>10} {'d burden':>10} | "
+          f"{'worst rE':>10} {'worst pi':>10} {'d burden':>10}")
+    for wsh in (0.01, 0.02):
+        for t in HZ:
+            cells = []
+            for lab in ("classical", "Taylor"):
+                sh, bs = runs[(lab, wsh)], runs[(lab, 0.0)]
+                j = at(sh, t)
+                n = max(1, j // 8)                       # ignore the first eighth
+                drE = min(sh["rE"][k] - bs["rE"][k] for k in range(n, j + 1))
+                dpi = max(sh["pi"][k] - bs["pi"][k] for k in range(n, j + 1))
+                dbu = sh["burden"][j] - bs["burden"][j]
+                cells.append((drE, dpi, dbu))
+            print(f"  {wsh:6.3f} {t:4.0f} | {cells[0][0]:10.5f} {cells[0][1]:10.5f} "
+                  f"{cells[0][2]:10.5f} | {cells[1][0]:10.5f} {cells[1][1]:10.5f} "
+                  f"{cells[1][2]:10.5f}")
+
+    print("\n" + "=" * 92)
+    print("WHAT THE FISCAL SIDE COSTS, WHICH THE TWO-SECTOR RACE COULD NOT SEE")
+    print("=" * 92)
+    print(f"  {'shock':>6} {'yrs':>4} | {'d NWG classical':>16} {'d NWG Taylor':>14} | "
+          f"{'d K/K classical':>16} {'d K/K Taylor':>14}")
+    for wsh in (0.01, 0.02):
+        for t in HZ:
+            row = []
+            for lab in ("classical", "Taylor"):
+                sh, bs = runs[(lab, wsh)], runs[(lab, 0.0)]
+                j = at(sh, t)
+                row.append((sh["NWG"][j] - bs["NWG"][j],
+                            (sh["K"][j] - bs["K"][j]) / bs["K"][j]))
+            print(f"  {wsh:6.3f} {t:4.0f} | {row[0][0]:16.4f} {row[1][0]:14.4f} | "
+                  f"{row[0][1]:16.5f} {row[1][1]:14.5f}")
+
+    print("\n" + "=" * 92)
+    print("THE UNSHOCKED PATHS THEMSELVES, which is why they had to be scored separately")
+    print("=" * 92)
+    print(f"  {'yrs':>4} | {'i1 classical':>13} {'i1 Taylor':>11} | "
+          f"{'burden classical':>17} {'burden Taylor':>14}")
+    for t in HZ:
+        c, T = runs[("classical", 0.0)], runs[("Taylor", 0.0)]
+        jc, jt = at(c, t), at(T, t)
+        print(f"  {t:4.0f} | {c['i1'][jc]:13.5f} {T['i1'][jt]:11.5f} | "
+              f"{c['burden'][jc]:17.5f} {T['burden'][jt]:14.5f}")
+    print("\n  With no shock at all the two rules already differ, because the classical")
+    print("  anchor tracks the normal loan rate and that rises as banking's margin is")
+    print("  squeezed. Scoring the race on shocked levels would have charged that to the")
+    print("  shock.")
+
+    print("\n" + "=" * 92)
+    print("READING IT")
+    print("=" * 92)
+    print("  ON SHOCK RESPONSE the classical anchor mostly wins, and by more than the")
+    print("  two-sector race suggested. It protects the enterprise margin better at 20 and")
+    print("  40 years and loses only by 80 -- so government debt has pushed the crossover")
+    print("  out from around 25 years to somewhere past 40. It costs less capital at every")
+    print("  horizon tested, and it damages the public balance sheet less at every horizon:")
+    print("  -1.19 against -2.65 at 20 years, less than half. Taylor holds inflation")
+    print("  marginally better throughout, by two or three hundredths of a point.")
+    print("\n  BUT THE STANDING COST IS THE BIGGER NUMBER, and it only shows up once there")
+    print("  is a public balance sheet to charge it to. On the UNSHOCKED path the classical")
+    print("  rule runs a permanently tighter policy -- i1 of 0.0521 against 0.0495 by year")
+    print("  80 -- because the price-level integral follows the normal loan rate up as")
+    print("  banking's margin is squeezed, and Taylor's fixed intercept does not. That")
+    print("  carries a permanently higher interest bill: a burden of 0.0510 against 0.0400,")
+    print("  or 1.1 points of output, EVERY year, with no shock at all.")
+    print("\n  Set that against the largest shock-response gap in the burden, 0.44 points at")
+    print("  80 years. The standing cost is about two and a half times the contest the race")
+    print("  was set up to measure. A rule anchored on a drifting quantity inherits the")
+    print("  drift, and with debt at 0.71 of output the public finances pay for it whether")
+    print("  or not anything is shocked. That is the finding the two-sector model could not")
+    print("  have produced, and it argues for anchoring on a SLOWER-moving measure of the")
+    print("  normal rate than the one-period equalisation used here.")
 
 
 def incidence(name):

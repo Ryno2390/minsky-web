@@ -54,21 +54,57 @@ def api(path, body=None, method="POST"):
 class Builder:
     """Places items, compiles equations, and remembers what every name refers to."""
 
+    CLEAR = 110.0          # how far a new item must sit from any existing one. An IntOp
+    #                        icon is wider than it looks, and the engine also NUDGES one
+    #                        after creation -- an integral asked for at (120,192) was
+    #                        found afterwards at (52,255) -- so both the margin and the
+    #                        re-snapshot in eq() are needed, not one or the other.
+
     def __init__(self):
         self.ref = {}          # name -> ref of the item whose OUTPUT carries that name
+        self.integral = {}     # name -> the integral's OWN icon, which must not be wired
         self._x = 120.0        # a rough placement cursor; Tidy fixes it properly later
         self._y = 120.0
         self._col = 0
+        self._taken = []       # every position known to be occupied, engine's included
 
     # ---------- placement ----------
-    def _at(self):
-        """Somewhere free-ish. The real layout comes from /api/layout at the end."""
-        x, y = self._x, self._y
-        self._y += 72
+    def _step(self):
+        self._y += 120
         if self._y > 2600:
             self._y = 120
-            self._x += 240
+            self._x += 400
+
+    def _free(self, x, y):
+        return all(abs(x - px) >= self.CLEAR or abs(y - py) >= self.CLEAR
+                   for px, py in self._taken)
+
+    def _at(self):
+        """Somewhere genuinely free. The real layout comes from /api/layout at the end.
+
+        This used to be a blind cursor, and that was a real bug rather than a cosmetic
+        one: `stock()` asks the engine for an integral, and the ENGINE places a second
+        icon -- the integral's output variable -- wherever it likes. The cursor never knew
+        about those, so on a big enough model it would eventually march an operation right
+        on top of one, and the next `addWire` would be refused with "those two ports cannot
+        be connected ... and that the items do not overlap". The failure surfaces as a
+        wiring error several equations later, which points nowhere near the cause.
+        """
+        guard = 0
+        while not self._free(self._x, self._y) and guard < 4000:
+            self._step()
+            guard += 1
+        x, y = self._x, self._y
+        self._taken.append((x, y))
+        self._step()
         return [x, y]
+
+    def _note_engine_items(self):
+        """Record where the engine put things we did not place ourselves."""
+        for i in api("/api/state", method="GET")["items"]:
+            at = i.get("at") or ([i["x"], i["y"]] if "x" in i and "y" in i else None)
+            if at:
+                self._taken.append((float(at[0]), float(at[1])))
 
     # ---------- items ----------
     def _add(self, spec):
@@ -97,7 +133,28 @@ class Builder:
                    if i["ref"] not in before and i["classType"] == "Variable:integral")
         api(f"/api/item/{var}/rename", {"name": name})
         api("/api/init", {"name": name, "value": init})
-        self.ref[name] = var
+        self.integral[name] = var
+        # READS GO THROUGH A COPY, and they have to.
+        #
+        # A wire is made by dragging on the canvas: mouseDown on the source's output port,
+        # mouseUp on the destination's input. An integral's own icon shares its output
+        # port with its IntOp -- both report port 0 at the same pixel -- so the mouseDown
+        # can land on the operation body and DRAG IT instead of starting a wire. The
+        # symptom is baffling from the outside: `addWire` is refused with the generic
+        # "those two ports cannot be connected ... items do not overlap", the refusal is
+        # unaffected by moving the destination hundreds of pixels away, and the only
+        # trace is that the IntOp has quietly moved to where the drag dropped it. Whether
+        # it happens at all depends on which icon the canvas picks at that pixel, so the
+        # same expression can build in one model and fail in the next.
+        #
+        # Minsky's own answer to this is already recorded in scan(): place an ORDINARY
+        # copy of the variable and wire that. Same name means the same value, so the copy
+        # reads the integral.
+        # The copy must declare the SAME type the integral already registered under that
+        # name -- "integral", not "stock" -- or the engine refuses to create it at all.
+        reader = self._add({"kind": "variable", "name": name, "var_type": "integral"})
+        self.ref[name] = reader
+        self._note_engine_items()
         return iop
 
     def flow(self, name):
@@ -185,6 +242,7 @@ class Builder:
     # ---------- equations ----------
     def eq(self, name, expr):
         """Define flow variable `name` as `expr`, emitting the blocks and the wires."""
+        self._note_engine_items()      # positions move under us between equations
         try:
             tree = ast.parse(expr, mode="eval").body
         except SyntaxError as ex:

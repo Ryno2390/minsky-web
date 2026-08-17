@@ -84,6 +84,24 @@ P = dict(
     fBl=0.45,        # ...long and household-held
     fBb=0.30,        # ...short and bank-held   (the three must sum to 1)
     resY=0.120,      # reserves to output
+    # --- real dynamics, so the policy rule has something to respond to -------------
+    kappa=0.377,     # accumulation response to the enterprise profit rate
+    thu=0.50,        # utilisation adjusts to investment demand
+    thb=0.30,        # ...and is pulled back toward normal capacity
+    phi1=0.30,       # wage share rises with utilisation
+    phi2=0.50,       # ...and is pulled back toward its own norm
+    gp=0.40,         # inflation responds to utilisation
+    gw=0.30,         # inflation responds to the wage share
+    theta=0.035,     # real banking costs fall at this rate; = pi0 keeps c stationary
+    # --- rate formation and policy ------------------------------------------------
+    phN=0.50,        # speed the market rate gravitates to the classical normal rate
+    phP=1.00,        # speed policy reaches the market rate
+    sbar=0.019,      # normal gap between the policy rate and the short loan rate
+    api=0.50,        # response to the inflation gap (BOTH rules)
+    auu=0.50,        # response to the utilisation gap (BOTH rules)
+    roll=0.10,       # the long bond book rolls over at 10% a year -- a 10-year book.
+    #                  This is what splits the interest bill into an immediate leg
+    #                  (Bs and Bb, repricing at once) and an eventual one (Bl).
 )
 K0 = 100.0
 
@@ -198,6 +216,9 @@ def baseline(p):
     # government budget: G + interest - Tax = the deficit, financed by new liabilities
     s["Tax"] = s["G"] + s["IntG"] - (s["NewBs"] + s["NewBl"] + s["NewBb"] + s["NewRes"])
     s["Cons"] = Y - s["Inv"] - s["G"]                  # what is left of demand
+    s["c1"] = p["c1b"]                     # REAL unit cost; p = 1 at the baseline
+    s["ip"] = i1 - p["sbar"]               # the policy rate the rule calls for
+    s["rstar"] = s["ip"] - p["pi0"]        # so Taylor AGREES at the baseline
     s["taxY"] = s["Tax"] / Y
     s["defY"] = (s["G"] + s["IntG"] - s["Tax"]) / Y
     return s
@@ -292,35 +313,69 @@ def build(s, p):
     #                 eq() creates the icon that DEFINES each one
 
     for nm in ("v", "omN", "un", "dF", "gn", "c1b", "lam1", "iDsh", "payB", "payF",
-               "gshare"):
+               "gshare", "kappa", "thu", "thb", "phi1", "phi2", "gp", "gw", "pi0",
+               "theta", "phN", "phP", "sbar", "api", "auu", "roll"):
         b.param(nm, float(p[nm]))
-    b.param("i1", float(s["i1"]))            # rates held fixed here: this file is about
-    b.param("i2", float(s["i2"]))            # the accounting, not the rate mechanism
-    b.param("iD", float(s["iD"]))
     b.param("taxr", float(s["taxY"]))
+    b.param("d2", float(s["d2"]))            # exp(-beta*gap), the fitted funding share
+    b.param("ucr1", float(s["c1"]))          # REAL unit costs; nominal c = p * ucr * tech
+    b.param("ucr2", float(s["c2"]))
+    b.param("rEn", float(s["rE"]))
+    b.param("rstar", float(s["rstar"]))      # set so Taylor AGREES at the baseline
+    b.param("piT", float(p["pi0"]))
+    b.param("rule", 1.0, slider=(-0.2, 1.2))   # 1 = classical anchor, 0 = Taylor
+    b.param("ish", 0.0, slider=(-0.03, 0.03))  # a policy disturbance
+    b.param("wsh", 0.0, slider=(-0.03, 0.03))  # a money-wage shock
     tot = s["Res"] + s["Bs"] + s["Bl"] + s["Bb"]
     for nm, stock in (("shRes", "Res"), ("shBs", "Bs"), ("shBl", "Bl"), ("shBb", "Bb")):
         b.param(nm, float(s[stock] / tot))   # the deficit is financed pro rata
 
     iK = b.stock("K", K0)                    # real capital is NOT a claim, so it is not
     #                                          in any table and carries its own integral
+    iT = b.stock("T", 0.0)                   # time, for the falling real cost of banking
+    ip_ = b.stock("p", 1.0)                  # the price level
+    iu = b.stock("u", float(p["un"]))
+    iom = b.stock("omega", float(p["omN"]))
+    ii1 = b.stock("i1", float(s["i1"]))      # the MARKET short rate
+    ii2 = b.stock("i2", float(s["i2"]))      # the MARKET long rate
+    iBl_ = b.stock("iBl", float(s["i2"]))    # AVERAGE COUPON on the long bond book
+
     for name, expr in [
-        ("Y",      "un * K / v"),
-        ("Wages",  "omN * Y"),
-        ("IntL",   "i1 * Loans"),
+        ("Y",      "u * K / v"),
+        ("r",      "(1 - omega) * u / v"),            # the general profit rate, endogenous
+        ("Wages",  "omega * Y"),
+        ("tech",   "exp(0 - theta * T)"),             # real banking costs fall
+        ("c1",     "p * ucr1 * tech"),                # NOMINAL cost per $ of loans
+        ("c2",     "p * ucr2 * tech"),
+        ("iD",     "iDsh * i1"),
         ("IntD",   "iD * DH"),
-        ("OpC",    "c1b * Loans"),
+        ("OpC",    "c1 * Loans"),
+        # THE CLASSICAL NORMAL SHORT RATE, from equalisation on the sheet that exists:
+        #   i1N*(Loans + Bb) - IntD - c1*Loans = r*EB
+        ("i1N",    "(r * EB + OpC + IntD) / (Loans + Bb)"),
+        ("i2N",    "c2 + i1 * d2 + lam1 * r"),        # Shaikh (10.9), maturity-gap form
+        ("IntL",   "i1 * Loans"),
         ("PE",     "Y - Wages - IntL"),               # profit of enterprise
+        ("rE",     "r - i1 * dF"),
         ("DivF",   "payF * PE"),
         ("PB",     "IntL + i1 * Bb - IntD - OpC"),    # bank profit, bonds included
+        ("rB",     "PB / EB"),                        # banking's OWN profit rate
         ("DivB",   "payB * PB"),
-        ("Inv",    "gn * K"),
+        ("gI",     "gn + kappa * (rE - rEn)"),        # accumulation out of enterprise
+        ("Inv",    "gI * K"),
         ("NB",     "Inv - (1 - payF) * PE"),          # firms borrow the financing gap
         ("G",      "gshare * Y"),
         ("Tax",    "taxr * Y"),
-        ("IntBs",  "i1 * Bs"),
-        ("IntBl",  "i2 * Bl"),                        # the LONG rate, on long bonds
-        ("IntBb",  "i1 * Bb"),
+        ("pi",     "pi0 + gp * (u - un) + gw * (omega - omN)"),
+        # --- the policy rule ---------------------------------------------------------
+        ("ipC",    "(i1N - sbar) + api * (pi - piT) + auu * (u - un)"),   # CLASSICAL
+        ("ipT",    "rstar + pi + api * (pi - piT) + auu * (u - un)"),     # TAYLOR
+        ("ip",     "rule * ipC + (1 - rule) * ipT + ish"),
+        # --- the government's interest bill, split by how fast each leg reprices ------
+        ("IntBs",  "i1 * Bs"),                        # short: reprices AT ONCE
+        ("IntBb",  "i1 * Bb"),                        # short: reprices AT ONCE
+        ("IntBl",  "iBl * Bl"),                       # long: the AVERAGE COUPON, which
+        #                                               only moves as the book rolls
         ("IntBsl", "IntBs + IntBl"),                  # what households receive in total
         ("IntG",   "IntBsl + IntBb"),                 # what government pays in total
         ("Def",    "G + IntG - Tax"),                 # the deficit
@@ -330,7 +385,18 @@ def build(s, p):
         ("NewBb",  "shBb * Def"),
         ("NewBsl", "NewBs + NewBl"),                  # households' total bond purchases
         ("Cons",   "Y - Inv - G"),                    # demand closes on consumption
+        ("slope",  "i2 - i1"),
+        ("burden", "IntG / Y"),                       # the interest bill, per unit output
+        # --- derivatives --------------------------------------------------------------
         ("dK",     "Inv"),
+        ("dT",     "1"),
+        ("dp",     "pi * p"),
+        ("du",     "thu * (gI - gn) - thb * (u - un)"),
+        ("domega", "omega * (phi1 * (u - un) - phi2 * (omega - omN) + wsh)"),
+        ("di1",    "phN * (i1N - i1) + phP * ((ip + sbar) - i1)"),
+        ("di2",    "phN * (i2N - i2)"),               # policy reaches the long end only
+        #                                               through i1, inside i2N
+        ("diBl",   "roll * (i2 - iBl)"),              # the long book reprices as it rolls
         # --- identities, checked on the run and imposed nowhere ----------------------
         ("netWorth", "NWH + NWF + NWG + EB"),
         ("bankSheet", "Res + Loans + Bb - DF - DH - EB"),
@@ -338,11 +404,16 @@ def build(s, p):
         ("debtG",   "Res + Bs + Bl + Bb"),
     ]:
         b.eq(name, expr)
-    b.wire(b.ref["dK"], iK, 1)
+    for state, deriv in (("K", "dK"), ("T", "dT"), ("p", "dp"), ("u", "du"),
+                         ("omega", "domega"), ("i1", "di1"), ("i2", "di2"),
+                         ("iBl", "diBl")):
+        b.wire(b.ref[deriv], {"K": iK, "T": iT, "p": ip_, "u": iu, "omega": iom,
+                              "i1": ii1, "i2": ii2, "iBl": iBl_}[state], 1)
 
     b.plot("Sector net worths", ["NWH", "NWF", "NWG", "EB"], at=[1500, 300])
-    b.plot("Government", ["debtG", "Def", "IntG", "Tax"], at=[1500, 900])
-    b.plot("The accounting closes", ["netWorth", "bankSheet", "govSheet"], at=[1500, 1500])
+    b.plot("Government", ["debtG", "burden", "IntG", "Def"], at=[1500, 900])
+    b.plot("Rates", ["i1", "i2", "iBl", "i1N", "r"], at=[1500, 1500])
+    b.plot("The accounting closes", ["netWorth", "bankSheet", "govSheet"], at=[1500, 2100])
     api("/api/solver", {"implicit": False, "epsRel": 1e-8, "epsAbs": 1e-10, "tmax": 40.0})
     api("/api/layout")
     b.value_ids()
@@ -356,6 +427,7 @@ W = ["DF", "Y", "K", "Loans", "Res", "Bs", "Bl", "Bb", "DF", "DH", "EB", "NWH", 
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--check", action="store_true")
+    ap.add_argument("--incidence", action="store_true")
     ap.add_argument("--save", default="FourSector")
     args = ap.parse_args()
 
@@ -391,6 +463,89 @@ def main():
 
     if args.check:
         check(s, args.save)
+    if args.incidence:
+        incidence(args.save)
+
+
+def incidence(name):
+    """Where does a policy tightening land, and on whose balance sheet?
+
+    Measured as DEVIATION FROM THE UNSHOCKED PATH, not from t=0, and that matters here.
+    The baseline is not stationary: households' deposits grow faster than the loan book,
+    so banks' funding cost rises against their lending income, their profit rate falls
+    about 9e-3 over 40 periods, and equalisation then pushes the normal loan rate up. That
+    is a real dynamic of the model rather than a defect, but it means anything read against
+    t=0 would mix the shock with the drift. Every figure below is shocked minus unshocked
+    at the same date.
+    """
+    from runner import Run
+    watch = ["IntG", "IntBs", "IntBb", "IntBl", "iBl", "i1", "i2", "slope", "burden",
+             "NWH", "NWF", "NWG", "EB", "rB", "rE", "gI", "u", "Y", "K", "debtG"]
+    R = Run(f"~/minsky-models/{name}.mky")
+    HZ = [1.0, 3.0, 5.0, 10.0, 20.0, 40.0]
+    base, shock = {}, {}
+    for t in HZ:
+        base[t] = R.go(t, watch, {"ish": 0.0}, samples=200)
+        shock[t] = R.go(t, watch, {"ish": 0.01}, samples=200)
+
+    def d(t, k):
+        return shock[t][k][-1] - base[t][k][-1]
+
+    print("\n" + "=" * 78)
+    print("A POLICY TIGHTENING OF ONE POINT: WHERE IT LANDS")
+    print("=" * 78)
+    print("  Deviations from the unshocked path at the same date, never from t=0.\n")
+    print(f"  {'years':>6} {'d i1':>9} {'d i2':>9} {'d iBl':>9} {'d slope':>9}")
+    for t in HZ:
+        print(f"  {t:6.0f} {d(t,'i1'):+9.5f} {d(t,'i2'):+9.5f} {d(t,'iBl'):+9.5f} "
+              f"{d(t,'slope'):+9.5f}")
+    print("\n  The long rate moves less than the short one and the average COUPON on the")
+    print("  long book moves less again, because it only reprices as the book rolls.")
+
+    print("\n" + "=" * 78)
+    print("THE GOVERNMENT'S INTEREST BILL, SPLIT BY HOW FAST EACH LEG REPRICES")
+    print("=" * 78)
+    print("  This is what the term structure is FOR. Short paper reprices at once; the")
+    print("  long book only as it turns over, at 10% a year here.\n")
+    print(f"  {'years':>6} {'immediate':>11} {'eventual':>10} {'total':>10} "
+          f"{'% arrived':>10}")
+    for t in HZ:
+        imm = d(t, "IntBs") + d(t, "IntBb")
+        evt = d(t, "IntBl")
+        tot = d(t, "IntG")
+        share = evt / tot * 100.0 if abs(tot) > 1e-12 else float("nan")
+        print(f"  {t:6.0f} {imm:+11.5f} {evt:+10.5f} {tot:+10.5f} {share:9.1f}%")
+    print("\n  The last column is the share of the extra bill coming from the LONG book.")
+    print("  It starts near nothing and climbs as the book rolls -- so a tightening that")
+    print("  looks cheap for the public finances in year one is not, by year twenty.")
+
+    print("\n" + "=" * 78)
+    print("EACH SECTOR'S NET WORTH")
+    print("=" * 78)
+    print("  Financial claims net to zero across the four, so these must sum to zero at")
+    print("  every horizon. What the tightening does is REDISTRIBUTE, and the table says")
+    print("  in which direction.\n")
+    print(f"  {'years':>6} {'households':>11} {'firms':>10} {'government':>11} "
+          f"{'banks':>9} {'sum':>10}")
+    for t in HZ:
+        h, f, gv, bk = d(t, "NWH"), d(t, "NWF"), d(t, "NWG"), d(t, "EB")
+        print(f"  {t:6.0f} {h:+11.4f} {f:+10.4f} {gv:+11.4f} {bk:+9.4f} "
+              f"{h+f+gv+bk:+10.1e}")
+
+    print("\n" + "=" * 78)
+    print("AND WHAT IT DOES TO THE REAL SIDE")
+    print("=" * 78)
+    print(f"  {'years':>6} {'d rE':>9} {'d gI':>9} {'d u':>9} {'d K/K':>9} "
+          f"{'d rB':>9} {'d burden':>9}")
+    for t in HZ:
+        print(f"  {t:6.0f} {d(t,'rE'):+9.5f} {d(t,'gI'):+9.5f} {d(t,'u'):+9.5f} "
+              f"{d(t,'K')/base[t]['K'][-1]:+9.5f} {d(t,'rB'):+9.5f} "
+              f"{d(t,'burden'):+9.5f}")
+    print("\n  rE is the profit rate of enterprise -- the quantity the whole Shaikhian")
+    print("  argument runs on -- and burden is the government's interest bill per unit of")
+    print("  output. Reading those two columns together is the point of having four")
+    print("  sectors: the same point of tightening shows up as a squeeze on enterprise")
+    print("  AND as a claim on the public finances, and the model prices both.")
 
 
 def check(s, name):
@@ -413,8 +568,13 @@ def check(s, name):
         a, z = path[k][0], path[k][-1]
         print(f"  {k:>10} {a:12.4f} {z:12.4f} {(z/a) if a else float('nan'):9.4f}")
     df = path["DF"] if "DF" in path else None
-    print("\n  K, Y, the loan book and the government's debt all grow at exactly gn. The")
-    print("  household stocks do not, and that is structural rather than a miscalibration.")
+    print("\n  THE BASELINE IS NOT STATIONARY, and shock experiments must be read against")
+    print("  the unshocked PATH rather than against t=0. Two separate reasons, both real.")
+    print("\n  First, banking's own profit rate drifts down about 9e-3 over 40 periods.")
+    print("  Households' deposits grow faster than the loan book, so the funding cost")
+    print("  rises against lending income; equalisation then pushes the normal loan rate")
+    print("  up and the market rate follows. That is a mechanism, not a defect.")
+    print("\n  Second, a common growth rate for every financial stock is IMPOSSIBLE here.")
     print("  Work the firm column through: dDF = NB - IntL - Wages - DivF + Cons + G, and")
     print("  with NB = Inv - (1-payF)*PE and Cons + G = Y - Inv the whole thing collapses")
     print("  to dDF = 0 IDENTICALLY. Firms hold a constant transaction balance -- that is")

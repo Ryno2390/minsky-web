@@ -226,57 +226,65 @@ offset is a real feature of a monetary economy or an artefact of this model's de
 is the obvious next question, and it is answerable now that the two can be run side by
 side.
 
-## The ladder: where the twelve-fold gap goes
+## The ladder — and a measurement error that invalidated the first version
 
-Three models, the same mechanism, adding one thing at a time. The same margin sweep on
-each, over the same twelve periods.
+An earlier version of this section reported `dg/dm` of 0.950 / 0.332 / 0.078 across the
+rungs, called it a twelve-fold gap, and attributed 71% of it to banking. **That was wrong.**
+The defect is worth recording because it is easy to repeat.
 
-| | `dg/dm` | what is in it |
+Each rung's `compare()` swept the margin `m` while leaving the SOLVED quantities — the bank
+payout `payB` and bank capital `EB` — at the values solved for the *baseline* margin. Every
+run except the baseline therefore started off its own balanced path and drifted. The slope
+measured a transient, and it grew without bound with the horizon:
+
+| horizon | rung 1 `dg/dm` | full model `dg/dm` |
 |---|---|---|
-| core | **0.950** | two stocks; `r` and the spread given |
-| + banking | **0.332** | and a spread set by profit-rate equalisation |
-| full | **0.078** | and employment, prices, demand, an endogenous `r` |
+| 12 | 0.36 | 0.062 |
+| 30 | 0.55 | 0.634 |
+| 60 | 1.08 | 3.916 |
 
-**Banking accounts for 71% of the distance.** The demand side accounts for the rest.
+Re-solving the baseline at each margin — so every run sits on **its own** balanced path —
+gives an exact rest point every time (`rE` drifts by 7e-18, bank capital per unit of capital
+by zero) and a slope that does not move with the horizon at all.
 
-### What banking does, in one number
+### The structural answer
 
-The lending rate is what enterprise actually pays, and it does not move with the policy
-rate one for one. A bank whose loan book is larger than its deposit base makes money when
-rates rise, so equalisation then competes the spread away and absorbs part of the move.
-Over a policy move of 4 points the lending rate moves **1.4**.
+| model | `dg/dm` | theory |
+|---|---|---|
+| core | **0.9500** | `κ·d*` |
+| + banking | **0.9500** | `κ·d*` — banking changes nothing |
+| + equity, ψ=0.25 | 0.7125 | `κ(1−ψ)d₁` |
+| + equity, ψ=0.50 | 0.4750 | `κ(1−ψ)d₁` |
+| + equity, ψ=0.75 | 0.2375 | `κ(1−ψ)d₁` |
 
-That is banking's entire contribution — the pass-through — and the core's elasticity is
-simply multiplied by it:
+**Banking does not damp the mechanism. It damps the transition to it.** Equalisation pins a
+relation between the spread and bank capital, not the spread itself, so on a balanced path
+the spread is free and the margin passes through whole. Over twelve periods from a common
+start only about a third of it has arrived — which is a real and interesting fact about
+adjustment speed, and not the comparative static I reported it as.
 
-| deposits pay | DH/L | pass-through | `dg/dm` | `κ·d*` × pass-through |
+### And the rungs do not all close the same way
+
+| msh | g* | r | u | rE |
 |---|---|---|---|---|
-| nothing | 0.31 | 0.14 | 0.136 | 0.136 |
-| 0.3 × policy | 0.37 | 0.22 | 0.211 | 0.211 |
-| 0.6 × policy | 0.47 | 0.35 | 0.332 | 0.332 |
-| 0.9 × policy | 0.62 | 0.57 | 0.544 | 0.544 |
+| 0.040 | 0.02500 | 0.06514 | 0.754 | 0.02000 |
+| 0.030 | 0.02500 | 0.06851 | 0.793 | 0.02000 |
+| 0.020 | 0.02500 | 0.07219 | 0.835 | 0.02000 |
+| 0.010 | 0.02500 | 0.07621 | 0.882 | 0.02000 |
 
-Exact to three decimals in every row. So the whole thing factorises:
+The core and rungs 1 and 2 have no labour force, so growth is whatever accumulation
+delivers and the margin sets it. The full model has productivity and labour-force growth,
+so **its balanced growth rate is pinned at α+β and the margin cannot change it at all**.
+What the margin moves there is the *level*: utilisation from 0.754 to 0.882, and the profit
+rate with it.
 
-    dg/dm  =  kappa * d*   x   pass-through   x   demand offset
-              0.95             0.35               0.24
+So comparing their slopes as though they measured one quantity was a category error. The
+mechanism operates on the growth *rate* where growth is accumulation-determined, and on the
+*level and distribution* where it is labour-determined. Both are Shaikhian readings; they
+are not the same claim.
 
-**And the middle factor is understated here.** Deposits are 0.47 of the loan book in this
-model, against something nearer 0.9 for a real bank, because households hold no equity
-claim on firms' capital and deposits are the only financial asset. A realistically
-deposit-funded bank passes more of the policy move through — so the mechanism reaches
-enterprise harder than the full model suggests, not more weakly.
-
-### Rung 1 in its own right
-
-`models/enterprise_banking.py` → `EnterpriseBanking.mky`, 70 items. Its baseline is an
-exact rest point: every rate drifts by less than 3e-16 over 60 periods, banking earns
-`r` to 1.4e-17, and bank capital grows at exactly the rate capital does.
-
-It also settles one thing on its own: **equalisation does not pin the spread.** It pins a
-relation between the spread and bank capital — for any spread there is a level of capital
-at which banking earns exactly `r`. What pins the pair is that bank capital must also grow
-at `g`, which is what the payout ratio is solved for.
+`models/ladder.py` is the corrected comparison. Read it rather than the per-rung
+`--compare` output, which still prints transients.
 
 ## Rung 2: corporate equity — and a correction
 
@@ -307,15 +315,17 @@ issuing shares. With `psi` the share met by issuance, leverage settles at
 so the external financing requirement is split by `psi`, and **only the debt half carries an
 interest bill**. Since the mechanism runs entirely through that bill:
 
-| psi | d* | E/K | DH/L | dg/dm | κ·d* | pass-through |
+| psi | d* | E/K | DH/L | dg/dm (12-period) | κ·d* (structural) | ratio |
 |---|---|---|---|---|---|---|
 | 0.00 | 0.7917 | 0.000 | 0.465 | 0.332 | 0.950 | 0.349 |
 | 0.25 | 0.5938 | 0.198 | 0.460 | 0.238 | 0.713 | 0.334 |
 | 0.50 | 0.3958 | 0.396 | 0.456 | 0.152 | 0.475 | 0.320 |
 | 0.75 | 0.1979 | 0.594 | 0.451 | 0.073 | 0.238 | 0.307 |
 
-`d*` falls one for one with `psi`, `E/K` fills the gap, and `dg/dm` falls with leverage
-while the pass-through barely moves.
+`d*` falls one for one with `psi` and `E/K` fills the gap — both structural, confirmed on
+balanced paths. The `dg/dm` column is a 12-period transient (see the ladder section); the
+structural slope is exactly `κ(1−ψ)d₁`, the next column. Either way it falls one for one
+with leverage, which is the finding.
 
 **Corporate equity changes the STRENGTH of the mechanism, through leverage. It does not
 change the TRANSMISSION, which is the bank's business.** The two factors in

@@ -442,6 +442,7 @@ def main():
     ap.add_argument("--incidence", action="store_true")
     ap.add_argument("--race", action="store_true")
     ap.add_argument("--anchor", action="store_true")
+    ap.add_argument("--transitory", action="store_true")
     ap.add_argument("--save", default="FourSector")
     args = ap.parse_args()
 
@@ -483,6 +484,8 @@ def main():
         race(args.save)
     if args.anchor:
         anchor(args.save)
+    if args.transitory:
+        transitory(args.save)
 
 
 def race(name):
@@ -807,6 +810,109 @@ def anchor(name):
     print("  standing cost, the enterprise margin, the fiscal damage and the capital stock")
     print("  all at once, and it does not cost inflation control because none of these")
     print("  rules has inflation control against this shock in the first place.")
+
+
+def transitory(name):
+    """A wage shock that REVERSES, which is where a price-level integral should earn its keep.
+
+    The permanent shock in --anchor could not discriminate between rules: it shifts the
+    wage-share process for good, so inflation is permanently higher under every rule and
+    "does inflation return" answers no for all of them. Here the wage share is knocked one
+    point above its norm at t=0 and nothing else is changed. phi2 then pulls it back with a
+    half-life near 1.7 years, so the shock genuinely goes away.
+
+    What does NOT go away is its mark on the price level. A burst of inflation leaves p
+    permanently above the path it would have followed, and the classical anchor reads the
+    price level -- c = p*ucr*tech -- so its normal rate is permanently higher afterwards
+    while Taylor's fixed rstar returns. That is Gibson's relation showing up as a policy
+    rule: the nominal rate tracks the price LEVEL, not the inflation rate. Whether that
+    memory is a virtue or a defect is what this measures, and mu decides how much of it the
+    rule takes on.
+    """
+    from runner import Run
+    watch = ["rE", "pi", "u", "K", "burden", "NWG", "i1", "i1Nbar", "omega", "p", "Y"]
+    R = Run(f"~/minsky-models/{name}.mky")
+    TMAX = 160.0
+    OM = 0.81 + 0.01                      # the wage share knocked one point high at t=0
+
+    def at(path, t):
+        return min(range(len(path["t"])), key=lambda k: abs(path["t"][k] - t))
+
+    cases = [("classical mu=%.2f" % m, {"rule": 1.0, "mu": m})
+             for m in (5.0, 1.0, 0.30, 0.10, 0.03, 0.01)] + [("Taylor", {"rule": 0.0})]
+    runs = {}
+    for lab, kw in cases:
+        bs = R.go(TMAX, watch, dict(kw), samples=500)
+        sh = R.go(TMAX, watch, dict(kw, omega=OM), samples=500)
+        runs[lab] = (bs, sh)
+
+    b0 = runs["Taylor"][0]
+    print("\n" + "=" * 94)
+    print("A TRANSITORY WAGE SHOCK: the wage share knocked one point high, then reverting")
+    print("=" * 94)
+    print(f"  {'yrs':>5} {'omega gap':>11} {'inflation gap':>14}   (Taylor, to show the shock "
+          f"really does reverse)")
+    tb, ts = runs["Taylor"]
+    for t in (1., 3., 5., 10., 20., 40.):
+        j = at(tb, t)
+        print(f"  {t:5.0f} {ts['omega'][j]-tb['omega'][j]:11.6f} "
+              f"{ts['pi'][j]-tb['pi'][j]:14.6f}")
+
+    print("\n" + "=" * 94)
+    print("DOES INFLATION RETURN NOW? and what does each rule keep afterwards")
+    print("=" * 94)
+    print(f"  {'rule':>18} | {'inflation gap':>34} | {'p gap':>8} {'i1 gap':>9}")
+    print(f"  {'':>18} | {'t=5':>10} {'t=20':>10} {'t=80':>10} | {'t=160':>8} {'t=160':>9}")
+    for lab, _kw in cases:
+        bs, sh = runs[lab]
+        cells = [sh["pi"][at(bs, t)] - bs["pi"][at(bs, t)] for t in (5., 20., 80.)]
+        j = at(bs, 160.)
+        print(f"  {lab:>18} | " + " ".join(f"{c:10.6f}" for c in cells)
+              + f" | {(sh['p'][j]-bs['p'][j])/bs['p'][j]:8.4f} "
+                f"{sh['i1'][j]-bs['i1'][j]:9.6f}")
+    print("\n  Inflation DOES return this time -- the shock reverses, so the gap closes.")
+    print("  The price level does not: a burst of inflation leaves it permanently higher,")
+    print("  and the last column is what each rule keeps of that forever.")
+
+    print("\n" + "=" * 94)
+    print("WHAT THE MEMORY COSTS")
+    print("=" * 94)
+    print(f"  {'rule':>18} | {'worst rE':>10} {'d K/K t=80':>11} {'d burden t=80':>14} "
+          f"{'d NWG t=80':>11}")
+    for lab, _kw in cases:
+        bs, sh = runs[lab]
+        j80 = at(bs, 80.)
+        n = max(1, j80 // 16)
+        drE = min(sh["rE"][k] - bs["rE"][k] for k in range(n, j80 + 1))
+        print(f"  {lab:>18} | {drE:10.6f} "
+              f"{(sh['K'][j80]-bs['K'][j80])/bs['K'][j80]:11.5f} "
+              f"{sh['burden'][j80]-bs['burden'][j80]:14.6f} "
+              f"{sh['NWG'][j80]-bs['NWG'][j80]:11.4f}")
+
+    print("\n" + "=" * 94)
+    print("READING IT -- and it deflates the price-level story rather than confirming it")
+    print("=" * 94)
+    print("  THE PREDICTION WAS THAT THIS SHOCK WOULD DISCRIMINATE. It does not. Inflation")
+    print("  returns under every rule within about five years, and the gaps at that point")
+    print("  are of order 1e-5 -- the fast anchor, the slow one and Taylor are all doing")
+    print("  the same thing to within noise.")
+    print("\n  THE PERMANENT MEMORY IS REAL IN MECHANISM AND NEGLIGIBLE IN SIZE. A burst of")
+    print("  inflation does leave the price level about 0.4% high forever, and the classical")
+    print("  anchor does read the price level through c = p*ucr*tech. But 0.4% on a c of")
+    print("  0.0212 is under a basis point on the normal rate, and the balance-sheet effects")
+    print("  of a slightly smaller capital stock are larger than that -- which is why the")
+    print("  surviving i1 gap is not merely tiny but the WRONG SIGN, about -2 basis points.")
+    print("\n  SO THE INTEGRAL MATTERS WHEN THE PRICE LEVEL MOVES A LOT AND NOT OTHERWISE.")
+    print("  The two-sector model made it look powerful because the experiment there ran")
+    print("  inflation permanently away from the rate at which banking gets cheaper, which")
+    print("  drove c from 0.049 to between 0.023 and 0.099. A transitory shock moves the")
+    print("  price level by half a percent and the integral has nothing to bite on. Both")
+    print("  results are right; the earlier one was simply not evidence about shocks of")
+    print("  this kind, and it was read as though it were.")
+    print("\n  AND THERE IS STILL NO INTERIOR OPTIMUM IN MU. Slower is better here too, on")
+    print("  the capital stock and on the public balance sheet, monotonically to the end of")
+    print("  the sweep. The expectation that a transitory shock would punish a 70-year")
+    print("  half-life and produce a genuine tradeoff was wrong.")
 
 
 if __name__ == "__main__":

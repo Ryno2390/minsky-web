@@ -267,7 +267,21 @@ Three traps, all verified end to end:
 
 1. **The balance check is exact `!= 0`, with no tolerance.** Opening figures written at 10
    significant digits leave a row out by 1e-08; at full precision, by 7e-15. Only
-   binary-exact values give a clean zero. **Snap opening figures to multiples of 1/1024.**
+   binary-exact values give a clean zero, so **snap opening figures to a dyadic rational**.
+
+   **But not too fine a one, and this is the trap.** The engine writes a stock's initial
+   condition into the `.mky` *twice*: once at full precision as the Godley cell text, and
+   once **rounded to six significant figures** as the value it actually initialises the
+   stock with. On reload the rounded one wins. So a sheet can balance exactly at build
+   time, pass the engine's own row check, and still be out at `t=0` — with the residual
+   *constant across every horizon*, which is the tell that it was never integration error.
+
+   Observed: `48.998047 → 48.998`, `13.452148 → 13.452100`, and four net worths that should
+   have summed to zero summing to −8e−5 instead.
+
+   1/1024 is binary-exact but needs ten decimals, so six significant figures destroys it.
+   **Use 1/16** (0.0625) for values below 100 — binary-exact and short enough to survive
+   the round trip. That took the same model from −8e−5 to 1.8e−13.
 
 2. **`icon.update()` must be called after editing a table**, or `reset()` dies with
    `Invalid valueId: :<stock>` and the stock variables are never created. Neither

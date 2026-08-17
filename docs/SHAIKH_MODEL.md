@@ -74,28 +74,33 @@ Interest takes **70.8%** of pre-interest profit. Opening balance sheet residual:
 Verified as a rest point: every derivative sits on its balanced-growth value to 1e-7, and
 over 30 periods no rate moves by more than 3.7e-04.
 
-## Result 1 — the claim itself
+## Result 1 — the claim, on balanced paths
 
-Squeeze the margin the central bank holds below `r`. Nothing is assumed: accumulation is
-driven by `rE`, and `rE` is whatever `r` minus the interest bill turns out to be.
+**The table first published here was a 12-period transient** (see the ladder section). Each
+margin, on its own balanced path:
 
-| margin m | ip | r | rE | g |
-|---|---|---|---|---|
-| 0.040 | 0.0117 | 0.0469 | 0.0194 | 0.0252 |
-| 0.030 | 0.0385 | 0.0685 | 0.0200 | 0.0250 |
-| 0.020 | 0.0524 | 0.0725 | 0.0148 | 0.0240 |
-| 0.010 | 0.0645 | 0.0748 | 0.0097 | 0.0230 |
-| 0.005 | 0.0703 | 0.0756 | 0.0073 | 0.0226 |
-| 0.000 | 0.0760 | 0.0763 | 0.0049 | 0.0221 |
-| −0.010 | 0.0871 | 0.0774 | 0.0001 | 0.0212 |
+| m | ip | r | rE | g | u |
+|---|---|---|---|---|---|
+| 0.040 | 0.02514 | 0.06514 | 0.02000 | 0.02500 | 0.754 |
+| 0.030 | 0.03851 | 0.06851 | 0.02000 | 0.02500 | 0.793 |
+| 0.020 | 0.05219 | 0.07219 | 0.02000 | 0.02500 | 0.835 |
+| 0.010 | 0.06621 | 0.07621 | 0.02000 | 0.02500 | 0.882 |
+| 0.005 | 0.07335 | 0.07835 | 0.02000 | 0.02500 | 0.907 |
+| 0.000 | 0.08059 | 0.08059 | 0.02000 | 0.02500 | 0.933 |
 
-As policy is pushed up towards and past the pre-interest profit rate, the profit of
-enterprise is squeezed to nothing and accumulation falls with it. The claim holds.
+`g` and `rE` are both **constant**. That is not a failure of the mechanism, it is what a
+labour-constrained growth model must say: accumulation has to equal α+β, and the investment
+function then forces `rE = rEnorm`. Neither is free to move.
 
-One refinement the model insists on: the threshold is **not** `ip = r`. At `m = 0` the
-policy rate equals `r` and `rE` is still 0.0049, because what matters is the interest
-*bill* against profit, `iL·d` against `r`, and leverage here is 0.8 rather than 1. The
-condition is `iL < r/d`. Only at `m = −0.01` is enterprise profit gone.
+What the margin moves is the **level**: utilisation from 0.754 to 0.933, and the profit rate
+with it. Read properly that is a Shaikhian statement, and a sharper one than the original —
+**a tighter margin does not slow accumulation, it requires a higher profit rate and a higher
+level of activity to sustain the same accumulation.** The burden falls on distribution, not
+on growth.
+
+The growth statement survives where growth is accumulation-determined rather than
+labour-determined: in the core and rungs 1–2, which have no labour force,
+`dg*/dm = κ·d* = 0.95` exactly. Which regime an economy is in is an empirical question.
 
 ## Result 2 — protecting the margin and stabilising are different jobs
 
@@ -127,22 +132,31 @@ A pure policy disturbance separates them: start the policy rate a point high and
 nothing else, and both rules bring it back with the same worst-case margin (+0.0118) and
 the same growth. The disagreement is about **distributive** shocks, not the level of rates.
 
-## Result 2b — what a tightening costs enterprise depends on bank funding
+## Result 2b — how much of a policy move reaches the borrower
 
-Shaikh's second condition does quantitative work, not just closure. Because banking's
-profit rate is equalised on to `r`, the spread must widen when the banks' own funding cost
-rises — so the lending rate climbs by more than the policy rate.
+**The table first published here was also a transient.** On balanced paths `rE` is pinned,
+so the deposit channel cannot change it — what it changes is how much of a policy move
+reaches the lending rate at all, and how far utilisation must travel to absorb the rest.
 
-| deposits pay | m | ip | r | rE | g |
-|---|---|---|---|---|---|
-| 0.6 × policy | 0.040 | 0.0117 | 0.0469 | 0.0194 | 0.0252 |
-| 0.6 × policy | 0.000 | 0.0760 | 0.0763 | **0.0049** | 0.0221 |
-| nothing | 0.040 | 0.0286 | 0.0683 | 0.0270 | 0.0264 |
-| nothing | 0.000 | 0.0762 | 0.0763 | **0.0198** | 0.0251 |
+| deposits pay | ip moves | iL moves | pass-through | u moves |
+|---|---|---|---|---|
+| nothing | 0.0400 | 0.0000 | **0.000** | 0.000 |
+| 0.3 × policy | 0.0455 | 0.0068 | 0.150 | 0.063 |
+| 0.6 × policy | 0.0554 | 0.0193 | **0.348** | 0.179 |
+| 0.9 × policy | 0.0833 | 0.0541 | 0.649 | 0.501 |
 
-Closing the margin costs four times as much enterprise profit when deposits bear interest.
-Transmission from policy to enterprise runs through the banking sector's balance sheet,
-not just through the policy rate.
+The 0.35 originally published was right in size and wrong in provenance: it is the **full
+model's** structural pass-through, where the demand side pins the spread — not rung 1's,
+where the spread is free and nothing pins it.
+
+And the top row is the striking one. **With costless bank funding, monetary policy is
+completely neutral here**: equalisation pins the lending rate outright, `iL` does not move
+at all, and neither does utilisation. The whole policy change is absorbed into the spread.
+
+So the potency of monetary policy in this model rests entirely on banks having a funding
+cost that moves with the policy rate. That is Shaikh's second condition doing real work —
+the spread is a distributive variable, and how much of it competition eats decides whether
+policy reaches enterprise at all.
 
 ## Result 3 — the balanced path is unstable
 

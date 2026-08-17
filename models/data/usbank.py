@@ -54,8 +54,8 @@ CACHE = Path(__file__).parent / "cache"
 CACHE.mkdir(exist_ok=True)
 
 API = "https://banks.data.fdic.gov/api/summary"
-FIELDS = ["YEAR", "ASSET", "LNLSNET", "DEP", "EQ", "NONIX", "BKPREM", "CHBAL",
-          "ILNLS", "INTINC", "EINTEXP", "NETINC"]
+FIELDS = ["YEAR", "ASSET", "LNLSNET", "DEP", "EQ", "NONIX", "NONII", "BKPREM", "CHBAL",
+          "ILNLS", "INTINC", "EINTEXP", "NETINC", "ITAX"]
 
 MEANING = {
     "ASSET":   "total assets",
@@ -68,13 +68,23 @@ MEANING = {
     "ILNLS":   "interest income on loans/leases -- i = ILNLS/LNLSNET",
     "INTINC":  "total interest income           -- includes securities; NOT used for i",
     "EINTEXP": "total interest expense          -- what banks pay for funding",
-    "NETINC":  "net income",
+    "NETINC":  "net income, AFTER tax",
+    "NONII":   "total noninterest income  -- fee income, which offsets NONIX; it is over",
+    #            half of it, and charging the gross expense to the loan book while ignoring
+    #            this made banks look structurally unprofitable
+    "ITAX":    "applicable income taxes    -- NETINC + ITAX is the PRE-TAX profit, which",
+    #            is what compares like-for-like with a pre-tax, pre-interest r = NOS/K
 }
 BREAK_YEAR = 1966          # reporting definitions change at 1965/66; see module docstring
 
 
 def _fetch():
-    path = CACHE / "fdic_summary.json"
+    # Key the cache on the FIELD LIST. Without this, adding a field returns the old file,
+    # every lookup of the new field quietly yields 0.0, and the arithmetic downstream is
+    # wrong with nothing said -- which is exactly how NONII went missing once already.
+    import hashlib                                              # noqa: PLC0415
+    tag = hashlib.sha1(",".join(FIELDS).encode()).hexdigest()[:10]
+    path = CACHE / f"fdic_summary_{tag}.json"
     if path.exists() and path.stat().st_size:
         return json.loads(path.read_text())
     url = f"{API}?fields={','.join(FIELDS)}&limit=10000&format=json"

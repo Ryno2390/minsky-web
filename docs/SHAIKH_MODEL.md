@@ -226,6 +226,58 @@ offset is a real feature of a monetary economy or an artefact of this model's de
 is the obvious next question, and it is answerable now that the two can be run side by
 side.
 
+## The ladder: where the twelve-fold gap goes
+
+Three models, the same mechanism, adding one thing at a time. The same margin sweep on
+each, over the same twelve periods.
+
+| | `dg/dm` | what is in it |
+|---|---|---|
+| core | **0.950** | two stocks; `r` and the spread given |
+| + banking | **0.332** | and a spread set by profit-rate equalisation |
+| full | **0.078** | and employment, prices, demand, an endogenous `r` |
+
+**Banking accounts for 71% of the distance.** The demand side accounts for the rest.
+
+### What banking does, in one number
+
+The lending rate is what enterprise actually pays, and it does not move with the policy
+rate one for one. A bank whose loan book is larger than its deposit base makes money when
+rates rise, so equalisation then competes the spread away and absorbs part of the move.
+Over a policy move of 4 points the lending rate moves **1.4**.
+
+That is banking's entire contribution — the pass-through — and the core's elasticity is
+simply multiplied by it:
+
+| deposits pay | DH/L | pass-through | `dg/dm` | `κ·d*` × pass-through |
+|---|---|---|---|---|
+| nothing | 0.31 | 0.14 | 0.136 | 0.136 |
+| 0.3 × policy | 0.37 | 0.22 | 0.211 | 0.211 |
+| 0.6 × policy | 0.47 | 0.35 | 0.332 | 0.332 |
+| 0.9 × policy | 0.62 | 0.57 | 0.544 | 0.544 |
+
+Exact to three decimals in every row. So the whole thing factorises:
+
+    dg/dm  =  kappa * d*   x   pass-through   x   demand offset
+              0.95             0.35               0.24
+
+**And the middle factor is understated here.** Deposits are 0.47 of the loan book in this
+model, against something nearer 0.9 for a real bank, because households hold no equity
+claim on firms' capital and deposits are the only financial asset. A realistically
+deposit-funded bank passes more of the policy move through — so the mechanism reaches
+enterprise harder than the full model suggests, not more weakly.
+
+### Rung 1 in its own right
+
+`models/enterprise_banking.py` → `EnterpriseBanking.mky`, 70 items. Its baseline is an
+exact rest point: every rate drifts by less than 3e-16 over 60 periods, banking earns
+`r` to 1.4e-17, and bank capital grows at exactly the rate capital does.
+
+It also settles one thing on its own: **equalisation does not pin the spread.** It pins a
+relation between the spread and bank capital — for any spread there is a level of capital
+at which banking earns exactly `r`. What pins the pair is that bank capital must also grow
+at `g`, which is what the payout ratio is solved for.
+
 ## Limits worth knowing
 
 - **Bank leverage is low** (loans ≈ 1.8× bank capital). Households hold no equity claim on

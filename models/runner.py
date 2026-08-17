@@ -1,9 +1,14 @@
 """Run a saved Minsky model headlessly and hand back the paths.
 
-Why not the simulation socket? It emits one frame per solver step with every value in
-it, which costs ~55ms a step -- about forty times the engine's own 1.5ms. Over the tens
-of thousands of steps a run of this length takes, that is the difference between three
-seconds and half an hour. The socket is for watching a model; this is for measuring one.
+Why not the simulation socket? Because this reloads between runs, so an override left over
+from the previous experiment cannot contaminate the next one, and because a batch of
+experiments wants paths rather than frames.
+
+NOT because the socket is slow. It once cost ~55ms a step against the engine's own ~1.5ms,
+and that number was quoted here for a while, but it was a defect rather than a property and
+it is fixed: `live_value_ids()` was being called once per value key from inside a
+comprehension, and value objects are now bound once per run. The socket also takes `every`
+and `maxFps`. Do not avoid it on performance grounds.
 """
 import os
 import sys
@@ -11,10 +16,18 @@ import sys
 sys.path.insert(0, os.path.expanduser("~/minsky-web"))
 from minskyweb import headless as H          # noqa: E402
 
-#: Default solver. Minsky ships epsRel=1e-8, epsAbs=1e-10 and the implicit method, which
-#: on this model takes 0.0005-long steps at 45ms each -- t=40 would be an hour. The
-#: explicit method at 1e-6/1e-8 takes steps 140x longer at 1/30th the cost, and agrees
-#: with the tight implicit run to the tolerance reported by `--check`.
+#: Default solver.
+#:
+#: The comparison here is against THIS REPO's defaults, not Minsky's, and the distinction
+#: was wrong in this comment for a while. Minsky itself ships epsRel=1e-2, epsAbs=1e-3 and
+#: the EXPLICIT method (schema/simulation.h) -- far too loose to measure anything with.
+#: What ships at 1e-8/1e-10/implicit is minskyweb's own SANE_SOLVER (headless.py), applied
+#: on clear(), which is what a model built through this repo actually starts from.
+#:
+#: Against that: implicit at 1e-8/1e-10 takes 0.0005-long steps at 45ms each on this model,
+#: so t=40 would be an hour. The explicit method at 1e-6/1e-8 takes steps 140x longer at
+#: 1/30th the cost, and agrees with the tight implicit run to the tolerance `--check`
+#: reports.
 SOLVER = dict(implicit=False, epsRel=1e-6, epsAbs=1e-8)
 
 

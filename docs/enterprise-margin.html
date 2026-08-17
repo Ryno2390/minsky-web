@@ -68,7 +68,9 @@ thead th{font-family:var(--mono);font-size:.68rem;letter-spacing:.09em;
   border-bottom:1px solid var(--ink);padding-bottom:.4rem}
 tbody td{border-bottom:1px solid var(--rule-2);font-family:var(--mono)}
 tbody tr:last-child td{border-bottom:1px solid var(--rule)}
-td.lbl{font-family:var(--serif);font-size:.95rem}
+/* figures stay on one line; prose labels may wrap, or a long one drags the whole
+   table into a scrollbar it does not need */
+td.lbl{font-family:var(--serif);font-size:.95rem;white-space:normal;min-width:12ch}
 tr.mark td{background:var(--accent-soft)}
 tr.mark td:first-child{box-shadow:inset 2px 0 0 var(--accent)}
 .neg{color:var(--neg)}
@@ -122,21 +124,26 @@ footer{border-top:1px solid var(--rule);padding-top:1.2rem;font-family:var(--mon
 <div class="wrap">
 
 <header class="mast">
-  <p class="eyebrow">Minsky · stock-flow consistent · 218 items · calibrated to US data</p>
+  <p class="eyebrow">Minsky · stock-flow consistent · four sectors · calibrated to US data</p>
   <h1>The Enterprise Margin</h1>
   <p class="standfirst">A monetary policy model built on Shaikh's principle that what
-    drives accumulation is the profit rate net of interest — and what happened when first
-    the accounting, and then eighty years of US national accounts, were allowed to answer
-    back.</p>
-  <p class="byline"><span>Three Godley tables</span><span>Banks · Firms · Households</span><span>Balance closes to 3.7e-15</span><span>Runs in 0.89s</span><span>US nonfinancial corporate, 1947–2025</span></p>
+    drives accumulation is the profit rate net of interest — what happened when eighty
+    years of US national accounts were allowed to answer back, and what was salvaged by
+    going to a different part of the same book.</p>
+  <p class="byline"><span>Four Godley tables</span><span>Households · Firms · Government · Banks</span><span>Net worths close to 1.8e-13</span><span>US data, 1934–2026</span><span>NIPA · Z.1 · FDIC · FRED</span></p>
   <div class="revised"><span class="tag">read first</span>
-    <p>The model's central claim does not survive contact with the data. Results 1 to 6
-      describe a model that works on its own terms; <a href="#data">Result 7</a> reports
-      what happened when its five variables were pulled from the national accounts. The
-      headline elasticity below, <span class="m">dg/dm = 0.95</span>, was measured at a
-      leverage and an interest burden the US corporate sector has never come close to.
-      Recalibrated it is <strong>0.159</strong>, and the mechanism it describes has never
-      once bound in the historical record.</p></div>
+    <p>This page is in two parts, and the first one fails. <strong>Part one</strong>
+      (Results 1–6) builds a model of Shaikh's enterprise-margin mechanism, and
+      <a href="#data">Result 7</a> confronts it with the national accounts, where it does
+      not survive: the headline elasticity <span class="m">dg/dm = 0.95</span> was measured
+      at a leverage and an interest burden the US corporate sector has never approached, the
+      constraint it describes has never once bound, and the interest deduction it turns on
+      carries no aggregate information.</p>
+    <p><strong>Part two</strong> (Results 8–12) goes back to the same chapter for a
+      different argument — Shaikh's theory of the interest <em>rate</em> — and that one
+      holds up better. It <em>derives</em> what part one assumed, it fits the Treasury curve
+      once repaired, and it gives a policy rule worth racing. Along the way it also
+      overturns two measurements of my own and one prediction I made a section earlier.</p></div>
 </header>
 
 <section>
@@ -666,9 +673,330 @@ highest fed funds ever        0.1638   <span class="c">1981</span></div>
     piece of theory with no aggregate empirical support.</p>
 </section>
 
+<section id="rate">
+  <h2>Result 8 · A different Shaikh: the loan rate as a price of production</h2>
+  <p>Part one fails on the <em>accumulation</em> side. The same chapter carries a second
+    argument, about the interest <em>rate</em>, and it is testable independently — so the
+    calibration failure above does not contaminate it.</p>
+  <p>Competition within finance equalises rates on a given instrument; competition across
+    sectors sets the level at which financial capital earns the normal profit rate. Impose
+    <span class="m">rB = r</span> on a bank's profit rate and the loan rate falls out as the
+    <strong>price of production of banking</strong> — unit cost plus normal profit on the
+    capital advanced per dollar lent:</p>
+  <div class="eq">i_N = c + lam * r      <span class="c">c    operating cost per $ of loans</span>
+                      <span class="c">lam  capital advanced per $ of loans</span></div>
+  <p class="pull">Because banks are leveraged, <span class="m">lam &lt; 1</span> — so
+    <span class="m">i_N &lt; r</span> is <em>derived</em>, not assumed.</p>
+  <p>That is exactly the joint part one hand-waved. The earlier model simply posited that
+    the lending rate sits below the profit rate; here it follows from banking's balance
+    sheet structure, and with it a positive profit rate of enterprise. In US call reports
+    <span class="m">lam</span> runs 0.016 to 0.130, so the condition holds with enormous
+    room, and <span class="m">i_N &lt; r</span> in 54 of 60 years.</p>
+
+  <h3>The scorecard</h3>
+  <div class="scroll">
+  <table>
+    <thead><tr><th>test</th><th>result</th><th></th></tr></thead>
+    <tbody>
+      <tr><td class="lbl">the premise: is <span class="m">rB</span> equalised with <span class="m">r</span>?</td>
+          <td>0.0959 vs 0.0806</td><td class="lbl pos">shares a level; slope on r is 0.93</td></tr>
+      <tr class="mark"><td class="lbl">is <span class="m">i_N</span> a stable anchor?</td>
+          <td>5.25% ± 0.46pp</td><td class="lbl pos">against a loan rate of 7.79% ± 2.48pp</td></tr>
+      <tr><td class="lbl">does <span class="m">i_N</span> track <span class="m">i</span> year to year?</td>
+          <td>0.35 <span class="m">(t 0.45)</span></td><td class="lbl neg">no short-run content at all</td></tr>
+      <tr><td class="lbl">Gibson's paradox: level or inflation rate?</td>
+          <td>—</td><td class="lbl">untestable here, see below</td></tr>
+    </tbody>
+    <caption>60 annual observations; the premise test has 42, since equity is unreported in
+      the FDIC aggregates before about 1984.</caption>
+  </table>
+  </div>
+  <p><strong>Gibson cannot be tested on this sample and the file says so rather than
+    scoring it.</strong> Since 1966 the US price level has been very close to a monotone
+    trend — <span class="m">corr(log p, time) = 0.963</span> — so regressing a rate on the
+    price level is regressing it on time. The negative coefficients that produces merely
+    record that rates fell after 1981 while prices kept rising. Gibson's correlation was a
+    <em>gold-standard</em> observation, when the price level was itself mean-reverting.</p>
+  <p>And one deflating decomposition: <strong>93% of <span class="m">i_N</span> is operating
+    cost</strong>. The distinctively Shaikhian profit term contributes about 40 basis points
+    of a 5.25% normal rate. The theory's content here is mostly "the loan rate is anchored
+    by what banking costs to run".</p>
+</section>
+
+<section>
+  <h2>Result 9 · Two errors in my own measurement</h2>
+  <p>Both were found while fixing the other, and both were in code I had already committed
+    and reported from.</p>
+
+  <div class="finding">
+    <div class="fhead"><h3>Summing every row the FDIC returns triple-counts the country</h3>
+      <span class="chip fixed">fixed</span></div>
+    <p>The summary endpoint keys rows as <span class="m">charter_year_region</span>, and the
+      regions include <em>national aggregates</em> alongside the states. For commercial banks
+      in 2023 the 59 states and territories sum to $11,611bn of net loans — and the endpoint
+      also returns a <span class="m">USA</span> row carrying that same figure, and a
+      <span class="m">US</span> row carrying 11,566. Summing the lot gave
+      <strong>$34,836bn</strong>, about three times the real loan book. Ratios survived it,
+      numerator and denominator inflating together, which is exactly why nothing looked
+      wrong.</p>
+  </div>
+
+  <div class="finding">
+    <div class="fhead"><h3>My <span class="m">lam</span> was a quantitative-easing artefact</h3>
+      <span class="chip fixed">fixed</span></div>
+    <p>Shaikh's <span class="m">lam</span> is fixed capital plus <em>required</em> reserves
+      per dollar of loans. I had used total cash and balances due, which is <strong>91% of
+      the measure</strong> and swings from 0.067 in 2007 to 0.322 in 2021 as QE inflates
+      reserve balances at the Fed. Those are voluntary holdings earning interest on reserves,
+      not capital a bank must tie up to lend.</p>
+    <p>Corrected, <span class="m">lam</span> runs 0.016–0.130 against 0.081–0.359, and has a
+      real trend — 0.127 in 1966–70 down to 0.016 in 2021–25 as reserve requirements were cut
+      and finally abolished outright in March 2020. So <span class="m">lam·r</span> is
+      <strong>40 basis points, not 157</strong>.</p>
+  </div>
+
+  <div class="revised"><span class="tag">it cuts both ways</span>
+    <p>The correction makes the term structure <em>admissible</em> — at the old
+      <span class="m">lam</span> the per-rung profit requirement exceeded the entire observed
+      per-rung step, forcing the implied operating cost negative and making the theory look
+      refuted. But it makes the <em>level</em> fit worse: <span class="m">i_N</span> falls to
+      5.25% against a 7.79% loan rate. An earlier "inadmissible" verdict was an artefact of
+      the mismeasurement, not a finding about Shaikh.</p></div>
+</section>
+
+<section>
+  <h2>Result 10 · The recursion counts rungs, not years</h2>
+  <p>Shaikh's term structure makes the shorter rate an <strong>input cost</strong> to the
+    longer one — the long division funds itself at the short rate — so the curve slopes up
+    on costs, with no expectations and no liquidity premium:</p>
+  <div class="eq">i_m = c_m + i_(m-1) * d_m + lam_m * r</div>
+  <p>As written that knows nothing about the gap from 1y to 2y being one year and from 20y
+    to 30y being ten. Its fitted <span class="m">d</span> is therefore a function of which
+    maturities happen to be published — <strong>0.35 to 1.02</strong> across ladders, and
+    above 1 on the eight-rung ladder, which is inadmissible. A structural coefficient cannot
+    do that.</p>
+  <p>Read as a difference equation in maturity it is the Euler step of
+    <span class="m">di/dm = alpha − beta·i</span>, so the funding share must decay with the
+    maturity <em>gap</em>:</p>
+  <div class="eq">d_m = exp(-beta * DELTA_m)     <span class="c">DELTA in YEARS, not rungs</span></div>
+  <div class="scroll">
+  <table>
+    <thead><tr><th>ladder</th><th>df</th><th>gap form</th><th>const d</th><th>log line</th><th>rung line</th><th>flat</th></tr></thead>
+    <tbody>
+      <tr class="mark"><td class="lbl">8 rungs, 1–30y</td><td>5</td><td class="pos">2.50</td><td>6.37</td><td>6.76</td><td>6.33</td><td>49.9</td></tr>
+      <tr><td class="lbl">6 rungs, 1–10y</td><td>3</td><td class="pos">1.51</td><td>2.68</td><td>4.69</td><td>2.69</td><td>38.1</td></tr>
+      <tr><td class="lbl">5 rungs, 1–10y</td><td>2</td><td class="pos">0.95</td><td>0.47</td><td>3.97</td><td>6.57</td><td>36.4</td></tr>
+      <tr><td class="lbl">3 rungs, sparse</td><td>0</td><td>0.00</td><td>0.00</td><td>4.32</td><td>16.67</td><td>62.3</td></tr>
+    </tbody>
+    <caption>RMS in basis points. Scored against naive two-parameter alternatives, because
+      any monotone concave curve fits a yield curve tolerably and leaving those out is how an
+      exercise talks itself into a success. The three-rung row is exactly identified — zero
+      degrees of freedom — so its zero RMS carries no information and is marked as such.</caption>
+  </table>
+  </div>
+  <p>Refit that way the parameters hold across every ladder: <span class="m">i* =
+    5.69–6.19%</span> and <span class="m">beta = 0.137–0.207</span> per year, against a
+    <span class="m">d</span> that swung by a factor of 2.9. On the hardest ladder — eight
+    rungs, five degrees of freedom — it beats the best naive curve by 2.5×.</p>
+  <p>Two things the old form could not produce. The spread <strong>saturates</strong> with
+    maturity, 0.16pp at one year to 0.91pp at twenty-nine, which is the shape a yield curve
+    actually has. And inversion becomes exact:</p>
+  <div class="eq">spread = (i* - i_1) * (1 - exp(-beta * gap))</div>
+  <p class="pull">The curve inverts if and only if the short rate exceeds
+    <span class="m">i*</span> — the long-run price of production of finance.</p>
+  <p>Which gives an inversion a reading that is not a market forecast: it says policy has
+    driven the short rate above the rate at which banking can reproduce itself.</p>
+</section>
+
+<section>
+  <h2>Result 11 · Four sectors, and where a rate change lands</h2>
+  <p>The three-table model had one hole. Reserves were declared a bank asset and no row ever
+    touched them, because the sector that <em>issues</em> reserves was not in the model — so
+    the three net worths could not sum to zero. They summed to <span class="m">Res</span>.</p>
+  <p>Adding the public sector closes it. Government's payment medium is the reserve it
+    issues, so it needs no asset column, and every government payment appears in three tables
+    at once. Bonds are split by holder, because a shared stock name is <em>one</em> stock and
+    government's liability cannot be the sum of two holders' assets.</p>
+  <p class="pull">All four net worths now sum to zero — checked on a run, imposed nowhere,
+    holding to 1.8e-13.</p>
+
+  <h3>What the term structure is for</h3>
+  <p>Short paper reprices at once; the long book only as it rolls, at 10% a year. One point
+    of tightening:</p>
+  <div class="scroll">
+  <table>
+    <thead><tr><th>years</th><th>immediate leg</th><th>eventual leg</th><th>total</th><th>share from the long book</th></tr></thead>
+    <tbody>
+      <tr><td>1</td><td>+0.126</td><td>+0.002</td><td>+0.128</td><td class="neg">1.4%</td></tr>
+      <tr><td>10</td><td>+0.369</td><td>+0.091</td><td>+0.459</td><td>19.7%</td></tr>
+      <tr class="mark"><td>40</td><td>+2.366</td><td>+1.240</td><td>+3.605</td><td class="pos">34.4%</td></tr>
+    </tbody>
+    <caption>Deviation from the unshocked path at the same date, never from t=0.</caption>
+  </table>
+  </div>
+  <p>A tightening that looks cheap for the public finances in year one is not by year twenty,
+    and nothing but the term structure produces that.</p>
+
+  <h3>Who pays</h3>
+  <div class="scroll">
+  <table>
+    <thead><tr><th>at 40 years</th><th>households</th><th>firms</th><th>banks</th><th>government</th><th>sum</th></tr></thead>
+    <tbody>
+      <tr><td class="lbl">change in net worth</td><td class="pos">+37.26</td><td class="pos">+7.84</td><td class="pos">+7.47</td><td class="neg">−52.57</td><td>−7e−13</td></tr>
+    </tbody>
+    <caption>Financial claims net to zero across the four, so this must sum to zero at every
+      horizon. It does.</caption>
+  </table>
+  </div>
+  <p>The tightening does not destroy financial wealth. It <strong>moves</strong> it, off the
+    public balance sheet onto all three private ones. On the real side
+    <span class="m">rE</span> falls 0.31pp on impact and 0.61pp by year 40, and the capital
+    stock ends <strong>7.8% lower</strong>.</p>
+  <div class="revised"><span class="tag">unexpected</span>
+    <p>One point of tightening <strong>roughly doubles banking's profit rate</strong> —
+      <span class="m">d rB = +7.4pp</span> on impact. That is arithmetic, not a glitch:
+      <span class="m">lam = 0.05</span> is 20:1 leverage, and bank assets reprice faster than
+      bank deposits. Equalisation pulls it back afterwards, so the corrective force is
+      visible in the run rather than assumed. The same move that squeezes enterprise by
+      0.3pp hands banking a windfall an order of magnitude larger in profit-rate terms.</p></div>
+</section>
+
+<section>
+  <h2>Result 12 · The rule race, and a prediction I got wrong</h2>
+  <p>Anchor policy on the measured normal rate rather than an estimated natural rate, keep
+    the stabilisation terms, and race it against Taylor calibrated to agree at rest. Each
+    rule is scored against <em>its own</em> unshocked path — they do not share one once the
+    model drifts, and comparing shocked levels would charge that divergence to the shock.</p>
+  <p><strong>On shock response the classical anchor mostly wins</strong>, and by more than
+    the two-sector version suggested: it protects the enterprise margin better at 20 and 40
+    years and loses only by 80, so government debt pushes the crossover out from around 25
+    years to past 40. It costs less capital and damages the public balance sheet less at
+    every horizon — −1.19 against −2.65 at twenty years, less than half.</p>
+
+  <h3>But the standing cost is the bigger number</h3>
+  <p>On the <em>unshocked</em> path the classical rule runs permanently tighter, because its
+    anchor follows the normal loan rate up as banking's margin is squeezed while Taylor's
+    fixed intercept does not. That carries a permanently higher interest bill:</p>
+  <div class="eq">burden, year 80, nothing shocked
+  classical   0.0510
+  Taylor      0.0400        <span class="c">a gap of 1.1 points of output, every year</span></div>
+  <p>Against a largest shock-response gap of 0.44 points. <strong>The standing cost is about
+    two and a half times the contest the race was set up to measure.</strong> A rule
+    anchored on a drifting quantity inherits the drift, and the public finances buy it
+    whether or not anything is shocked.</p>
+
+  <h3>The fix works, and works too well to be interesting</h3>
+  <p>Make the anchor a trailing average, <span class="m">di1Nbar = mu·(i1N − i1Nbar)</span>,
+    so <span class="m">mu</span> dials between the instantaneous classical anchor and a
+    frozen Taylor-style intercept:</p>
+  <div class="scroll">
+  <table>
+    <thead><tr><th>mu</th><th>standing burden vs Taylor</th><th>worst rE</th><th>d NWG</th><th>d K/K</th></tr></thead>
+    <tbody>
+      <tr><td>5.00</td><td>+0.01089</td><td>−0.00839</td><td>−11.01</td><td>−0.1078</td></tr>
+      <tr><td>0.30</td><td>+0.00936</td><td>−0.00825</td><td>−10.34</td><td>−0.1067</td></tr>
+      <tr class="mark"><td>0.01</td><td class="pos">+0.00155</td><td class="pos">−0.00771</td><td class="pos">−8.90</td><td class="pos">−0.1040</td></tr>
+      <tr><td class="lbl">Taylor</td><td>0</td><td>−0.00875</td><td>−16.16</td><td>−0.1151</td></tr>
+    </tbody>
+    <caption>Standing cost from the unshocked path at t=80; response to a +1% wage shock
+      against each rule's own unshocked path at t=40.</caption>
+  </table>
+  </div>
+  <p>Slowing the anchor cuts the standing cost by 86% <em>and</em> protects the margin better
+    <em>and</em> does less fiscal damage <em>and</em> destroys less capital. Every column
+    improves monotonically. There is no tradeoff to price and no interior optimum.</p>
+
+  <h3>And the prediction that was wrong</h3>
+  <p>I expected a transitory shock to punish a slow anchor — the price-level integral is what
+    the classical rule has that Taylor does not, and a 70-year half-life should waste it. So:
+    knock the wage share one point high and let it revert, half-life 1.7 years.</p>
+  <div class="revised"><span class="tag">refuted</span>
+    <p><strong>It does not discriminate at all.</strong> Inflation returns under every rule
+      within about five years, residual gaps of order 1e−5. Worst
+      <span class="m">rE</span> is −0.00044 under all seven settings.</p>
+    <p>The permanent memory is real in mechanism and negligible in size. A burst of inflation
+      does leave the price level 0.4% high forever, and the anchor does read it through
+      <span class="m">c = p·ucr·tech</span>. But 0.4% on a <span class="m">c</span> of 0.0212
+      is <strong>under a basis point</strong> on the normal rate — and the balance-sheet
+      effect of a slightly smaller capital stock is larger, so the surviving rate gap is not
+      merely tiny but the <em>wrong sign</em>, about −2bp.</p></div>
+  <p>That qualifies an earlier result rather than overturning it. The two-sector model made
+    the price-level integral look powerful, and it was — but that experiment ran inflation
+    <em>permanently</em> away from the rate at which banking gets cheaper, driving
+    <span class="m">c</span> from 0.049 to between 0.023 and 0.099. A transitory shock moves
+    the price level half a percent and the integral has nothing to bite on. Both results
+    stand; the earlier one was simply not evidence about shocks of this kind, and I read it
+    as though it were.</p>
+
+  <h3>Where that leaves the rule</h3>
+  <ul>
+    <li><strong>It beats Taylor on shock response</strong> once government debt is in the
+      model — on the enterprise margin, the capital stock and the public balance sheet.</li>
+    <li><strong>Slower is better</strong>, with no tradeoff found against either shock type.</li>
+    <li><strong>Its distinctive price-level channel does no measurable work</strong> except
+      when inflation is persistently misaligned with the trend in banking costs.</li>
+  </ul>
+  <p class="pull">What makes the rule good is not the Gibson mechanism that motivated it. It
+    is that anchoring on a measured cost structure beats a filtered <span class="m">r*</span>.</p>
+  <p>Which is a narrower claim than the theory wanted, and a more portable one: the
+    distinctively Shaikhian part is doing less work than the merely observable part.</p>
+</section>
+
 <section>
   <h2>What building it surfaced</h2>
   <p>Ordered by how much damage each does silently. Every one was measured.</p>
+
+  <div class="finding">
+    <div class="fhead"><h3>A Godley initial condition is stored at full precision and used at six significant figures</h3>
+      <span class="chip open">by design</span></div>
+    <p>The opening sheet of the four-sector model balanced exactly in Python, every figure an
+      exact multiple of 1/1024, and Minsky's own symbolic row check passed on all four
+      tables. The run still came back out by <strong>8e−5</strong> — and it was
+      <em>constant</em> across 10, 20 and 40 periods, which is the tell: an integration error
+      grows with the horizon and this did not.</p>
+    <p>The engine writes each initial condition into the <span class="m">.mky</span>
+      <strong>twice</strong>: once at full precision as the Godley cell text, and once
+      rounded to six significant figures as the value it actually initialises the stock with.
+      On reload the rounded one wins. Both strings are in the saved file —
+      <span class="m">48.998046875</span> and <span class="m">48.998</span>. So a sheet
+      balances at build time, passes the exact <span class="m">!= 0</span> check the engine
+      itself demands, and is still wrong at t=0.</p>
+    <p>1/1024 is binary-exact but needs ten decimals, so six significant figures destroys it.
+      Snapping to <strong>1/16</strong> satisfies both constraints below 100 and took the
+      residual to <strong>1.8e−13</strong>.</p>
+  </div>
+
+  <div class="finding">
+    <div class="fhead"><h3>An integral shares its output port with its own operation, so wiring drags it instead</h3>
+      <span class="chip fixed">fixed</span></div>
+    <p>A wire is made by simulating a canvas drag — mouse down on the source's output port,
+      up on the destination's input. An integral's icon and its IntOp <em>both</em> report
+      port 0 at the same pixel, so the drag can land on the operation body and move it rather
+      than start a wire. Every consequence sends you the wrong way: the refusal names
+      <em>overlap</em>, moving the destination 400px away changes nothing because the fault
+      is at the source end, and the only trace is that the IntOp has quietly moved to where
+      the drag dropped it. Whether it happens depends on which icon the canvas picks at that
+      pixel, so the same expression builds in one model and fails in the next.</p>
+  </div>
+
+  <div class="finding">
+    <div class="fhead"><h3>Several wires into one input combine by the PORT's role, not the operation's name</h3>
+      <span class="chip fixed">fixed</span></div>
+    <p>Minsky's n-ary operations legitimately take several wires into a single input. The
+      repo's own comment said they <em>sum</em>, which had only ever been tested for
+      <span class="m">add</span>. Measured, with 6 and 3 both wired into <strong>port
+      1</strong>:</p>
+    <div class="scroll">
+    <table>
+      <thead><tr><th>add</th><th>subtract</th><th>multiply</th><th>divide</th><th>min</th><th>max</th></tr></thead>
+      <tbody><tr><td>9</td><td class="neg">9</td><td>18</td><td class="neg">18</td><td>3</td><td>6</td></tr></tbody>
+      <caption>Port 1 of subtract is the positive side, so it sums; port 1 of divide is the
+        numerator, so it multiplies.</caption>
+    </table>
+    </div>
+    <p>So "they sum their inputs" is wrong for four of the six. Two wires into a multiply give
+      <span class="m">a*b</span>, not <span class="m">a+b</span>, and nothing warns you.</p>
+  </div>
 
   <div class="finding">
     <div class="fhead"><h3>A user function that names a model variable is wrong during a run</h3>
@@ -781,22 +1109,45 @@ highest fed funds ever        0.1638   <span class="c">1981</span></div>
     <li><strong>No instrument, so no causal claim.</strong> The regressions in Result 7 are
       reduced forms. They can say the model's restriction fails; they cannot recover the
       structural effect of the interest bill on accumulation.</li>
+    <li><strong>The four-sector baseline is not stationary, and shock results are read
+      against the unshocked path because of it.</strong> Two reasons, both real: banking's
+      profit rate drifts down as households' deposits outgrow the loan book, and a common
+      growth rate for every financial stock is <em>impossible</em> since
+      <span class="m">dDF = 0</span> identically — firms hold a constant transaction
+      balance, which is what "firms borrow exactly their gap" means.</li>
+    <li><strong>Household portfolio behaviour is mechanical, and it drives the biggest
+      result.</strong> Bonds are bought pro rata out of the deficit with no sensitivity to
+      return. The deposit growth that squeezes banking's margin — and hence the standing
+      cost that dominates Result 12 — is a consequence of that rule. A return-sensitive
+      household would change the size of that cost, though not its existence.</li>
+    <li><strong>The term structure is fitted to Treasuries, not to bank loan rates.</strong>
+      Shaikh's theory is about loans; he argues arbitrage carries the shape across, and this
+      leans on that.</li>
     <li><strong>Utilisation is unbounded above.</strong> Output is demand-determined with
       no capacity ceiling.</li>
-    <li><strong>No government, no central bank balance sheet, no default.</strong> Reserves
-      are fixed.</li>
+    <li><strong>No default, no credit rationing, no bank failure.</strong> Banking's profit
+      rate can halve without anything breaking.</li>
     <li><strong>One household sector</strong> — workers and rentiers are not separated, so
-      there is no differential saving propensity, which Shaikh would want.</li>
+      there is no differential saving propensity, which Shaikh would want, and which would
+      matter most for exactly the redistribution Result 11 measures.</li>
   </ul>
 </section>
 
 <footer>
-  models/shaikh_monetary_policy.py · models/build.py · models/runner.py<br>
-  models/calibrate.py · models/data/uscorp.py · models/data/fred.py<br>
-  docs/SHAIKH_MODEL.md · docs/BUILDING_A_BIG_MODEL.md<br>
-  Built through the HTTP API. 218 items, 230 wires, three Godley tables, three charts.<br>
-  Data: BEA NIPA table 1.14 and Federal Reserve Z.1 via FRED, 1947Q4–2026Q1. Every series
-  is fetched with its title and printed before use, so none is used unidentified.
+  PART ONE  models/shaikh_monetary_policy.py · models/enterprise_core.py ·
+  models/enterprise_banking.py · models/enterprise_equity.py · models/ladder.py ·
+  models/audit.py · models/calibrate.py<br>
+  PART TWO  models/shaikh_rate.py · models/term_fit.py · models/shaikh_term_structure.py ·
+  models/four_sector.py<br>
+  DATA  models/data/fred.py · models/data/uscorp.py · models/data/usbank.py<br>
+  BUILD  models/build.py · models/runner.py · .claude/skills/minsky/SKILL.md<br>
+  docs/SHAIKH_MODEL.md · docs/BUILDING_A_BIG_MODEL.md · docs/MINSKY_HEADLESS.md<br><br>
+  Built through the HTTP API. The four-sector model is 330 items and 334 wires across four
+  Godley tables.<br>
+  Data: BEA NIPA table 1.14, Federal Reserve Z.1, FDIC call reports and FRED, 1934–2026.
+  Every series is fetched with its title and printed before use, so none is used
+  unidentified.<br>
+  Both test suites must print ALL PASS before anything here is committed.
 </footer>
 
 </div>

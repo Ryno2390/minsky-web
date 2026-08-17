@@ -278,6 +278,61 @@ relation between the spread and bank capital — for any spread there is a level
 at which banking earns exactly `r`. What pins the pair is that bank capital must also grow
 at `g`, which is what the payout ratio is solved for.
 
+## Rung 2: corporate equity — and a correction
+
+The write-up above claimed bank deposits were only 0.47 of the loan book "because
+households hold no equity claim on firms' capital", and that giving them one would raise
+the deposit base and let more of a policy move through. **That was wrong**, and rung 1's
+own arithmetic says so. The bank balance sheet there is an identity, `DH = L − EB`, and
+bank capital is pinned by equalisation:
+
+    EB/L = (iL − iD − omegaB) / (r − iD)  =  0.562
+
+a function of the lending rate, the deposit rate, operating costs and `r`, **and of nothing
+else**. No household portfolio enters it. Bank leverage is high here because banks earn a
+fat net margin — 3.9% of the loan book — and equalisation then demands the capital to match.
+Getting `EB/L` to a realistic 0.1 needs `iL` near 0.040, not a different asset for
+households to hold.
+
+Measured directly, turning the equity dial from 0 to 0.75 moves `DH/L` from 0.465 to 0.451.
+It does essentially nothing, exactly as the identity says.
+
+### What corporate equity actually does
+
+Firms meet the gap between what they invest and what they retain by borrowing *or* by
+issuing shares. With `psi` the share met by issuance, leverage settles at
+
+    d* = (1 − psi) * (1 − (1−payF)/kappa)
+
+so the external financing requirement is split by `psi`, and **only the debt half carries an
+interest bill**. Since the mechanism runs entirely through that bill:
+
+| psi | d* | E/K | DH/L | dg/dm | κ·d* | pass-through |
+|---|---|---|---|---|---|---|
+| 0.00 | 0.7917 | 0.000 | 0.465 | 0.332 | 0.950 | 0.349 |
+| 0.25 | 0.5938 | 0.198 | 0.460 | 0.238 | 0.713 | 0.334 |
+| 0.50 | 0.3958 | 0.396 | 0.456 | 0.152 | 0.475 | 0.320 |
+| 0.75 | 0.1979 | 0.594 | 0.451 | 0.073 | 0.238 | 0.307 |
+
+`d*` falls one for one with `psi`, `E/K` fills the gap, and `dg/dm` falls with leverage
+while the pass-through barely moves.
+
+**Corporate equity changes the STRENGTH of the mechanism, through leverage. It does not
+change the TRANSMISSION, which is the bank's business.** The two factors in
+`dg/dm = κ·d* × pass-through` turn out to be governed by different sectors: firms' financing
+mix sets the first, banks' funding mix sets the second.
+
+There is a policy statement in it. Growth *rises* with `psi` — 0.028 to 0.069 at the
+baseline margin — because equity carries no interest bill. So equity-financed accumulation
+is faster and nearly untouchable by policy; debt-financed accumulation is slower and
+controllable. **The profit-rate-of-enterprise channel is a channel only to the extent that
+firms borrow.**
+
+`models/enterprise_equity.py` → `EnterpriseEquity.mky`, 91 items. At `psi = 0` it
+reproduces rung 1 exactly. Real capital is financed by debt, outside equity and retained
+earnings, and `K = L + E + RE` is integrated from four separate flows and checked rather
+than enforced: it holds to 7e-13.
+
 ## Limits worth knowing
 
 - **Bank leverage is low** (loans ≈ 1.8× bank capital). Households hold no equity claim on

@@ -250,6 +250,44 @@ def implied_from_cycle_beta(w, beta):
     return w["ff"] + (fund_eq - w["fund"]) / beta, fund_eq
 
 
+def both_sides_beta(rows, start=QSTART):
+    """Pass-through on BOTH sides of the bank balance sheet, and hence on the margin.
+
+    THIS IS THE CHECK THAT BREAKS THE PRESCRIPTION, so it is run every time.
+
+    The equalising calculation holds interest INCOME fixed and solves for the interest
+    EXPENSE that would bring rB down to r. That is only a policy prescription if raising
+    the policy rate raises expense without raising income. It does not: assets reprice at
+    about 0.49 per point of policy and liabilities at about 0.50, so the NET INTEREST
+    MARGIN barely moves -- a coefficient of 0.037 with an R-squared of 0.08, which is not
+    distinguishable from zero.
+
+    So there is no policy rate at which banking earns only the general rate. The lever
+    does not move the target. What the equalising rate measures is how far banking's
+    profitability sits above the general rate, expressed in policy-rate units; it is not a
+    statement about where the policy rate should be.
+    """
+    bank = usbank.quarterly(start=start)
+    qmap = {1: "0331", 2: "0630", 3: "0930", 4: "1231"}
+    ff, yld, fnd, nim = [], [], [], []
+    for w in rows:
+        t = bank.get(f"{w['year']}{qmap[w['q']]}")
+        if not t or not t.get("ASSET"):
+            continue
+        ff.append(w["ff"])
+        yld.append(t["INTINC"] / t["ASSET"])
+        fnd.append(w["fund"])
+        nim.append((t["INTINC"] - t["EINTEXP"]) / t["ASSET"])
+
+    def slope(x, y):
+        A = np.column_stack([np.ones(len(x)), np.array(x)])
+        b, *_ = np.linalg.lstsq(A, np.array(y), rcond=None)
+        r2 = 1 - ((np.array(y) - A @ b) ** 2).sum() / ((np.array(y) - np.mean(y)) ** 2).sum()
+        return b[1], r2
+
+    return {"asset": slope(ff, yld), "liability": slope(ff, fnd), "margin": slope(ff, nim)}
+
+
 def run_quarterly(start=QSTART):
     """Quarterly panel, with the pass-through measured per CYCLE rather than by panel.
 
@@ -283,9 +321,25 @@ def run_quarterly(start=QSTART):
     print("  for deposits at all.")
     print("")
 
+    bs = both_sides_beta(rows, start)
+    print("BEFORE READING ANY OF THIS AS A PRESCRIPTION")
+    print(f"  pass-through, asset side      {bs['asset'][0]:+.3f}   R2 {bs['asset'][1]:.3f}")
+    print(f"  pass-through, liability side  {bs['liability'][0]:+.3f}   R2 {bs['liability'][1]:.3f}")
+    print(f"  net interest margin           {bs['margin'][0]:+.3f}   R2 {bs['margin'][1]:.3f}")
+    print("  Both sides reprice at about the same speed, so the margin is very nearly")
+    print("  INVARIANT to the policy rate. The calculation below holds interest income")
+    print("  fixed and solves for the expense that brings rB down to r -- but raising the")
+    print("  policy rate raises income too, by about as much. There is no policy rate at")
+    print("  which banking earns only the general rate: the lever does not move the target.")
+    print("")
+    print("  So read what follows as a MEASURE OF HOW FAR BANKING SITS ABOVE THE GENERAL")
+    print("  RATE, expressed in policy-rate units. It is not a statement about where the")
+    print("  policy rate should be.")
+    print("")
+
     w = rows[-1]
     _ip0, fund_eq = implied_from_cycle_beta(w, allb[0])
-    print(f"THE ANSWER  ({w['label']})")
+    print(f"THE MEASURE  ({w['label']})")
     print(f"  r {w['r']:.4f}   banking rB (pre-tax) {w['rB']:.4f}   "
           f"gap {(w['rB']-w['r'])*100:+.2f}pp")
     print(f"  funding cost {w['fund']*100:.2f}%  ->  needs {fund_eq*100:.2f}% for rB = r")

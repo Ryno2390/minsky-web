@@ -130,7 +130,7 @@ footer{border-top:1px solid var(--rule);padding-top:1.2rem;font-family:var(--mon
     drives accumulation is the profit rate net of interest — what happened when eighty
     years of US national accounts were allowed to answer back, and what was salvaged by
     going to a different part of the same book.</p>
-  <p class="byline"><span>Four Godley tables</span><span>Households · Firms · Government · Banks</span><span>Net worths close to 1.8e-13</span><span>US data, 1934–2026</span><span>NIPA · Z.1 · FDIC · FRED</span></p>
+  <p class="byline"><span>Four Godley tables</span><span>Three parts, two of them negative results</span><span>Households · Firms · Government · Banks</span><span>Net worths close to 1.8e-13</span><span>US data, 1934–2026</span><span>NIPA · Z.1 · FDIC · FRED</span></p>
   <div class="revised"><span class="tag">read first</span>
     <p>This page is in two parts, and the first one fails. <strong>Part one</strong>
       (Results 1–6) builds a model of Shaikh's enterprise-margin mechanism, and
@@ -143,7 +143,12 @@ footer{border-top:1px solid var(--rule);padding-top:1.2rem;font-family:var(--mon
       different argument — Shaikh's theory of the interest <em>rate</em> — and that one
       holds up better. It <em>derives</em> what part one assumed, it fits the Treasury curve
       once repaired, and it gives a policy rule worth racing. Along the way it also
-      overturns two measurements of my own and one prediction I made a section earlier.</p></div>
+      overturns two measurements of my own and one prediction I made a section earlier.</p>
+    <p><strong>Part three</strong> (<a href="#band">Results 13–14</a>) asks the obvious
+      question — what should the policy rate be today — and answers it in the negative. Four
+      constructions, each of which turns out to describe rather than prescribe, and a band
+      so wide it has never once bound. What does bind is fiscal, and it binds 77% of the
+      time.</p></div>
 </header>
 
 <section>
@@ -942,6 +947,191 @@ highest fed funds ever        0.1638   <span class="c">1981</span></div>
     distinctively Shaikhian part is doing less work than the merely observable part.</p>
 </section>
 
+<section id="band">
+  <h2>Result 13 · Asking the model for a number</h2>
+  <p>Everything above describes. The obvious next question is whether any of it
+    <em>prescribes</em> — whether the theory can say what the policy rate should be today.
+    Four attempts, and the way each failed is more informative than the numbers.</p>
+
+  <h3>The construction that looked best</h3>
+  <p>Shaikh's second condition says competition drags banking's profit rate toward the
+    general rate. Given <span class="m">r</span>, what banks earn on assets, what they cost
+    to run net of fee income, and their own capital, there is <strong>exactly one</strong>
+    interest expense consistent with <span class="m">rB = r</span> — so one funding cost,
+    and through the pass-through, one policy rate.</p>
+  <p class="pull">The only construction here that yields a policy rate with no model
+    parameters at all. Every input is a reported accounting quantity.</p>
+
+  <h3>And the coefficient it all hangs on is not stable</h3>
+  <p>The implied rate <em>divides</em> by the pass-through, and that is the one estimated
+    object in the chain. Estimated over different windows it runs 0.389 to 0.647 — moving
+    the answer by <strong>2.12 points</strong>. Sweeping the profit rate across its entire
+    postwar range moves it 0.4. So the binding uncertainty was never the economics.</p>
+  <p>Measuring it <em>within</em> policy cycles instead fixes that. A long panel lets its
+    intercept absorb the regime differences between cycles, and the 1990–2025 fit returns
+    0.647 — higher than any single cycle on record:</p>
+  <div class="scroll">
+  <table>
+    <thead><tr><th>hiking cycles</th><th>β</th><th>cutting cycles</th><th>β</th></tr></thead>
+    <tbody>
+      <tr><td class="lbl">2004–06</td><td>0.492</td><td class="lbl">2000–03</td><td>0.550</td></tr>
+      <tr><td class="lbl">2015–19</td><td>0.303</td><td class="lbl">2007–10</td><td>0.517</td></tr>
+      <tr><td class="lbl">2021–23</td><td>0.489</td><td class="lbl">2019–20</td><td>0.348</td></tr>
+      <tr class="mark"><td class="lbl">mean</td><td>0.428</td><td class="lbl">2024–now</td><td>0.397</td></tr>
+    </tbody>
+    <caption>Near enough symmetric, against the folk story that deposit rates are sticky
+      going up and quick coming down. The lone outlier, 0.303, is a tightening that began
+      from ZIRP with the system awash in reserves — banks had no need to compete for
+      deposits at all.</caption>
+  </table>
+  </div>
+  <p>A cycle β is a slope on <em>changes</em>, so it applies as one —
+    <span class="m">ip = ff + (fund_eq − fund)/β</span> — which drops the intercept
+    entirely. The answer then spans <strong>4.96% to 5.15%</strong>, a 0.19pp range instead
+    of 2.12.</p>
+  <div class="revised"><span class="tag">reversal</span>
+    <p>That overturns the annual version, which said <strong>3.70%</strong> and "about
+      right". The 0.647 was doing the work: too high a β implies a small policy move
+      produces a large funding-cost move, so too little tightening appears to be needed.</p></div>
+
+  <h3>Then checking the mechanism broke it</h3>
+  <p>The calculation holds interest <em>income</em> fixed and solves for the
+    <em>expense</em> that brings <span class="m">rB</span> down to <span class="m">r</span>.
+    That is a prescription only if raising the policy rate raises expense without raising
+    income. It does not:</p>
+  <div class="scroll">
+  <table>
+    <thead><tr><th>pass-through</th><th>coefficient</th><th>R²</th></tr></thead>
+    <tbody>
+      <tr><td class="lbl">asset side</td><td>+0.492</td><td>0.729</td></tr>
+      <tr><td class="lbl">liability side</td><td>+0.502</td><td>0.810</td></tr>
+      <tr class="mark"><td class="lbl">net interest margin</td><td class="neg">+0.037</td><td class="neg">0.081</td></tr>
+    </tbody>
+    <caption>Both sides reprice at the same speed, so the margin is very nearly invariant
+      to the policy rate.</caption>
+  </table>
+  </div>
+  <p class="pull">There is no policy rate at which banking earns only the general rate. The
+    lever does not move the target.</p>
+  <p>The record says the same from the other side. Banking's excess over the general rate
+    averaged <strong>+11.35pp in 2000–2007</strong>, when the funds rate averaged 3.43%,
+    and <strong>+0.36pp in 2008–2015</strong>, when it averaged 0.35%. Higher policy rates
+    go with <em>higher</em> bank excess, the opposite of what the prescription assumes. And
+    the "gap" correlates <span class="m">+0.981</span> with banking's own profit rate
+    against <span class="m">+0.312</span> with the policy rate — it is bank profitability
+    restated in policy-rate units.</p>
+  <p><strong>So it is a measure, not a prescription.</strong> What it measures is real and
+    large: banking sits about 5.4 points above the general rate, worth roughly
+    <strong>$142bn a year, 0.45% of GDP</strong>, some <strong>$2.0tn cumulatively</strong>
+    since 2000, and above the general rate in <strong>89 of 105 quarters</strong>. In
+    Shaikh's own logic that should have been competed away thirty-five years ago. That it
+    has not points at barriers to entry, mismeasured bank capital, or a rent the model does
+    not price — the public backstop being the obvious candidate.</p>
+</section>
+
+<section>
+  <h2>Result 14 · The band, and what actually binds</h2>
+  <p>If the theory cannot name a point, it can still name a range. Shaikh's ceiling is the
+    rate at which the profit rate of enterprise reaches zero — today about
+    <strong>20.1%</strong> on the policy rate. The floor is the zero bound. So the
+    Shaikhian band is roughly <strong>0% to 20%</strong>.</p>
+  <p>Which is wide enough to be useless, and the record confirms it. Running a standard
+    Taylor rule back to 1980 and asking whether its prescription ever left the band:</p>
+  <div class="scroll">
+  <table>
+    <thead><tr><th></th><th>result</th></tr></thead>
+    <tbody>
+      <tr><td class="lbl">Taylor prescriptions above Shaikh's ceiling</td><td class="pos">0 of 47 years</td></tr>
+      <tr><td class="lbl">minimum headroom to the ceiling</td><td>6.8pp (2001)</td></tr>
+      <tr><td class="lbl">average headroom</td><td>13.8pp</td></tr>
+      <tr class="mark"><td class="lbl">Taylor prescriptions below <em>zero</em></td><td class="neg">6 of 47 — 2009–13, 2020</td></tr>
+    </tbody>
+    <caption>Every violation was at the floor, never the ceiling.</caption>
+  </table>
+  </div>
+  <p>So adding the dual mandate does not narrow Shaikh's band. It <strong>supersedes</strong>
+    it. The binding constraints on US monetary policy have all been at the bottom — and the
+    trade-off usually invoked, that raising rates will choke investment, has not been an
+    aggregate constraint in half a century.</p>
+
+  <h3>The constraint that does bind is fiscal</h3>
+  <p>Derived rather than picked. With <span class="m">b</span> the debt ratio,
+    <span class="m">i</span> the effective rate the government actually pays,
+    <span class="m">g</span> nominal growth and <span class="m">s</span> the primary
+    balance:</p>
+  <div class="eq">db/dt = (i - g) * b - s        stable when   i_max = g + s/b</div>
+  <p>Every term measured. It is the r-versus-g question in plainest form: while
+    <span class="m">i &lt; g</span> the ratio falls even in primary deficit, and once
+    <span class="m">i &gt; g</span> it takes a surplus to hold it. And because the
+    government pays a weighted average coupon over many maturities rather than the policy
+    rate, the ceiling has an immediate and an eventual reading — the same split the
+    four-sector model was built to price. Measured pass-through: 0.960, R² 0.744, over 221
+    quarters.</p>
+  <div class="scroll">
+  <table>
+    <thead><tr><th>growth assumption</th><th>g</th><th>i_max</th><th>policy ceiling</th><th>binding now?</th></tr></thead>
+    <tbody>
+      <tr><td class="lbl">5-year trend, as measured</td><td>7.71%</td><td>+5.83%</td><td>+5.68%</td><td class="pos">no</td></tr>
+      <tr><td class="lbl">10-year trend</td><td>5.49%</td><td>+3.62%</td><td>+3.37%</td><td class="neg">YES</td></tr>
+      <tr><td class="lbl">20-year trend</td><td>4.43%</td><td>+2.56%</td><td>+2.27%</td><td class="neg">YES</td></tr>
+      <tr class="mark"><td class="lbl">2% inflation + 2% real</td><td>4.00%</td><td>+2.13%</td><td>+1.82%</td><td class="neg">YES</td></tr>
+      <tr><td class="lbl">2% + 1.8% real (CBO-ish)</td><td>3.80%</td><td>+1.93%</td><td>+1.61%</td><td class="neg">YES</td></tr>
+    </tbody>
+    <caption>A five-year window still carries the 2021–22 nominal surge, which is why it
+      alone says the position is comfortable.</caption>
+  </table>
+  </div>
+  <p class="pull">On backward-looking growth today's rate is fine. On any forward-looking
+    assumption it is already above the fiscal ceiling.</p>
+  <p>That disagreement is the finding, not a number to average away: fiscal sustainability
+    currently hinges on whether post-2021 nominal growth persists. Historically this ceiling
+    binds in <strong>170 of 221 quarters — 77% of the time</strong>, against Shaikh's at
+    zero.</p>
+
+  <h3>The band, finally narrowed</h3>
+  <div class="scroll">
+  <table>
+    <thead><tr><th>edge</th><th>level</th><th>how often it binds</th></tr></thead>
+    <tbody>
+      <tr><td class="lbl">zero lower bound</td><td>0%</td><td>6 of 47 years</td></tr>
+      <tr><td class="lbl">dual mandate (Taylor)</td><td>3.43%</td><td>—</td></tr>
+      <tr class="mark"><td class="lbl">actual fed funds</td><td>3.64%</td><td>—</td></tr>
+      <tr><td class="lbl">fiscal ceiling</td><td class="neg">1.6–5.7%</td><td class="neg">170 of 221 quarters</td></tr>
+      <tr><td class="lbl">Shaikh's ceiling</td><td>~20%</td><td class="pos">0 of 47 years</td></tr>
+    </tbody>
+  </table>
+  </div>
+  <p>The operative band is roughly <strong>0% to 2–6%</strong>, and the binding edge is
+    fiscal rather than anything about enterprise profitability. There is a live tension in
+    it: the mandate says 3.43%, the rate is 3.64%, and on forward-looking growth the fiscal
+    ceiling sits <em>below both</em>.</p>
+  <p>One caveat holds the whole thing together. <span class="m">s/b</span> is the
+    <em>current</em> primary balance, so the ceiling moves when fiscal policy moves — a
+    point of primary-balance improvement buys about a point of ceiling. The constraint is
+    genuinely on the <strong>pair</strong>. It is not a statement that rates must come down.</p>
+
+  <h3>What the whole exercise establishes</h3>
+  <p>Every criterion tried here was <em>positive</em> dressed as <em>normative</em>. The
+    enterprise floor says where accumulation would stop; the classical normal rate says
+    where banking's price of production sits; equalisation says where the rate would be if
+    banking earned <span class="m">r</span>; <span class="m">i*</span> says where the curve
+    is heading. Each answers "where would the rate settle under condition X". None answers
+    "where should it be".</p>
+  <p>That is structural, not a gap in the implementation. In this model
+    <span class="m">dg/di = −κ·d &lt; 0</span> — growth falls monotonically in the rate — so
+    a purely Shaikhian objective <strong>corners</strong> at the lowest feasible rate. An
+    interior optimum needs something that gets worse as the rate falls, and Shaikh's
+    apparatus does not contain one. Inflation is outside it; fragility is Minsky's, not
+    his; and the third candidate — distribution — is a political variable, because there is
+    no technically correct division of a surplus.</p>
+  <p class="pull">A theory of gravitation tells you where things tend and what they cost.
+    It does not tell you what to choose.</p>
+  <p>Which is not arbitrariness. The economy fixes the feasible set and prices the
+    consequences with some precision. It does not fix the point. Every time this exercise
+    produced a "correct" rate, an objective had been smuggled in — and the smuggling was
+    where the error was, three times over.</p>
+</section>
+
 <section>
   <h2>What building it surfaced</h2>
   <p>Ordered by how much damage each does silently. Every one was measured.</p>
@@ -1139,6 +1329,7 @@ highest fed funds ever        0.1638   <span class="c">1981</span></div>
   models/audit.py · models/calibrate.py<br>
   PART TWO  models/shaikh_rate.py · models/term_fit.py · models/shaikh_term_structure.py ·
   models/four_sector.py<br>
+  PART THREE  models/equalise.py · models/fiscal.py<br>
   DATA  models/data/fred.py · models/data/uscorp.py · models/data/usbank.py<br>
   BUILD  models/build.py · models/runner.py · .claude/skills/minsky/SKILL.md<br>
   docs/SHAIKH_MODEL.md · docs/BUILDING_A_BIG_MODEL.md · docs/MINSKY_HEADLESS.md<br><br>

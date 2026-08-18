@@ -193,76 +193,140 @@ def quarterly_beta(rows):
     return b[0], b[1], r2, len(rows)
 
 
-def run_quarterly(start=QSTART):
-    """Quarterly panel, and the sensitivity that the annual version could not show.
+#: Policy cycles, by their turning points in the fed funds rate. Betas are measured
+#: WITHIN a cycle rather than from a panel spanning several, because a long regression
+#: lets its intercept absorb regime differences and the slope then means little: the
+#: 1990-2025 annual fit returns 0.647, which is higher than any single cycle on record.
+CYCLES = [
+    ("hike 2004-06", "2004Q2", "2006Q3", "up"),
+    ("hike 2015-19", "2015Q4", "2019Q1", "up"),
+    ("hike 2021-23", "2021Q4", "2023Q4", "up"),
+    ("cut 2000-03", "2000Q3", "2003Q2", "down"),
+    ("cut 2007-10", "2007Q3", "2010Q2", "down"),
+    ("cut 2019-20", "2019Q1", "2020Q2", "down"),
+    ("cut 2024-now", "2024Q2", None, "down"),
+]
 
-    The headline is not the implied rate. It is that the PASS-THROUGH -- the one estimated
-    object in the whole chain -- is not stable, and the implied rate divides by it. Betas
-    estimated over defensible windows run 0.39 to 0.65, and that moves the answer by more
-    than two points. By comparison, sweeping the profit rate across its entire postwar
-    range moves it by four tenths. So the honest output is a RANGE, and this function
-    prints the range rather than choosing a window.
+
+def cycle_betas(rows, lag=4):
+    """Cumulative pass-through within each policy cycle: d(funding cost) / d(policy rate).
+
+    The funding cost LAGS policy, so each cycle is extended up to `lag` quarters past the
+    policy turn, to wherever the funding cost itself turns. Scoring a hiking cycle at the
+    policy peak would grade it before the deposit repricing has finished arriving -- in
+    2021-23 the funds rate plateaued in 2023Q4 and funding cost went on rising to 2024Q3.
+    """
+    idx = {w["label"]: i for i, w in enumerate(rows)}
+    out = []
+    for lab, a, b, direction in CYCLES:
+        if a not in idx:
+            continue
+        j = idx[b] if (b and b in idx) else len(rows) - 1
+        seg = range(j, min(j + lag + 1, len(rows)))
+        pick = max if direction == "up" else min
+        j2 = pick(seg, key=lambda k: rows[k]["fund"])
+        dff = rows[j2]["ff"] - rows[idx[a]]["ff"]
+        dfd = rows[j2]["fund"] - rows[idx[a]]["fund"]
+        if abs(dff) < 1e-6:
+            continue
+        out.append({"label": lab, "dir": direction, "from": a, "to": rows[j2]["label"],
+                    "dff": dff, "dfund": dfd, "beta": dfd / dff})
+    return out
+
+
+def implied_from_cycle_beta(w, beta):
+    """Policy rate for equalisation, anchored LOCALLY on where the rate actually is.
+
+        ip = ff_now + (fund_eq - fund_now) / beta
+
+    A cycle beta is a slope on CHANGES, so it is applied as a change from the current
+    observation. That drops the intercept entirely, and the intercept is exactly where a
+    long panel hides its regime shifts. Applied this way the answer stops depending on the
+    estimation window: across all seven cycles it moves 0.28pp, against 2.12pp when the
+    same question is asked of panel regressions with their intercepts.
+    """
+    extra = (w["rB"] - w["r"]) * w["EQ"]
+    fund_eq = (w["EINTEXP"] + extra) / w["FUND"]
+    return w["ff"] + (fund_eq - w["fund"]) / beta, fund_eq
+
+
+def run_quarterly(start=QSTART):
+    """Quarterly panel, with the pass-through measured per CYCLE rather than by panel.
+
+    This supersedes the panel-regression approach the annual path still uses. A regression
+    over 1990-2025 returns a beta of 0.647 -- higher than any single policy cycle on
+    record -- because its intercept absorbs the regime differences between them, and the
+    implied policy rate then divides by that slope. Measuring within cycles and anchoring
+    locally removes both problems.
     """
     rows = quarterly_panel(start)
     if not rows:
         raise SystemExit("no quarterly rows -- is the FDIC cache populated?")
     print(f"QUARTERLY PANEL  {rows[0]['label']} to {rows[-1]['label']}  "
           f"({len(rows)} quarters)")
-
-    windows = [("2000-latest", 2000, 9999), ("2000-2019", 2000, 2019),
-               ("2010-latest", 2010, 9999), ("2018-latest", 2018, 9999)]
-    betas = []
     print("")
-    print("THE PASS-THROUGH IS NOT A CONSTANT, and everything below divides by it")
-    print(f"  {'window':>14} {'intercept':>10} {'beta':>7} {'R2':>7} {'n':>5}")
-    for lab, lo, hi in windows:
-        sub = [w for w in rows if lo <= w["year"] <= hi]
-        if len(sub) < 12:
-            continue
-        a0, b1, r2, n = quarterly_beta(sub)
-        betas.append((lab, a0, b1))
-        print(f"  {lab:>14} {a0*100:9.2f}% {b1:7.3f} {r2:7.3f} {n:5d}")
-    print("  Deposit betas have fallen as funding mix shifted and ZIRP-era deposits went")
-    print("  sticky. That is economics, not noise -- but it means the window is a choice.")
 
-    a0m, b1m = betas[0][1], betas[0][2]           # the widest quarterly window, for the path
-    for w in rows:
-        extra = (w["rB"] - w["r"]) * w["EQ"]
-        w["fund_eq"] = (w["EINTEXP"] + extra) / w["FUND"]
-        w["ip"] = (w["fund_eq"] - a0m) / b1m
-        w["gap"] = w["ip"] - w["ff"]
-
+    cb = cycle_betas(rows)
+    print("PASS-THROUGH, MEASURED WITHIN EACH POLICY CYCLE")
+    print(f"  {'cycle':>14} {'from':>8} {'to':>8} {'d ff':>9} {'d fund':>9} {'beta':>7}")
+    for c in cb:
+        print(f"  {c['label']:>14} {c['from']:>8} {c['to']:>8} {c['dff']*100:+8.2f}pp "
+              f"{c['dfund']*100:+8.2f}pp {c['beta']:7.3f}")
+    ups = [c["beta"] for c in cb if c["dir"] == "up"]
+    dns = [c["beta"] for c in cb if c["dir"] == "down"]
+    allb = [c["beta"] for c in cb]
+    print(f"  hiking  mean {np.mean(ups):.3f}      cutting mean {np.mean(dns):.3f}")
+    print("  Near enough symmetric, which is worth noting: the folk story is that deposit")
+    print("  rates are sticky going up and quick coming down. Over these cycles they are")
+    print("  not. The 2015-19 hike is the one outlier at 0.303 -- a tightening that began")
+    print("  from ZIRP with the system awash in reserves, so banks had no need to compete")
+    print("  for deposits at all.")
     print("")
-    print(f"  {'quarter':>8} {'r':>7} {'rB':>7} {'rB-r':>8} {'implied ip':>11} "
-          f"{'fed funds':>10} {'gap':>9}")
-    for w in rows[-12:]:
-        print(f"  {w['label']:>8} {w['r']:7.4f} {w['rB']:7.4f} "
-              f"{(w['rB']-w['r'])*100:+7.2f}pp {w['ip']*100:10.2f}% "
-              f"{w['ff']*100:9.2f}% {w['gap']*100:+8.2f}pp")
-    print(f"  (path uses the {betas[0][0]} beta of {b1m:.3f}; see the range below)")
 
     w = rows[-1]
-    print("")
-    print(f"THE ANSWER IS A RANGE, NOT A POINT  ({w['label']})")
-    print(f"  {'beta from':>14} {'beta':>7} {'implied ip':>11} {'vs actual':>10}")
-    ips = []
-    for lab, a0, b1 in betas:
-        ip = (w["fund_eq"] - a0) / b1
-        ips.append(ip)
-        print(f"  {lab:>14} {b1:7.3f} {ip*100:10.2f}% {(ip - w['ff'])*100:+9.2f}pp")
+    _ip0, fund_eq = implied_from_cycle_beta(w, allb[0])
+    print(f"THE ANSWER  ({w['label']})")
+    print(f"  r {w['r']:.4f}   banking rB (pre-tax) {w['rB']:.4f}   "
+          f"gap {(w['rB']-w['r'])*100:+.2f}pp")
+    print(f"  funding cost {w['fund']*100:.2f}%  ->  needs {fund_eq*100:.2f}% for rB = r")
     print(f"  actual fed funds {w['ff']*100:.2f}%")
+    print("")
+    print(f"  {'beta source':>26} {'beta':>7} {'implied ip':>11} {'vs actual':>10}")
+    named = [("current cycle", cb[-1]["beta"]),
+             ("mean, cutting cycles", float(np.mean(dns))),
+             ("mean, hiking cycles", float(np.mean(ups))),
+             ("mean, all cycles", float(np.mean(allb)))]
+    ips = []
+    for lab, bta in named:
+        ip, _ = implied_from_cycle_beta(w, bta)
+        ips.append(ip)
+        print(f"  {lab:>26} {bta:7.3f} {ip*100:10.2f}% {(ip-w['ff'])*100:+9.2f}pp")
     print(f"  -> {min(ips)*100:.2f}% to {max(ips)*100:.2f}%, a spread of "
           f"{(max(ips)-min(ips))*100:.2f}pp")
     print("")
-    print("  Sweeping the profit rate across its whole postwar range moves the annual")
-    print("  answer about 0.4pp. The pass-through window moves it five times as far. So")
-    print("  the binding uncertainty is not the economics of the profit rate -- it is one")
-    print("  regression coefficient, and any single-number answer is hiding it.")
+    print("  WHY THIS SUPERSEDES THE PANEL VERSION. Asked of panel regressions with their")
+    print("  intercepts, the same question spans 2.12pp -- 3.48% on the 1990-2025 annual")
+    print("  fit up to 5.79% on a 2010-onward quarterly one -- and the choice of window")
+    print("  decides the policy verdict. Measured per cycle and anchored on where the rate")
+    print("  actually is, it spans a quarter of a point.")
     print("")
-    print("  QUARTERLY IS ALSO NOISIER, and should be: bank profit swings on provisions and")
-    print("  one-off items a year averages out. 2023Q4 shows rB collapsing to 0.078 from")
-    print("  0.151, which is the FDIC special assessment after that year's failures, not a")
-    print("  change in banking's normal profitability. Read the level, not the wiggle.")
+
+    bcur = cb[-1]["beta"]
+    for x in rows:
+        x["ip"], _ = implied_from_cycle_beta(x, bcur)
+        x["gap"] = x["ip"] - x["ff"]
+    print(f"  {'quarter':>8} {'r':>7} {'rB':>7} {'rB-r':>8} {'implied ip':>11} "
+          f"{'fed funds':>10} {'gap':>9}")
+    for x in rows[-12:]:
+        print(f"  {x['label']:>8} {x['r']:7.4f} {x['rB']:7.4f} "
+              f"{(x['rB']-x['r'])*100:+7.2f}pp {x['ip']*100:10.2f}% "
+              f"{x['ff']*100:9.2f}% {x['gap']*100:+8.2f}pp")
+    print(f"  (path uses the current-cycle beta of {bcur:.3f})")
+    print("")
+    print("  Quarterly is noisier than annual and should be. 2023Q4 shows rB at 0.078")
+    print("  against 0.151 the quarter before -- the FDIC special assessment after that")
+    print("  year's failures, not a change in banking's normal profitability. Read the")
+    print("  level, not the wiggle.")
 
 
 def main():

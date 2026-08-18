@@ -251,3 +251,123 @@ def main():
 
 if __name__ == "__main__":
     main()
+
+
+# ---------------------------------------------------------------------------- quarterly
+#: Per-bank fields needed for the equalisation calculation at quarterly frequency.
+QFIELDS = ["CERT", "ASSET", "EQ", "LNLSNET", "DEP",
+           "NETINC", "ITAX", "INTINC", "EINTEXP", "NONIX", "NONII"]
+
+#: Call-report INCOME STATEMENT items are YEAR-TO-DATE within each calendar year, so the
+#: Q2 figure is the first half, Q3 the first three quarters, and Q4 the full year. Taking
+#: them at face value would treat Q4 as a quarter and overstate it fourfold. Verified on
+#: one bank in 2024: NETINC ran 11,714 -> 28,392 -> 40,057 -> 52,502 and EINTEXP
+#: 18,361 -> 37,247 -> 56,800 -> 74,797, both monotone. Over the same quarters ASSET went
+#: 3,503,360 -> 3,510,536 -> 3,584,105 -> 3,459,261, which is not monotone -- balance sheet
+#: items are point-in-time levels and must NOT be differenced.
+FLOW_FIELDS = {"NETINC", "ITAX", "INTINC", "EINTEXP", "NONIX", "NONII"}
+
+QAPI = "https://api.fdic.gov/banks/financials"
+Q_START = 1984            # EQ is not reported in these aggregates much before this
+
+
+def _repdtes(start=Q_START, end=None):
+    import datetime                                              # noqa: PLC0415
+    end = end or datetime.date.today().year
+    return [f"{y}{md}" for y in range(start, end + 1)
+            for md in ("0331", "0630", "0930", "1231")]
+
+
+def _quarter_totals(repdte):
+    """National totals for one report date, summed over every bank that filed.
+
+    PAGINATED, and that is not optional. The API caps `limit` at 10,000 rows, and the US
+    had well over 15,000 insured banks into the early 1990s -- so a single unpaginated
+    request would silently return the first 10,000 and the totals would be quietly wrong
+    for exactly the early sample this is meant to cover. The loop below keeps asking until
+    it has as many rows as `meta.total` says exist, and refuses to cache a short read.
+
+    Only the SUMMED dict is cached, not the 4,600-odd rows behind it: the raw payload is
+    about 800KB a quarter and there is no reason to keep 130MB of it on disk.
+    """
+    path = CACHE / f"fdic_q_{repdte}.json"
+    if path.exists() and path.stat().st_size:
+        cached = json.loads(path.read_text())
+        # Never serve a quarter with no banks and no balance sheet in it. An earlier
+        # version wrote exactly that: the API answers a bad request with a 400 whose BODY
+        # is valid JSON, so `json.loads` succeeded, `data` was empty, and a file saying
+        # "0 banks" was cached and then returned instantly forever after.
+        if cached.get("banks") and cached.get("ASSET"):
+            return cached
+        path.unlink(missing_ok=True)
+    tot = {"REPDTE": repdte, "banks": 0}
+    offset, expected = 0, None
+    raw = CACHE / f"_raw_{repdte}.json"
+    while True:
+        url = (f"{QAPI}?filters=REPDTE:{repdte}&fields={','.join(QFIELDS)}"
+               f"&limit=10000&offset={offset}&format=json")
+        for _ in range(3):
+            r = subprocess.run(["curl", "-sSL", "--max-time", "180", url, "-o", str(raw)],
+                               capture_output=True)
+            if r.returncode == 0 and raw.exists() and raw.stat().st_size:
+                break
+        else:
+            raise RuntimeError(f"could not fetch FDIC financials for {repdte}")
+        try:
+            d = json.loads(raw.read_text())
+        except json.JSONDecodeError:
+            raw.unlink(missing_ok=True)
+            raise RuntimeError(f"FDIC returned non-JSON for {repdte}")
+        rows = d.get("data", [])
+        if expected is None:
+            expected = int(d.get("meta", {}).get("total", 0))
+        for row in rows:
+            x = row["data"]
+            tot["banks"] += 1
+            for f in QFIELDS[1:]:
+                v = x.get(f)
+                if v is not None:
+                    tot[f] = tot.get(f, 0.0) + float(v)
+        offset += len(rows)
+        if not rows or offset >= expected:
+            break
+    raw.unlink(missing_ok=True)
+    if expected and tot["banks"] != expected:
+        raise RuntimeError(
+            f"{repdte}: summed {tot['banks']} banks but the API reports {expected}. "
+            f"Refusing to cache a short read.")
+    path.write_text(json.dumps(tot))
+    return tot
+
+
+def quarterly(start=Q_START, end=None, verbose=False):
+    """{REPDTE: totals} with the income-statement items turned into ANNUALISED quarterly
+    flows, and the balance-sheet items left as the levels they are.
+
+    Q1 of a year is its own year-to-date figure; every later quarter is the difference
+    from the one before. Each is then multiplied by four so a flow sits on the same
+    annual footing as the profit rate it is compared with.
+    """
+    out = {}
+    for rd in _repdtes(start, end):
+        try:
+            t = _quarter_totals(rd)
+        except RuntimeError:
+            continue
+        if not t.get("ASSET"):
+            continue
+        out[rd] = t
+        if verbose:
+            print(f"    {rd}  {t['banks']:>5} banks  assets ${t['ASSET']/1e6:>9,.0f}bn")
+    for rd in sorted(out):
+        year, q = rd[:4], rd[4:]
+        prev = {"0630": "0331", "0930": "0630", "1231": "0930"}.get(q)
+        base = out.get(f"{year}{prev}") if prev else None
+        for f in FLOW_FIELDS:
+            ytd = out[rd].get(f)
+            if ytd is None:
+                continue
+            flow = ytd - (base.get(f"{f}_ytd", base.get(f, 0.0)) if base else 0.0)
+            out[rd][f"{f}_ytd"] = ytd
+            out[rd][f] = flow * 4.0          # annualise
+    return out

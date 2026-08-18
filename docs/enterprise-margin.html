@@ -130,9 +130,9 @@ footer{border-top:1px solid var(--rule);padding-top:1.2rem;font-family:var(--mon
     drives accumulation is the profit rate net of interest — what happened when eighty
     years of US national accounts were allowed to answer back, and what was salvaged by
     going to a different part of the same book.</p>
-  <p class="byline"><span>Four Godley tables</span><span>Three parts, two of them negative results</span><span>Households · Firms · Government · Banks</span><span>Net worths close to 1.8e-13</span><span>US data, 1934–2026</span><span>NIPA · Z.1 · FDIC · FRED</span></p>
+  <p class="byline"><span>Four Godley tables</span><span>Four parts · nineteen results</span><span>Households · Firms · Government · Banks</span><span>Net worths close to 1.8e-13</span><span>US data, 1934–2026</span><span>NIPA · Z.1 · FDIC · FRED · CBO</span></p>
   <div class="revised"><span class="tag">read first</span>
-    <p>This page is in two parts, and the first one fails. <strong>Part one</strong>
+    <p>This page is in four parts, and the first one fails. <strong>Part one</strong>
       (Results 1–6) builds a model of Shaikh's enterprise-margin mechanism, and
       <a href="#data">Result 7</a> confronts it with the national accounts, where it does
       not survive: the headline elasticity <span class="m">dg/dm = 0.95</span> was measured
@@ -148,7 +148,15 @@ footer{border-top:1px solid var(--rule);padding-top:1.2rem;font-family:var(--mon
       question — what should the policy rate be today — and answers it in the negative. Four
       constructions, each of which turns out to describe rather than prescribe, and a band
       so wide it has never once bound. What does bind is fiscal, and it binds 77% of the
-      time.</p></div>
+      time.</p>
+    <p><strong>Part four</strong> (<a href="#snider">Results 15–19</a>) turns the whole
+      thing around and asks whether the Fed sets the rate at all. The term structure is run
+      backwards, which fails and says why; the curve is split into its real and inflation
+      legs, which repairs the model and refutes its anchor; the equalisation condition is
+      rebuilt as a rule that <em>is</em> well behaved and still lands outside the band; and
+      the fiscal-dominance reading is tested and comes out a collision rather than a
+      capitulation. It ends on CBO's projections, where the ceiling turns out not to
+      tighten.</p></div>
 </header>
 
 <section>
@@ -1203,6 +1211,443 @@ i_max = (g0 + s/b) / (1 - phi*b*theta)   <span class="c">the fixed point</span><
     where the error was, three times over.</p>
 </section>
 
+<section id="snider">
+  <h2>Result 15 · Running the term structure backwards</h2>
+
+  <p>Everything to here treats the policy rate as an input. Jeff Snider's argument is that
+    it is an output: the FOMC ratifies what the front end has already done, and the
+    instrument that matters is the 10-year, off which corporate debt is priced as a
+    spread. If that is right the funds rate is a <em>redundant statistic</em>, and the
+    fitted recursion, being an ODE in maturity, should invert to recover it.</p>
+
+  <div class="eq">forward   i(m) = i* + (i_0 - i*) e^(-beta*m)
+backward  i_0  = i* + (i(m) - i*) e^(+beta*m)</div>
+
+  <p>The exercise is self-diagnosing, because one exponential does both jobs and it cannot
+    be kind to both readings. A small <span class="m">e^(-beta*m)</span> means the policy
+    rate barely reaches the long end — Snider is right about transmission — but then the
+    long end carries no information about it and inverting amplifies every error. A large
+    one makes the inversion well conditioned and kills the premise. You do not get to hold
+    both.</p>
+
+  <div class="scroll"><table>
+    <thead><tr><th>ladder</th><th>beta</th><th>i*</th><th>policy weight in 10y</th>
+      <th>error amplifier</th></tr></thead>
+    <tbody>
+      <tr><td class="lbl">8 rungs 1–30</td><td>0.1373</td><td>5.90%</td><td>25.3%</td><td>3.95×</td></tr>
+      <tr class="mark"><td class="lbl">6 rungs 1–30</td><td>0.1805</td><td>6.08%</td><td>16.4%</td><td>6.08×</td></tr>
+      <tr><td class="lbl">5 rungs 1–10</td><td>0.1900</td><td>6.19%</td><td>15.0%</td><td>6.69×</td></tr>
+      <tr><td class="lbl">sparse 1,5,10</td><td>0.2065</td><td>5.69%</td><td>12.7%</td><td>7.89×</td></tr>
+    </tbody>
+    <caption>The 50 bp spread in i* across ladders alone moves the implied policy rate by
+      2.56 pp, against a funds rate whose own standard deviation is 3.53 pp.</caption>
+  </table></div>
+
+  <h3>The weak claim survives, and needs none of this</h3>
+
+  <p>Cross-correlating monthly changes, 1976–2026, takes no model at all. Summed
+    correlation is <strong>+0.50 with the 2-year leading</strong> the funds rate and
+    <strong>−0.04 with the funds rate leading</strong>. The peak against the 10-year is at
+    +1 month. On the sequencing question Snider is simply right, and it did not require a
+    term structure to show it.</p>
+
+  <h3>And the inversion fails in the most instructive way available</h3>
+
+  <p>Run on monthly GS10 it correlates <strong>+0.921</strong> with the actual funds rate
+    and has a skill score of <strong>−16.2</strong>: worse than quoting the sample mean. It
+    implies a negative policy rate in half of all months and 33.6% in the 1980s. It tracks
+    the shape and misses the level by 16 pp, which is exactly what an ill-conditioned
+    inversion does — and it is why correlation was the wrong thing to look at.</p>
+
+  <div class="pull">The better the reverse-engineering works, the more it proves the Fed is
+    redundant. The worse it works, the more independent information the policy rate carries.
+    Either way the exercise answers.</div>
+
+  <h3>The test whose two sides came from different data</h3>
+
+  <p>Beta has been fitted from the <em>shape</em> of the average curve. The model makes a
+    second prediction it never saw: holding i* fixed,
+    <span class="m">dGS_m/d(funds) = e^(-beta*m)</span>, so regressing monthly changes in
+    each yield on the funds rate should trace the same exponential — and the intercept is
+    pinned at 1, because the policy rate <em>is</em> the m = 0 point of the curve.</p>
+
+  <div class="scroll"><table>
+    <thead><tr><th>maturity</th><th>1y</th><th>3y</th><th>7y</th><th>10y</th><th>20y</th><th>30y</th></tr></thead>
+    <tbody>
+      <tr><td class="lbl">measured pass-through</td><td>0.533</td><td>0.351</td><td>0.221</td>
+        <td>0.180</td><td>0.143</td><td class="neg">0.148</td></tr>
+      <tr><td class="lbl">model, <span class="m">e^(-0.18m)</span></td><td>0.835</td><td>0.582</td><td>0.283</td>
+        <td>0.165</td><td>0.027</td><td class="neg">0.004</td></tr>
+    </tbody>
+    <caption>Standard errors run 0.016–0.025, so the 30-year reading is seven standard
+      errors from the model's 0.004.</caption>
+  </table></div>
+
+  <p>The decay is wrong by a factor of four (0.040 fitted against 0.181) and the level is
+    wrong by a factor of three (0.366 where the model requires 1.000). Fitting a level term
+    the ladder has no room for — a component moving every yield by the same amount out to
+    thirty years — cuts the error from <strong>804 bp to 60 bp</strong>, at
+    <span class="m">L = 0.148, S = 0.506</span>. So the recursion is refuted as a theory of
+    <em>propagation</em> while surviving as one of average <em>shape</em>. Those were never
+    the same claim, and fitting the curve well never licensed the dynamic one.</p>
+
+  <h3>The anchor moved, and not with the profit rate</h3>
+
+  <p>Rolling ten-year windows, with identification checked by profiling i* rather than
+    trusting the argmin — a nearly straight curve pins only <span class="m">beta·i*</span>
+    and the solver will still return 27.8% with a tidy-looking fit. 14 of 48 windows fail
+    and are dropped rather than averaged in. On the rest, i* fell 10.7% → 2.8% while the
+    profit rate rose: <strong>corr(i*, r) = −0.871</strong>.</p>
+
+  <div class="revised"><span class="tag">and worse</span>
+    <p>In the period the whole argument is about, the method mostly cannot run.
+      <strong>13 of the 15 windows starting 2002 or later fail to identify i* at all.</strong>
+      The curve flattens, the curvature the estimator lives on is gone. Whatever ZIRP and QE
+      did to transmission, they removed the information this method needs.</p></div>
+</section>
+
+<section id="deflate">
+  <h2>Result 16 · Deflating the curve, and what the level factor was</h2>
+
+  <p>A component flat across maturity is what an inflation expectation looks like. So take
+    it out before fitting. Cleveland Fed <span class="m">EXPINF{1,2,3,5,7,10,20,30}YR</span>
+    gives a <em>matched</em> expectation at every rung back to 1982, which TIPS cannot do —
+    they start in 2003.</p>
+
+  <p>One intuition does not survive the first table. Inflation compounds, so its share of
+    the yield ought to grow with maturity and growth expectations ought to dominate the
+    front end. But a Treasury yield is an <em>annualised</em> rate, not a total return: 4%
+    at two years and 4% at ten both mean 4% per year. Compounding changes what you end up
+    with, not the quoted rate.</p>
+
+  <div class="scroll"><table>
+    <thead><tr><th>maturity</th><th>nominal</th><th>exp. inflation</th><th>real</th>
+      <th>inflation share</th><th>sd of inflation leg</th></tr></thead>
+    <tbody>
+      <tr class="mark"><td class="lbl">1 year</td><td>3.64%</td><td>2.59%</td><td>1.05%</td>
+        <td>71.3%</td><td>1.14%</td></tr>
+      <tr><td class="lbl">10 years</td><td>4.82%</td><td>2.62%</td><td>2.20%</td>
+        <td>54.4%</td><td>1.05%</td></tr>
+      <tr class="mark"><td class="lbl">30 years</td><td>5.29%</td><td>2.71%</td><td>2.57%</td>
+        <td>51.4%</td><td>0.70%</td></tr>
+    </tbody>
+    <caption>454 months, 1982–2026. The share falls, and the last column says why:
+      expected inflation is the stable leg further out, because a long horizon averages over
+      the regime. Anchoring makes this term structure, not compounding.</caption>
+  </table></div>
+
+  <p>Of the 1.65 pp nominal slope from 1y to 30y, expected inflation contributes
+    <strong>+0.12 pp</strong> and the real leg <strong>+1.52 pp</strong>. The real leg is
+    the slope; inflation is the level. Which is exactly why removing it fixed a
+    <em>level</em> factor.</p>
+
+  <h3>The prediction holds</h3>
+
+  <div class="scroll"><table>
+    <thead><tr><th>pass-through</th><th>at 1 year</th><th>at 30 years</th><th>level factor L</th></tr></thead>
+    <tbody>
+      <tr><td class="lbl">nominal yields</td><td>0.533</td><td class="neg">0.148</td><td class="neg">0.148</td></tr>
+      <tr class="mark"><td class="lbl">real yields</td><td class="pos">0.830</td>
+        <td class="pos">0.019</td><td class="pos">0.065</td></tr>
+    </tbody>
+    <caption>The 30-year real reading has a standard error of 0.020 — indistinguishable
+      from zero.</caption>
+  </table></div>
+
+  <p>Hinged near 1 at the front, gone at the back: the shape the ladder requires and the
+    nominal data flatly refused to show. The recursion is a <strong>real-side
+    mechanism</strong>, which it always should have been, since Shaikh's equalisation is
+    about profit rates and those are real. Bolting it onto nominal yields forced an
+    inflation term through the m = 0 hinge, where it does not belong.</p>
+
+  <p>What deflating does <em>not</em> fix is the decay rate: 0.159 from the cross-section
+    against 0.567 from pass-through, still off by 3.6×. The level factor was inflation. The
+    rate mismatch is not, and survives.</p>
+
+  <h3>The anchor is still not rescued — and that is the margin again</h3>
+
+  <p>I expected deflating to rescue it. It does not: <span class="m">corr(i*, r)</span> is
+    −0.571 nominal and <strong>−0.606 real</strong>. The real asymptote fell 5.39% → 0.57%
+    while the profit rate <em>rose</em> 6.93% → 8.44%. Read the gap instead of the
+    correlation:</p>
+
+  <div class="pull"><span class="m">r − i*</span> went from 1.54 pp to 7.87 pp. The rate of
+    profit of enterprise roughly tripled as the real cost of finance collapsed under a
+    profit rate that did not.</div>
+
+  <p>That is the same widening Result 13 found from the other direction, where the policy
+    rate ran chronically below the equalising rate. Two independent measurements, one gap.
+    So what fails is Shaikh's <em>levelling</em> claim, not his accounting: the margin is
+    real and it is large, it simply never equalised.</p>
+
+  <div class="revised"><span class="tag">three caveats kept</span>
+    <p>The Cleveland series is <strong>model output, not a price</strong>, and its level
+      correlation with the market breakeven is only 0.38–0.61 over 23 years — they diverge
+      in 2008 and 2022, the episodes people actually argue about. Before 2003 there is no
+      market series to check against and the model leans on the nominal curve, which is a
+      circularity risk for everything fitted on top. And coverage is lopsided:
+      <strong>20 of 21 identified windows start before 2011</strong>, so the modern endpoint
+      rests on one window.</p></div>
+</section>
+
+<section id="rule">
+  <h2>Result 17 · A rule, rather than a description</h2>
+
+  <p>Result 15 settled that the funds rate cannot be <em>recovered</em> from the curve. A
+    policy rule is a different object: it does not need to reproduce history, it needs to be
+    well behaved and to land inside the band. Take the 10-year as market-given, require that
+    maturity transformation earn the general rate of profit, and read off the rate that
+    makes it so.</p>
+
+  <div class="eq">(i_10 - i_0 - c) / lam = r     ->     i_0 = i_10 - c - lam*r
+                                       <span class="c">lam*r = 41 bp</span></div>
+
+  <p>Three measured inputs, one market input, no free parameter — and, decisively,
+    <strong>no exponent</strong>. The catastrophe in Result 15 was
+    <span class="m">e^(+beta*m)</span> multiplying every uncertainty by six. Here the map
+    from the 10-year to the policy rate has a slope of exactly 1. The rule says the policy
+    rate should sit 41 bp below the 10-year, which is itself a strong prescription: the
+    curve should be nearly flat, and the observed 1y–30y slope is 165 bp.</p>
+
+  <h3>Why not the ladder</h3>
+
+  <p>The rung-by-rung version looks more faithful to Shaikh and is unusable. Iterated
+    backward it gives <span class="m">i_0 = r − (r − i_10)/(1−lam)^N</span>, and N is the
+    rung width Result 10 showed is not identified:</p>
+
+  <div class="scroll"><table>
+    <thead><tr><th>rung width</th><th>10 years</th><th>2 years</th><th>1 year</th>
+      <th>6 months</th><th>3 months</th></tr></thead>
+    <tbody><tr><td class="lbl">implied policy rate</td><td>4.41%</td><td>3.53%</td>
+      <td>2.15%</td><td class="neg">−1.95%</td><td class="neg">−20.22%</td></tr></tbody>
+    <caption>Same 10-year, same equalisation. Nothing in the data picks the column. The
+      whole-book form is not an approximation to this — it is the same condition with the
+      unmeasurable part integrated out, which is why it is the one worth testing.</caption>
+  </table></div>
+
+  <h3>Well behaved: yes, decisively</h3>
+
+  <div class="scroll"><table>
+    <thead><tr><th></th><th>mean</th><th>sd</th><th>min</th><th>sd of monthly change</th>
+      <th>months below zero</th></tr></thead>
+    <tbody>
+      <tr class="mark"><td class="lbl">the rule</td><td>5.16%</td><td>2.87%</td><td>0.21%</td>
+        <td class="pos">26.3 bp</td><td class="pos">0</td></tr>
+      <tr><td class="lbl">actual funds rate</td><td>4.60%</td><td>3.53%</td><td>0.05%</td>
+        <td>47.9 bp</td><td>0</td></tr>
+    </tbody>
+    <caption>865 months. It never goes negative and is smoother than the rate it would
+      replace. Doubling lam, raising r by a quarter, or charging the book 100 bp of cost all
+      move the answer by about a point — against the 2.6 pp band i* alone opened in
+      Result 15.</caption>
+  </table></div>
+
+  <p>Mean gap <strong>+0.56 pp above</strong> the actual rate, which is the same direction
+    Result 13 found from the equalising-rate side.</p>
+
+  <h3>Inside the band: less comfortably</h3>
+
+  <p>Scored quarter by quarter against a structural ceiling — a five-year trailing primary
+    balance, so recessions do not drag it — the rule sits inside <strong>65%</strong> of
+    quarters against <strong>76%</strong> for the rate the FOMC actually set. Every failure
+    is in one direction, too high and never below zero, clustered in 2023Q3–2024Q4. 27
+    quarters whose ceiling is <em>negative</em> are excluded rather than counted: no rule can
+    satisfy those, and scoring against them counts recessions.</p>
+
+  <div class="scroll"><table>
+    <thead><tr><th>edge, today</th><th>level</th><th>the rule says 4.19%</th></tr></thead>
+    <tbody>
+      <tr><td class="lbl">zero lower bound</td><td>0.00%</td><td class="pos">clears</td></tr>
+      <tr><td class="lbl">dual mandate (Taylor)</td><td>3.43%</td><td>+0.76 pp</td></tr>
+      <tr><td class="lbl">actual fed funds</td><td>3.64%</td><td>+0.55 pp</td></tr>
+      <tr class="mark"><td class="lbl">fiscal ceiling, φ = 0</td><td>2.13%</td>
+        <td class="neg">breaches by 2.06 pp</td></tr>
+      <tr class="mark"><td class="lbl">fiscal ceiling, φ = 0.81</td><td>3.87%</td>
+        <td class="neg">breaches by 0.32 pp</td></tr>
+      <tr><td class="lbl">fiscal ceiling, φ = 1.00</td><td>4.78%</td><td class="pos">clears</td></tr>
+      <tr><td class="lbl">Shaikh's ceiling</td><td>8.25%</td><td class="pos">clears</td></tr>
+    </tbody>
+    <caption>It lands on the one edge Result 14 called binding, from the outside, and fits
+      only if the interest-as-income feedback is real and near the top of its range.</caption>
+  </table></div>
+
+  <p>One thing that should be said plainly rather than buried. Iterating the ladder forward
+    gives <span class="m">i* = c/lam + r</span>, so equalisation says the real long rate
+    should asymptote at or above r = 8.25%. It averages 2.50%. <strong>The rule is
+    internally consistent; the curve it is applied to already violates the condition it is
+    built from</strong> — by 5.8 pp, which is the enterprise margin turning up a third
+    independent way.</p>
+</section>
+
+<section id="dominance">
+  <h2>Result 18 · Fiscal dominance, tested rather than asserted</h2>
+
+  <p>A profit-rate rule prescribing 4.19% against a ceiling of 2.13% reads like fiscal
+    dominance. But what has been shown is that a <em>constraint exists</em> and would be
+    violated. Dominance is a claim about <em>behaviour</em> — that the monetary authority
+    actually defers. Leeper's taxonomy makes it two questions, and both must answer the
+    same way.</p>
+
+  <div class="eq">                 |  FISCAL PASSIVE          |  FISCAL ACTIVE
+-----------------+--------------------------+----------------------
+MONETARY ACTIVE  |  Ricardian. No dominance |  COLLISION. Someone
+                 |  at any debt level.      |  has to give.
+-----------------+--------------------------+----------------------
+MONETARY PASSIVE |  Indeterminate           |  FISCAL DOMINANCE</div>
+
+  <h3>Fiscal is active — that half holds</h3>
+
+  <p>Bohn's test, primary surplus on lagged debt ratio with an unemployment control,
+    excluding 2020: <strong>ρ = −0.086, t = −5.8</strong>. The primary balance
+    <em>deteriorates</em> as the debt ratio rises. That is the non-Ricardian case, and the
+    opposite of Bohn's original finding for 1916–1995. The rolling windows show a regime
+    that <em>changed</em> rather than one that never existed — +0.12 to +0.13 through
+    1991–2011, negative after — which is exactly the shape the story needs.</p>
+
+  <h3>Monetary is not passive — and that is where it comes apart</h3>
+
+  <div class="scroll"><table>
+    <thead><tr><th>test</th><th>what dominance predicts</th><th>measured</th></tr></thead>
+    <tbody>
+      <tr><td class="lbl">policy rule, in changes</td><td class="lbl">negative loading on the debt</td>
+        <td class="neg">+0.032, t = +0.6</td></tr>
+      <tr><td class="lbl">real peak of hiking cycles</td><td class="lbl">falls as debt rises</td>
+        <td class="neg">2.60% at b = 0.96 vs 2.72% at b = 0.35</td></tr>
+      <tr><td class="lbl">Fed share of the debt</td><td class="lbl">rises — monetization</td>
+        <td class="neg">26.5% → 14.7% since 2021Q4</td></tr>
+    </tbody>
+    <caption>The levels version of the first row gives −0.062 with t = −3.5 and is reported
+      only to price the artefact: b trends up while the funds rate trends down. This repo has
+      walked into that trap twice already.</caption>
+  </table></div>
+
+  <p>Debt nearly tripled between the 2002–07 and 2020–24 cycles and the real peak did not
+    move. If the debt constrained the rate, 2022–23 is the cycle where it should have shown,
+    and instead it was the most aggressive tightening in forty years.</p>
+
+  <p>And the arithmetic is not currently unpleasant. <span class="m">i − g</span> is
+    <strong>−2.19 pp</strong>, with only 16 of the last 65 quarters above zero against 76%
+    over the full sample. The ceiling binds because the <em>primary balance</em> is deeply
+    negative, not because the rate exceeds growth — and a deficit is a choice in a way an
+    interest rate is not.</p>
+
+  <div class="pull">Active fiscal, active monetary: a collision, not dominance. The Fed is
+    running 3.64% against a φ = 0 ceiling of 2.13% — above the sustainability line, not
+    below it. That is resistance, not deference.</div>
+
+  <p>A collision resolves three ways — fiscal consolidates, the Fed capitulates, or the
+    price level does the adjusting — and <strong>φ decides between them</strong>. At φ = 0
+    the constraint is hard. Near φ = 0.81 the interest bill largely finances itself and the
+    collision is far softer. Result 14 established that nothing in this data identifies φ,
+    and that unidentified parameter now carries the entire question of whether dominance
+    arrives.</p>
+</section>
+
+<section id="outlook">
+  <h2>Result 19 · The outlook, and what does not tighten</h2>
+
+  <p>CBO's February 2026 projections supply every input the ceiling needs — debt ratio,
+    primary balance, nominal growth, effective rate on the debt — so
+    <span class="m">i_max = g + s/b</span> runs to 2056 with no free parameter, and CBO's own
+    projected rate can be scored against it. <span class="m">cbo.gov</span> answers this
+    environment with 403 for every request, browser included; the agency publishes the same
+    series as tidy CSV at <span class="m">github.com/US-CBO/cbo-data</span>.</p>
+
+  <div class="scroll"><table>
+    <thead><tr><th>year</th><th>debt/GDP</th><th>primary</th><th>net interest</th>
+      <th>nominal g</th><th>i − g</th><th>i_max</th></tr></thead>
+    <tbody>
+      <tr><td class="lbl">2026</td><td>100.6%</td><td>−2.55%</td><td>3.26%</td><td>5.11%</td>
+        <td class="pos">−1.67%</td><td>2.57%</td></tr>
+      <tr><td class="lbl">2035</td><td>118.0%</td><td>−2.08%</td><td>4.49%</td><td>3.78%</td>
+        <td class="neg">+0.23%</td><td>2.01%</td></tr>
+      <tr><td class="lbl">2045</td><td>141.8%</td><td>−2.02%</td><td>5.55%</td><td>3.68%</td>
+        <td class="neg">+0.46%</td><td>2.25%</td></tr>
+      <tr class="mark"><td class="lbl">2055</td><td>171.8%</td><td>−2.20%</td><td>6.79%</td>
+        <td>3.52%</td><td class="neg">+0.65%</td><td>2.24%</td></tr>
+    </tbody>
+    <caption>Current law, which assumes scheduled expiries happen on schedule — they
+      historically do not, so the revenue path is optimistic in a direction nobody
+      disputes.</caption>
+  </table></div>
+
+  <p>Two things in that table matter more than the debt number. The primary deficit does
+    <strong>not</strong> deteriorate: it sits near −2% throughout, so the entire debt path is
+    interest compounding on itself. And <span class="m">i − g</span> crosses back above zero
+    and stays there. The Sargent–Wallace arithmetic is idle now and is projected to stop
+    being idle.</p>
+
+  <h3>The ceiling does not tighten</h3>
+
+  <p>The natural expectation is that a bigger debt means a lower tolerable rate. The
+    constraint says otherwise, because b sits in the <em>denominator</em> of
+    <span class="m">s/b</span>: a primary deficit of fixed GDP share is diluted across a
+    growing stock. The debt ratio nearly doubles and the ceiling ends
+    <strong>0.31 pp lower</strong>, sitting in a narrow 1.9–2.3% channel for thirty years,
+    because falling nominal growth and the dilution almost exactly cancel.</p>
+
+  <div class="pull">"More debt, less room for the Fed" is not what this constraint says.
+    What tightens is not the ceiling. It is the distance the rate would have to fall to
+    reach it, and the cost of not falling.</div>
+
+  <h3>Where debt genuinely does change the answer</h3>
+
+  <div class="scroll"><table>
+    <thead><tr><th>year</th><th>b</th><th>b·θ</th><th>critical φ</th></tr></thead>
+    <tbody>
+      <tr class="mark"><td class="lbl">2026</td><td>1.006</td><td>0.565</td><td>1.77</td></tr>
+      <tr><td class="lbl">2035</td><td>1.180</td><td>0.663</td><td>1.51</td></tr>
+      <tr><td class="lbl">2045</td><td>1.418</td><td>0.797</td><td>1.26</td></tr>
+      <tr class="mark"><td class="lbl">2055</td><td>1.718</td><td>0.965</td><td>1.04</td></tr>
+    </tbody>
+    <caption>θ held at its latest reading, which is conservative in a knowable direction:
+      the Fed's share fell 26.5% → 14.7% since 2021Q4 and the foreign share 45.8% → 30.0%
+      since 2007, both raising θ and pushing the threshold further down.</caption>
+  </table></div>
+
+  <p>By the 2050s it takes a multiplier barely above one for the interest bill to finance
+    itself, where today it takes nearly two. That cuts <em>against</em> the fiscal-dominance
+    reading: the unidentified parameter carrying the whole question drifts toward the range
+    where the constraint dissolves. Quantitative tightening strengthens the very feedback
+    that loosens it.</p>
+
+  <h3>The standoff persists, and it is not our rule that causes it</h3>
+
+  <div class="scroll"><table>
+    <thead><tr><th>at 2036</th><th>level</th><th>vs the policy ceiling of 1.4–1.7%</th></tr></thead>
+    <tbody>
+      <tr><td class="lbl">CBO's own assumed funds rate</td><td>3.33%</td>
+        <td class="neg">breaches by ~1.6 pp</td></tr>
+      <tr class="mark"><td class="lbl">the profit-rate rule</td><td>3.98%</td>
+        <td class="neg">breaches by 2.3 pp</td></tr>
+      <tr><td class="lbl">CBO's projected 10-year</td><td>4.39%</td><td>—</td></tr>
+    </tbody>
+    <caption>Rule-versus-CBO is 0.6 pp. Both-versus-ceiling is three times that. Nothing in
+      the baseline closes it, because the baseline is current law and current law does not
+      close it.</caption>
+  </table></div>
+
+  <p>So, taking the projections at face value: the ceiling does not tighten, the conflict
+    does — through <span class="m">i − g</span> rather than through the ceiling — and the
+    self-financing threshold falls sharply. Expect the rate to keep being set by the mandate,
+    the debt ratio to keep rising, and the conflict to be settled by something other than the
+    rate: a primary balance that responds again (Bohn's coefficient was +0.13 as recently as
+    1996–2011, so this is a switch that has been thrown before), θ via the balance sheet, or
+    φ turning out to be real. <strong>The rate itself is the least powerful lever on that
+    list</strong>, which is the through-line of the whole exercise.</p>
+
+  <div class="revised"><span class="tag">correction</span>
+    <p><span class="m">fiscal.py</span>'s pass-through returns <strong>0.960</strong>, and
+      its docstring and console both called that "well below one, which IS the term
+      structure". It is not below one, and the term-structure story belongs to a different
+      number: contemporaneous pass-through in changes is <strong>0.142</strong>, long-run by
+      distributed lag is <strong>1.04–1.24</strong>. The levels estimate lands near the
+      long-run value, which is the right concept for a steady-state ceiling — so the number
+      was fine and the sentence was not. The projections above carry the 1.04–1.24 range
+      rather than a point, because a smaller pass-through means a <em>lower</em> policy
+      ceiling.</p></div>
+</section>
+
 <section>
   <h2>What building it surfaced</h2>
   <p>Ordered by how much damage each does silently. Every one was measured.</p>
@@ -1401,12 +1846,16 @@ i_max = (g0 + s/b) / (1 - phi*b*theta)   <span class="c">the fixed point</span><
   PART TWO  models/shaikh_rate.py · models/term_fit.py · models/shaikh_term_structure.py ·
   models/four_sector.py<br>
   PART THREE  models/equalise.py · models/fiscal.py<br>
-  DATA  models/data/fred.py · models/data/uscorp.py · models/data/usbank.py<br>
+  PART FOUR  models/invert.py · models/decompose.py · models/nim_rule.py ·
+  models/dominance.py · models/outlook.py<br>
+  DATA  models/data/fred.py · models/data/uscorp.py · models/data/usbank.py ·
+  models/data/cbo.py<br>
   BUILD  models/build.py · models/runner.py · .claude/skills/minsky/SKILL.md<br>
   docs/SHAIKH_MODEL.md · docs/BUILDING_A_BIG_MODEL.md · docs/MINSKY_HEADLESS.md<br><br>
   Built through the HTTP API. The four-sector model is 330 items and 334 wires across four
   Godley tables.<br>
-  Data: BEA NIPA table 1.14, Federal Reserve Z.1, FDIC call reports and FRED, 1934–2026.
+  Data: BEA NIPA table 1.14, Federal Reserve Z.1, FDIC call reports, FRED and the
+  Cleveland Fed, 1934–2026; CBO's February 2026 projections to 2056.
   Every series is fetched with its title and printed before use, so none is used
   unidentified.<br>
   Both test suites must print ALL PASS before anything here is committed.

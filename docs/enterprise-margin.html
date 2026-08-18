@@ -1088,6 +1088,73 @@ highest fed funds ever        0.1638   <span class="c">1981</span></div>
     binds in <strong>170 of 221 quarters — 77% of the time</strong>, against Shaikh's at
     zero.</p>
 
+  <h3>But growth is not independent of the rate</h3>
+  <div class="revised"><span class="tag">assumption, now a parameter</span>
+    <p>Everything above takes <span class="m">g</span> as exogenous. That is exactly what
+      the "interest payments are somebody's income" argument denies, and it was not flagged.
+      If the feedback is real, the ceiling above is <em>too low</em> and the constraint
+      overstated. It is now a parameter rather than an omission.</p></div>
+  <p>Not all of the bill is income to anyone here, and the split is measurable:</p>
+  <div class="scroll">
+  <table>
+    <thead><tr><th>who receives it</th><th>share</th><th>% of GDP</th><th></th></tr></thead>
+    <tbody>
+      <tr><td class="lbl">Federal Reserve</td><td>14.7%</td><td>0.57%</td><td class="lbl">remitted to the Treasury — a wash</td></tr>
+      <tr><td class="lbl">foreign holders</td><td>30.0%</td><td>1.17%</td><td class="lbl">leaves the country</td></tr>
+      <tr class="mark"><td class="lbl">domestic private</td><td>56.2%</td><td>2.20%</td><td class="lbl">the only part that is income here</td></tr>
+    </tbody>
+    <caption>The foreign leak is twice the size of the Fed one. Series seam: public minus
+      Fed minus private investors does not close exactly, about 0.9% of the stock, so these
+      shares are good to a point and no better.</caption>
+  </table>
+  </div>
+  <p>Write that into the ceiling and it stops being a level and becomes a fixed point:</p>
+  <div class="eq">g     = g0 + phi * i * b * theta        <span class="c">interest as income</span>
+i_max = (g0 + s/b) / (1 - phi*b*theta)   <span class="c">the fixed point</span></div>
+  <p>The denominator does the work. With <span class="m">b·theta = 0.555</span> it reaches
+    zero — the ceiling goes to infinity, interest paying for itself — at
+    <span class="m">phi = 1.80</span>. But the more useful threshold is the break-even:</p>
+  <div class="scroll">
+  <table>
+    <thead><tr><th>φ</th><th>amplifier</th><th>i_max (g₀=4.0%)</th><th>binding?</th></tr></thead>
+    <tbody>
+      <tr><td>0.00</td><td>1.00</td><td>2.13%</td><td class="neg">YES</td></tr>
+      <tr><td>0.50</td><td>1.38</td><td>2.95%</td><td class="neg">YES</td></tr>
+      <tr class="mark"><td><strong>0.81</strong></td><td>1.90</td><td><strong>3.88%</strong></td><td>break-even</td></tr>
+      <tr><td>1.00</td><td>2.25</td><td>4.78%</td><td class="pos">no</td></tr>
+      <tr><td>1.80</td><td>∞</td><td>—</td><td class="pos">dissolves</td></tr>
+    </tbody>
+    <caption>Against an effective rate actually paid of 3.88%.</caption>
+  </table>
+  </div>
+  <p class="pull">The whole fiscal question reduces to a multiplier on interest income —
+    which nothing here identifies.</p>
+  <p>Regressing growth on the interest bill is hopelessly confounded: both move with
+    inflation, the cycle and wars at once. So the honest output is the table, not a point on
+    it. What can be said is that φ ≈ 0.81 sits at the optimistic end of the
+    transfer-multiplier range without being absurd — and interest income accrues mostly to
+    wealthy holders and institutions with low propensity to spend, which argues the other
+    way.</p>
+
+  <h3>And the channel is at its strongest now</h3>
+  <div class="scroll">
+  <table>
+    <thead><tr><th>quarter</th><th>b</th><th>θ</th><th>b·θ</th><th>critical φ</th></tr></thead>
+    <tbody>
+      <tr><td class="lbl">1971Q1</td><td>0.26</td><td>69.6%</td><td>0.179</td><td>5.58</td></tr>
+      <tr><td class="lbl">2011Q1</td><td>0.63</td><td>39.7%</td><td>0.249</td><td>4.01</td></tr>
+      <tr class="mark"><td class="lbl">2025Q4</td><td>0.99</td><td>56.2%</td><td class="pos">0.555</td><td class="pos">1.80</td></tr>
+    </tbody>
+    <caption>The domestic share fell twenty points since 1971, but the debt ratio nearly
+      quadrupled and dominates.</caption>
+  </table>
+  </div>
+  <p>Which is the "high debt-to-GDP" qualifier doing real work rather than rhetorical work:
+    the same mechanism was weak when debt was a quarter of output and is strong at parity.
+    One implication runs against the usual framing — <strong>quantitative easing weakens
+    this channel</strong>, by moving debt out of private hands into the central bank, where
+    the interest is remitted. At the 2020 peak the Fed held 20.7%.</p>
+
   <h3>The band, finally narrowed</h3>
   <div class="scroll">
   <table>
@@ -1096,7 +1163,8 @@ highest fed funds ever        0.1638   <span class="c">1981</span></div>
       <tr><td class="lbl">zero lower bound</td><td>0%</td><td>6 of 47 years</td></tr>
       <tr><td class="lbl">dual mandate (Taylor)</td><td>3.43%</td><td>—</td></tr>
       <tr class="mark"><td class="lbl">actual fed funds</td><td>3.64%</td><td>—</td></tr>
-      <tr><td class="lbl">fiscal ceiling</td><td class="neg">1.6–5.7%</td><td class="neg">170 of 221 quarters</td></tr>
+      <tr><td class="lbl">fiscal ceiling, φ = 0</td><td class="neg">1.6–5.7%</td><td class="neg">170 of 221 quarters</td></tr>
+      <tr><td class="lbl">fiscal ceiling, φ = 0.81</td><td>≈ the current rate</td><td class="lbl">break-even</td></tr>
       <tr><td class="lbl">Shaikh's ceiling</td><td>~20%</td><td class="pos">0 of 47 years</td></tr>
     </tbody>
   </table>
@@ -1105,6 +1173,9 @@ highest fed funds ever        0.1638   <span class="c">1981</span></div>
     fiscal rather than anything about enterprise profitability. There is a live tension in
     it: the mandate says 3.43%, the rate is 3.64%, and on forward-looking growth the fiscal
     ceiling sits <em>below both</em>.</p>
+  <p>With the caveat that the fiscal row is now a function of φ as well as of growth, so
+    it is the softest edge on the table rather than the hardest — and still the only one
+    that binds at all.</p>
   <p>One caveat holds the whole thing together. <span class="m">s/b</span> is the
     <em>current</em> primary balance, so the ceiling moves when fiscal policy moves — a
     point of primary-balance improvement buys about a point of ceiling. The constraint is

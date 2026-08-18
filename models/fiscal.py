@@ -103,11 +103,23 @@ def smooth_growth(rows, window=GROWTH_WINDOW):
 
 
 def pass_through(rows, lag=0):
-    """d(effective rate on the debt) / d(policy rate), measured.
+    """d(effective rate on the debt) / d(policy rate), measured in LEVELS.
 
-    Well below one, and that IS the term structure: the stock reprices as it rolls, so a
-    policy move reaches the interest bill only gradually. This coefficient is what turns
-    a policy rate into an eventual interest bill.
+    WHAT THIS COEFFICIENT IS, AND WHAT IT IS NOT. It comes out near one (0.960), and an
+    earlier version of this docstring called it "well below one, and that IS the term
+    structure". That was wrong, and wrong in a way worth recording rather than quietly
+    deleting: it described the QUARTERLY response while the function returns the LONG-RUN
+    one. Both exist and they are far apart --
+
+        contemporaneous, in changes   0.14     the stock has barely rolled
+        long-run, distributed lag     1.04-1.24 over 4 to 40 quarters
+        levels regression (this)      0.96
+
+    -- and the term-structure story belongs to the first. A permanent policy move does
+    eventually reach nearly the whole coupon, because eventually the whole stock reprices.
+    The levels estimate lands near the long-run one, which is the right concept for a
+    STEADY-STATE sustainability ceiling, so the number was fine and the sentence was not.
+    See pass_through_dynamics() for the split.
     """
     x = np.array([r["ff"] for r in rows])
     y = np.array([r["i_eff"] for r in rows])
@@ -115,6 +127,25 @@ def pass_through(rows, lag=0):
     b, *_ = np.linalg.lstsq(A, y, rcond=None)
     r2 = 1 - ((y - A @ b) ** 2).sum() / ((y - y.mean()) ** 2).sum()
     return b[0], b[1], r2, len(x)
+
+
+
+def pass_through_dynamics(rows, maxlag=40):
+    """The quarterly and long-run pass-through, which are not the same number.
+
+    Kept separate from pass_through() so its return signature stays stable for callers.
+    """
+    x = np.array([r["ff"] for r in rows])
+    y = np.array([r["i_eff"] for r in rows])
+    dx, dy = np.diff(x), np.diff(y)
+    A = np.column_stack([np.ones(len(dx)), dx])
+    b, *_ = np.linalg.lstsq(A, dy, rcond=None)
+    out = {"contemporaneous": float(b[1]), "long_run": {}}
+    for L in (4, 8, 12, 20, 28, maxlag):
+        X = [np.ones(len(x) - L)] + [x[L - k:len(x) - k] for k in range(L + 1)]
+        c, *_ = np.linalg.lstsq(np.column_stack(X), y[L:], rcond=None)
+        out["long_run"][L] = float(c[1:].sum())
+    return out
 
 
 def holders():
@@ -211,8 +242,16 @@ def main():
     print("")
     print("PASS-THROUGH FROM THE POLICY RATE TO THE EFFECTIVE RATE ON THE DEBT")
     print(f"  i_eff = {a0*100:.2f}% + {b1:.3f} x ff      R2 {r2:.3f}, n = {n}")
-    print(f"  Well under one, which IS the term structure: the stock reprices as it rolls,")
-    print(f"  so a policy move reaches the interest bill only gradually.")
+    dyn = pass_through_dynamics(rows)
+    print(f"  NEAR one, because in the long run the whole stock reprices. The term-structure")
+    print(f"  story is the QUARTERLY response, which is a different number entirely:")
+    print(f"    contemporaneous (in changes)  {dyn['contemporaneous']:.3f}   the stock has barely rolled")
+    print(f"    long-run (distributed lag)    "
+          f"{min(dyn['long_run'].values()):.2f}-{max(dyn['long_run'].values()):.2f}   over 4 to 40 quarters")
+    print(f"    levels regression, used below {b1:.3f}   near the long-run value")
+    print(f"  The ceiling is a STEADY-STATE condition, so the long-run reading is the right")
+    print(f"  one to convert it with. An earlier gloss here called {b1:.3f} 'well under one',")
+    print(f"  which described the quarterly number while reporting the long-run one.")
     print("")
     i_max, ip_max = ceiling(w, b1)
     print("THE CEILING,  i_max = g + s/b")

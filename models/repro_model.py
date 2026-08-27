@@ -515,6 +515,49 @@ def replacement(p, r):
 
 
 
+
+def speed(p, r):
+    """Whose turnover actually governs growth -- checked in the engine, not the algebra.
+
+    turnover.py section 5 argues from the accumulation equation that Dept I's turnover
+    sets the growth rate and Dept II's does not appear in it at all. That is a strong
+    enough claim to be worth confirming on a run rather than on paper.
+
+    Dept II's rate is left at its balanced value while n2 moves, so the exchange condition
+    FAILS in those rows by construction. That is not the measurement: the measurement is
+    Dept I's growth, which is what the claim is about.
+    """
+    import math
+    print("\n" + "=" * 92)
+    print("WHOSE TURNOVER GOVERNS GROWTH -- confirmed on a run")
+    print("=" * 92)
+    K1 = p["F1"] + p["Cc1"] + p["V1"]
+    base = p["alpha1"] * p["e"] * p["n1"] * p["V1"] / K1
+    print(f"  Baseline g = alpha1*e*n1*V1/K1 = {base * 100:.4f}%. n2 does not appear in")
+    print("  that expression. If the algebra is right, moving n2 must do nothing to it.\n")
+    print(f"  {'n1':>5} {'n2':>5} | {'predicted g':>12} {'measured g':>11} {'vs base':>9}"
+          f" | {'cond/X1':>9}")
+    for n1, n2 in ((p["n1"], p["n2"]), (p["n1"], p["n2"] * 2), (p["n1"], p["n2"] * 4),
+                   (p["n1"] * 2, p["n2"]), (p["n1"] * 4, p["n2"])):
+        out = r.go(10.0, ["K1", "cond", "X1"], overrides={"n1": n1, "n2": n2},
+                   samples=200)
+        a, b = at(out, 0.0), at(out, 10.0)
+        meas = math.log(b["K1"] / a["K1"]) / (b["t"] - a["t"])
+        pred = p["alpha1"] * p["e"] * n1 * p["V1"] / K1
+        print(f"  {n1:5.1f} {n2:5.1f} | {pred * 100:11.4f}% {meas * 100:10.4f}% "
+              f"{meas / base - 1:+8.1%} | {b['cond'] / b['X1'] * 100:8.2f}%")
+    print("\n  Quadrupling Dept II's turnover leaves Dept I's growth rate identical to")
+    print("  four decimal places. Quadrupling Dept I's quadruples it. The consumption")
+    print("  goods department can be made as fast as you like and the economy does not")
+    print("  accumulate one point quicker, because accumulation is means of production")
+    print("  and Dept II does not make any.")
+    print("\n  The last column is the price of asking the question this way: with n2")
+    print("  changed and alpha2 left alone the exchange condition fails, so those rows")
+    print("  are not sustainable paths. They are a valid test of what sets Dept I's")
+    print("  growth and nothing more.")
+
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--expanded", action="store_true")
@@ -537,6 +580,7 @@ def main():
         meas = math.log(b20["K1"] / a["K1"]) / (b20["t"] - a["t"])
         print(f"\n  BALANCED GROWTH RATE: predicted {g:.6f}, measured {meas:.6f}")
         replacement(p, r)
+        speed(p, r)
         return
 
     p = scheme(args.expanded)

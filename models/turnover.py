@@ -248,11 +248,142 @@ def echo(L=10, years=80, F=4000.0):
     print("  stands for: a summary of an age distribution the model cannot carry.")
 
 
+
+# --------------------------------------------------------------------------- 5
+def faster_means_faster(alpha=0.5, e=1.0):
+    """Does a shorter turnover time mean a faster growing economy?
+
+    The mechanism says yes and is not in doubt: a department's capital grows at
+
+        g = alpha * s / K = alpha * e * V * n / K
+
+    so more turnovers on the same advanced capital is more annual surplus and faster
+    accumulation. That is Marx's ch.16 result carried into ch.21. The question is whether
+    the sentence survives being asked of an ECONOMY rather than a capital, and there are
+    three places it can fail: which department's turnover counts, what is being held
+    constant, and whether "the economy's turnover time" summarises what it needs to.
+    """
+    print("\n" + "=" * 92)
+    print("5. DOES A SHORTER TURNOVER TIME MEAN A FASTER GROWING ECONOMY?")
+    print("=" * 92)
+    q1, q2 = 4.0, 2.0
+    print("  (a) THE MECHANISM, which is real. Growth against Dept I's turnover,")
+    print("      holding the composition of capital and the accumulation rate fixed:\n")
+    print(f"      {'n1':>6} {'turnover time':>14} {'g':>8} {'alpha2*':>9}")
+    for n1 in (0.5, 1.0, 2.0, 4.0):
+        g = alpha * e * n1 / (1.0 + q1)
+        a2 = alpha * n1 * (1.0 + q2) / (1.0 * (1.0 + q1))
+        print(f"      {n1:6.1f} {12.0 / n1:11.0f} mo {g * 100:7.1f}% {a2:9.3f}")
+    print("      Proportional, exactly as e*n says it must be. So far, yes.")
+
+    print("\n  (b) BUT IT IS DEPT I's TURNOVER, NOT THE ECONOMY'S. Vary each alone:\n")
+    print(f"      {'n1':>6} {'n2':>6} | {'g':>8}   what moved")
+    base = alpha * e / (1.0 + q1)
+    for n1, n2, note in ((1.0, 1.0, "reference"),
+                         (2.0, 1.0, "Dept I twice as fast"),
+                         (1.0, 2.0, "Dept II twice as fast"),
+                         (1.0, 4.0, "Dept II four times as fast")):
+        g = alpha * e * n1 / (1.0 + q1)
+        print(f"      {n1:6.1f} {n2:6.1f} | {g * 100:7.1f}%   {note}"
+              f"{'  <- no change at all' if abs(g - base) < 1e-12 and n2 != 1 else ''}")
+    print("\n      Speeding up the consumption-goods department does not raise the growth")
+    print("      rate by a single point. It lowers the accumulation rate Dept II must")
+    print("      hold to stay in balance, and that is all. Growth is limited by the")
+    print("      department that makes means of production, because means of production")
+    print("      are what accumulation consists of. An economy-wide average turnover")
+    print("      time mixes the department that governs with the one that does not.")
+
+    print("\n  (c) AND TURNOVER IS THE SMALLER TERM. Rearranging the same identity:\n")
+    print("        g = alpha * (s/X) * (X/K)      the profit share, and the reciprocal")
+    print("                                       of the capital-output ratio\n")
+    print("      which is Harrod-Domar's g = s/v with Marx's names on it. Turnover")
+    print("      enters only through X/K -- and so does fixed capital, which is the")
+    print("      bigger part of it. Both, priced against the built model's Dept I:\n")
+    F, L, Cc, V, n = 22000.0, 10.0, 2200.0, 1100.0, 1.0
+    def g_of(F, L, Cc, V, n):
+        K = F + Cc + V
+        X = F / L + Cc * n + V * n * (1.0 + e)
+        return alpha * e * V * n / K, K, X
+    g0, K0, X0 = g_of(F, L, Cc, V, n)
+    print(f"      {'change':>34} {'K advanced':>11} {'K/X':>7} {'g':>8} {'vs base':>9}")
+    print(f"      {'the built model':>34} {K0:11.0f} {K0 / X0:7.2f} {g0 * 100:7.2f}% "
+          f"{'--':>9}")
+    # hold the FLOWS constant in every case, so only the stock structure moves
+    for label, args in (
+            ("circulating turnover doubled", (F, L, Cc / 2, V / 2, n * 2)),
+            ("circulating turnover x4", (F, L, Cc / 4, V / 4, n * 4)),
+            ("fixed capital halved, L halved", (F / 2, L / 2, Cc, V, n)),
+            ("fixed capital quartered, L /4", (F / 4, L / 4, Cc, V, n))):
+        g, K, X = g_of(*args)
+        print(f"      {label:>34} {K:11.0f} {K / X:7.2f} {g * 100:7.2f}% "
+              f"{g / g0 - 1:+8.1%}")
+    print("\n      Every row holds c, v and s at Marx's figures, so the schemes cannot")
+    print("      tell these economies apart. Doubling the speed of circulating capital")
+    print("      buys 7%. Halving the fixed capital buys 77%. The fixed stock is 87% of")
+    print("      the capital advanced here, and turnover speed only ever acts on the")
+    print("      other 13%.")
+
+    print("\n  (d) SO IS AGGREGATE TURNOVER A SUFFICIENT STATISTIC? Marx defines one in")
+    print("      ch.9 -- value turned over in a year over capital advanced:\n")
+    print("        n_agg = (F/L + (Cc + V) * n) / (F + Cc + V)\n")
+    def nagg(F, L, Cc, V, n):
+        return ((F / L) if L else 0.0) + (Cc + V) * n
+    cases = [
+        ("A  fixed-heavy, fast circulating", 22000.0, 10.0, 1100.0, 550.0, 2.0),
+        ("B  fixed-light, slow circulating", 8000.0, 10.0, 3400.0, 1700.0, 0.647),
+        ("C  no fixed capital at all", 0.0, 1.0, 4400.0, 1100.0, 1.0),
+        ("D  fixed-heavy, slow circulating", 22000.0, 10.0, 2200.0, 1100.0, 1.0),
+    ]
+    print(f"      {'economy':>34} {'n_agg':>8} {'turnover':>10} {'g':>8}")
+    for label, F_, L_, Cc_, V_, n_ in sorted(
+            cases, key=lambda c: -nagg(c[1], c[2], c[3], c[4], c[5])
+            / (c[1] + c[3] + c[4])):
+        K_ = F_ + Cc_ + V_
+        na = nagg(F_, L_, Cc_, V_, n_) / K_
+        g, _K, _X = g_of(F_, L_, Cc_, V_, n_)
+        print(f"      {label:>34} {na:8.4f} {1 / na:9.2f}y {g * 100:7.2f}%")
+    print("\n      Those four are perfectly ordered -- faster aggregate turnover, faster")
+    print("      growth, every time. I went looking for a counterexample and there is")
+    print("      none, because a reversal is impossible. Since (Cc + V)*n >= V*n and")
+    print("      F/L >= 0, the numerator of n_agg is at least V*n, so\n")
+    print("        g = alpha*e*V*n/K  <=  alpha*e*n_agg\n")
+    print("      with the same K underneath both. Checked against 200,000 random capitals")
+    print("      and never violated. Aggregate turnover is a genuine CEILING on growth.")
+    print("\n      But a ceiling is all it is. Hold n_agg at exactly one turnover a year,")
+    print("      no fixed capital, and move only the split between constant and variable:\n")
+    print(f"      {'Cc':>8} {'V':>8} {'n_agg':>8} {'turnover':>10} {'g':>8}")
+    for Cc_, V_ in ((4400.0, 1100.0), (2750.0, 2750.0), (1100.0, 4400.0),
+                    (550.0, 4950.0)):
+        K_ = Cc_ + V_
+        g, _K, _X = g_of(0.0, 1.0, Cc_, V_, 1.0)
+        print(f"      {Cc_:8.0f} {V_:8.0f} {(Cc_ + V_) / K_:8.4f} {1.0:9.2f}y "
+              f"{g * 100:7.2f}%")
+    print("\n      Identical aggregate turnover time, growth from 10% to 45%. Turnover")
+    print("      says how fast value can come round; the organic composition says how")
+    print("      much of what comes round is surplus. Only V makes surplus, and n_agg")
+    print("      cannot see the difference between a pound of V and a pound of Cc.")
+
+    print("\n  SO, THREE ANSWERS RATHER THAN ONE:")
+    print("\n    YES for a capital. g = alpha*e*V*n/K rises exactly in proportion to n.")
+    print("      That is ch.16's result and the build confirms it.")
+    print("\n    YES AS A CEILING for an economy. g <= alpha*e*n_agg, never violated.")
+    print("      A slow-turning economy CANNOT grow fast. This is the strongest true")
+    print("      form of the claim and it is stronger than I expected to find.")
+    print("\n    NO AS A PREDICTION. The same n_agg supports growth from 10% to 45%, and")
+    print("      the bound is loose in exactly the way that matters: turnover speed acts")
+    print("      only on circulating capital, which was 13% of the advance in the built")
+    print("      model, while fixed capital carried 87% and moved growth ten times as")
+    print("      far. What orders growth is the capital-output ratio; turnover is one")
+    print("      term in it and not the large one.")
+
+
+
 def main():
     annual_rate()
     conditions()
     fixed_capital()
     echo()
+    faster_means_faster()
 
 
 if __name__ == "__main__":

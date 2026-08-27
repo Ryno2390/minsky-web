@@ -288,7 +288,9 @@ def verdict(coef, rows, cap):
     print("  got there first. Profit among research-doing firms concentrated from")
     print(f"  {cap[0][0] * 100:.0f}% to {cap[1][0] * 100:.0f}% in the top ten while their "
           f"share of the research went")
-    print(f"  {cap[0][1] * 100:.0f}% to {cap[1][1] * 100:.0f}%. Capture outran effort.")
+    print(f"  {cap[0][1] * 100:.0f}% to {cap[1][1] * 100:.0f}%. Capture outran effort -- "
+          "but see concentration.py, which")
+    print("  finds that movement is five firms and only the LEVEL difference survives.")
     print("\n  So: consistent with the thesis, and the first evidence in this repo that")
     print("  discriminates between it and fishing-out at all. Not a demonstration.")
 

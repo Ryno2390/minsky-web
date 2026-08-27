@@ -99,6 +99,7 @@ def by3():
             continue
         out[(n3, y)] = {
             "vadd": a["vadd"], "pay": a["pay"], "cap": a["cap"], "emp": a["emp"],
+            "vship": a["vship"],
             "piship": a["pi"] / a["wsum"],
             "tfp5": a["tfp"] / a["wsum"],
             "dtfp5": (a["dtfp"] / a["dw"]) if a["dw"] > 0 else None,

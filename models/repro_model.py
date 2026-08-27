@@ -242,8 +242,8 @@ def at(out, t):
     return {k: v[i] for k, v in out.items() if isinstance(v, list)}
 
 
-def report(p, out):
-    a, b10 = at(out, 0.0), at(out, 10.0)
+def report(p, out, horizon=10.0):
+    a, b10 = at(out, 0.0), at(out, horizon)
     # at() returns the NEAREST sample, which is not t exactly -- the last one here lands
     # at 9.97. Label the columns with the times actually used, and divide by those, or
     # the measured growth rate comes out 0.0997 against a true 0.1 and looks like solver
@@ -331,11 +331,213 @@ def drift(p):
 
 
 
+
+# --------------------------------------------------------------------------- turnover
+def turnover_scheme():
+    """Marx's ch.21 year two, with constant capital split into fixed and circulating.
+
+    The FLOWS are kept at Marx's: c1 = 4400, v1 = 1100, c2 = 1600, v2 = 800. What is
+    added underneath them is the stock structure the schemes never write -- how much
+    capital had to be advanced to produce those flows, and how long it sits there.
+
+    The opening values are solved rather than chosen, because the fixed point has no
+    neighbourhood (reproduction.py section 6) and a rounded initial condition lands off
+    it. Two conditions, both from turnover.py section 2 generalised to three stocks:
+
+        g1 = g2                 alpha2 = alpha1 * n1 * V1 * K2 / (n2 * V2 * K1)
+        mp2 = wage1 + div1      F2 + Cc2 = V1 + K1 * (v1 + (1-alpha1)s1 - c2) / acc1
+
+    The second reduces to F2 + Cc2 = V1 + K1/11 at Marx's numbers, which is why the
+    values below are integers: L1 = L2 = 10 and n1 = n2 = 1 make it come out even.
+    """
+    e, a1 = 1.0, 0.5
+    L1 = L2 = 10.0
+    n1 = n2 = 1.0
+    V1, V2 = 1100.0, 800.0
+    # c1 = F1/L1 + Cc1*n1 = 4400 with Cc1 = 2200 -> F1 = 22000
+    Cc1, F1 = 2200.0, 22000.0
+    # c2 = F2/L2 + Cc2*n2 = 1600 with F2 + Cc2 = V1 + K1/11 = 3400 -> Cc2 = 1400
+    Cc2, F2 = 1400.0, 2000.0
+    K1, K2 = F1 + Cc1 + V1, F2 + Cc2 + V2
+    a2 = a1 * n1 * V1 * K2 / (n2 * V2 * K1)
+    return dict(F1=F1, Cc1=Cc1, V1=V1, F2=F2, Cc2=Cc2, V2=V2,
+                e=e, alpha1=a1, alpha2=a2, n1=n1, n2=n2, L1=L1, L2=L2,
+                rho1=1.0 / L1, rho2=1.0 / L2, name="TurnoverReproduction")
+
+
+def build_turnover(p):
+    api("/api/clear")
+    b = Builder()
+    for title, cols, rows, at in tables():
+        g = str(api("/api/item", {"kind": "godley", "name": title, "at": at})["index"])
+        api(f"/api/godley/{g}/resize", {"rows": 2 + len(rows), "cols": 1 + len(cols)})
+        for c, (nm, cls, ic) in enumerate(cols, start=1):
+            api(f"/api/godley/{g}/cell", {"row": 0, "col": c, "value": nm})
+            api(f"/api/godley/{g}/cell", {"row": 1, "col": c, "value": f"{q(ic):.17g}"})
+            api(f"/api/godley/{g}/class", {"col": c, "cls": cls})
+        for rix, (label, entries) in enumerate(rows, start=2):
+            api(f"/api/godley/{g}/cell", {"row": rix, "col": 0, "value": label})
+            for c, (nm, _cls, _ic) in enumerate(cols, start=1):
+                if nm in entries:
+                    api(f"/api/godley/{g}/cell",
+                        {"row": rix, "col": c, "value": entries[nm]})
+        t = api(f"/api/godley/{g}", method="GET")
+        bad = [i for i, v in enumerate(t["rowSums"]) if v not in (None, "0")]
+        if bad:
+            raise SystemExit(f"{title}: rows {bad} do not balance: {t['rowSums']}")
+    b.scan()
+    for nm in ("e", "alpha1", "alpha2", "n1", "n2", "L1", "L2", "rho1", "rho2"):
+        b.param(nm, float(p[nm]))
+
+    iF1 = b.stock("F1", p["F1"]); iC1 = b.stock("Cc1", p["Cc1"])
+    iV1 = b.stock("V1", p["V1"]); iF2 = b.stock("F2", p["F2"])
+    iC2 = b.stock("Cc2", p["Cc2"]); iV2 = b.stock("V2", p["V2"])
+
+    # constant capital consumed now has two parts with quite different tempos
+    b.eq("dep1", "F1 / L1")               # value transferred by fixed capital
+    b.eq("dep2", "F2 / L2")
+    b.eq("circ1", "Cc1 * n1")             # circulating, recovered every turnover
+    b.eq("circ2", "Cc2 * n2")
+    b.eq("c1", "dep1 + circ1")
+    b.eq("c2", "dep2 + circ2")
+    b.eq("v1", "V1 * n1")                 # ANNUAL wage bill = advance x turnovers
+    b.eq("v2", "V2 * n2")
+    b.eq("s1", "e * v1")                  # so the annual rate of surplus value is e*n
+    b.eq("s2", "e * v2")
+    b.eq("K1", "F1 + Cc1 + V1")           # capital ADVANCED, which the schemes omit
+    b.eq("K2", "F2 + Cc2 + V2")
+    b.eq("X1", "c1 + v1 + s1")
+    b.eq("X2", "c2 + v2 + s2")
+
+    b.eq("acc1", "alpha1 * s1")
+    b.eq("acc2", "alpha2 * s2")
+    b.eq("accF1", "acc1 * F1 / K1")       # net investment, split across the three stocks
+    b.eq("accC1", "acc1 * Cc1 / K1")
+    b.eq("accV1", "acc1 * V1 / K1")
+    b.eq("accF2", "acc2 * F2 / K2")
+    b.eq("accC2", "acc2 * Cc2 / K2")
+    b.eq("accV2", "acc2 * V2 / K2")
+
+    # REPLACEMENT IS NOT ACCUMULATION. rho*F is bought to keep the stock standing;
+    # F/L is the value it loses. They cancel only at rho = 1/L, and when they do not,
+    # the CAPITAL STOCK moves -- not just the money. That is why rho enters here and
+    # not only in the money flows.
+    b.eq("rep1", "rho1 * F1")
+    b.eq("rep2", "rho2 * F2")
+    b.eq("dF1", "accF1 + rep1 - dep1")
+    b.eq("dF2", "accF2 + rep2 - dep2")
+    for src, iop in (("dF1", iF1), ("accC1", iC1), ("accV1", iV1),
+                     ("dF2", iF2), ("accC2", iC2), ("accV2", iV2)):
+        b.wire(b.ref[src], iop, 1)
+
+    b.eq("wage1", "v1 + accV1")
+    b.eq("wage2", "v2 + accV2")
+    b.eq("div1", "s1 - acc1")
+    b.eq("div2", "s2 - acc2")
+    b.eq("wcons", "wage1 + wage2")
+    b.eq("ccons", "div1 + div2")
+    # Dept II's whole demand on Dept I: inputs used up, worn fixed capital replaced,
+    # and net additions to both.
+    b.eq("mp2", "circ2 + rep2 + accF2 + accC2")
+    b.eq("cond", "mp2 - wage1 - div1")
+    b.eq("Mtot", "MF1 + MF2 + MW + MC")
+    b.eq("Xtot", "X1 + X2")
+    b.plot("Capital advanced", ["K1", "K2"])
+    b.plot("Reproduction condition", ["cond"])
+    api("/api/layout")
+    api("/api/save", {"name": p["name"]})
+    return b
+
+
+def turnover_report(p):
+    print("=" * 92)
+    print("MARX IN MINSKY -- REPRODUCTION WITH TURNOVER AND FIXED CAPITAL")
+    print("=" * 92)
+    K1 = p["F1"] + p["Cc1"] + p["V1"]
+    K2 = p["F2"] + p["Cc2"] + p["V2"]
+    print(f"  {'':>10} {'F':>9} {'Cc':>8} {'V':>8} {'K advanced':>12} {'c':>8} "
+          f"{'v':>7} {'s':>7}")
+    for d, F, Cc, V, L, n in (("Dept I", p["F1"], p["Cc1"], p["V1"], p["L1"], p["n1"]),
+                              ("Dept II", p["F2"], p["Cc2"], p["V2"], p["L2"], p["n2"])):
+        c = F / L + Cc * n
+        print(f"  {d:>10} {F:9.0f} {Cc:8.0f} {V:8.0f} {F + Cc + V:12.0f} {c:8.0f} "
+              f"{V * n:7.0f} {p['e'] * V * n:7.0f}")
+    print(f"\n  The FLOWS are Marx's ch.21 year two exactly: c1 = 4400, v1 = 1100, "
+          "c2 = 1600, v2 = 800.")
+    print(f"  What is new is underneath them -- {K1:.0f} and {K2:.0f} of capital advanced,")
+    print("  against 5500 and 2400 when everything turned over annually and none of the")
+    print("  constant capital was fixed.")
+    print(f"\n  alpha1 = {p['alpha1']:.4f} chosen, alpha2 = {p['alpha2']:.6f} forced")
+    g = p["alpha1"] * p["e"] * p["n1"] * p["V1"] / K1
+    print(f"  balanced growth g = alpha1*e*n1*V1/K1 = {g:.6f} = {g * 100:.2f}% a year")
+    print(f"\n  That growth rate is the first real consequence. With no fixed capital the")
+    print(f"  same alpha1 gave 10.00%. Advancing {K1:.0f} instead of 5500 to produce the")
+    print(f"  same flows cuts it to {g * 100:.2f}%, because the surplus now has to expand a")
+    print("  capital four times the size. Fixed capital slows accumulation, and nothing")
+    print("  in c + v + s can show that.")
+    return g
+
+
+
+
+def replacement(p, r):
+    """rho off 1/L -- Marx ch.20 sec.11, the condition the schemes cannot state."""
+    print("\n" + "=" * 92)
+    print("REPLACEMENT OFF THE AGE DISTRIBUTION -- chapter 20, section 11")
+    print("=" * 92)
+    print(f"  rho is the rate at which Dept II's fixed capital is physically replaced.")
+    print(f"  Simple reproduction needs rho = 1/L = {1 / p['L2']:.3f}, which is a claim")
+    print("  about the AGE DISTRIBUTION of the stock, not about anyone's intentions --")
+    print("  see turnover.py section 4 for what that parameter is standing in for.\n")
+    print(f"  {'rho2':>7} {'vs 1/L':>8} | {'Firms I money t=20':>19} "
+          f"{'Dept II fixed capital':>22} | {'cond/X1':>9}")
+    base = 1.0 / p["L2"]
+    for rho in (base * 0.9, base * 0.95, base, base * 1.05, base * 1.1):
+        out = r.go(20.0, ["MF1", "F2", "cond", "X1"], overrides={"rho2": rho},
+                   samples=200)
+        a, b = at(out, 0.0), at(out, 20.0)
+        mark = "  <- balanced" if abs(rho - base) < 1e-12 else ""
+        print(f"  {rho:7.4f} {rho / base - 1:+7.1%} | {b['MF1']:19.1f} "
+              f"{a['F2']:9.0f} -> {b['F2']:8.0f} | {b['cond'] / b['X1'] * 100:8.2f}%"
+              f"{mark}")
+    print("\n  Under-replacing does two things at once, and only one is visible in the")
+    print("  money. Firms I loses the sale, so its cash falls -- the same drain as before,")
+    print("  a third of the opening balance gone in twenty years at ten points off.")
+    print("\n  The second is in the capital stock, and it is not what I first wrote down.")
+    print("  Dept II's fixed capital does NOT shrink: at rho = 0.09 it still grows 2000 ->")
+    print("  2581, because net accumulation outweighs the under-replacement. What it does")
+    print("  is grow SHORT -- 2581 against the balanced 3088, a sixth less capital after")
+    print("  twenty years, from a parameter five to ten points out. The economy is not")
+    print("  contracting, it is quietly compounding into a smaller one.")
+    print("\n  This is the condition the reproduction schemes are structurally unable to")
+    print("  state, because they write c as one number. Splitting it into F/L and Cc*n is")
+    print("  what makes rho visible at all, and rho is the thing that has to be right.")
+
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--expanded", action="store_true")
     ap.add_argument("--drift", action="store_true")
+    ap.add_argument("--turnover", action="store_true")
     args = ap.parse_args()
+
+    if args.turnover:
+        p = turnover_scheme()
+        g = turnover_report(p)
+        build_turnover(p)
+        print(f"\n  built and saved as {p['name']}.mky -- all four sheets balance")
+        r = runner(p)
+        names = ["F1", "Cc1", "V1", "F2", "Cc2", "V2", "K1", "K2", "MF1", "MF2",
+                 "MW", "MC", "Mtot", "cond", "X1", "X2", "Xtot"]
+        out = r.go(20.0, names, samples=300)
+        report(p, out, horizon=20.0)
+        import math
+        a, b20 = at(out, 0.0), at(out, 20.0)
+        meas = math.log(b20["K1"] / a["K1"]) / (b20["t"] - a["t"])
+        print(f"\n  BALANCED GROWTH RATE: predicted {g:.6f}, measured {meas:.6f}")
+        replacement(p, r)
+        return
 
     p = scheme(args.expanded)
     print("=" * 92)

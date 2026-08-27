@@ -11,6 +11,8 @@ One workbook per measure, one sheet per industry, one row per asset type, one co
 year from 1925. 76 industries at roughly NAICS three-digit level.
 
     detailnonres_stk1.xlsx   current-cost net stock
+    detailnonres_stk2.xlsx   the same stock in chained 2017 dollars, so that stk1/stk2
+                             is an asset-specific price index consistent with both
     detailnonres_dep1.xlsx   current-cost depreciation
     DetailNonres_rate.xlsx   BEA's own implied depreciation rates
 
@@ -34,9 +36,10 @@ CACHE = Path(__file__).parent / "cache"
 CACHE.mkdir(exist_ok=True)
 
 BASE = "https://apps.bea.gov/national/FA2004/Details/xls"
-FILES = {"stock": "detailnonres_stk1.xlsx",
-         "deprec": "detailnonres_dep1.xlsx",
-         "rate": "DetailNonres_rate.xlsx"}
+FILES = {"stock": "detailnonres_stk1.xlsx",      # current-cost net stock
+         "real": "detailnonres_stk2.xlsx",       # same, in chained 2017 dollars
+         "deprec": "detailnonres_dep1.xlsx",     # current-cost depreciation
+         "rate": "DetailNonres_rate.xlsx"}       # BEA's own implied rates
 
 #: the three aggregate rows present on every industry sheet
 TOTALS = {"EQUIPMENT": "equipment", "STRUCTURES": "structures", "IPP": "ip"}

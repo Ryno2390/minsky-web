@@ -57,7 +57,16 @@ def mean_growth(d, a, b):
 
 # --------------------------------------------------------------------------- 1
 def research_productivity():
-    """Effort against output: BEA's IP stock as an independent measure of effort."""
+    """Effort against output: BEA's IP stock as an independent measure of effort.
+
+    SUPERSEDED, and left here because the correction is instructive. This uses the IPP
+    TOTAL, which bundles research with software and with artistic originals -- and in
+    1950 artistic originals were 70% of it, so the baseline is largely Hollywood.
+    models/spillover.py splits the three by asset code and redoes this on research alone,
+    where the stock is 26 times its 1950s level rather than 22 and research productivity
+    falls by 45 times rather than 38. The correction strengthens the result, which is
+    why it went unnoticed: a wrong number pointing the right way.
+    """
     print("=" * 92)
     print("1. IDEAS ARE GETTING HARDER TO FIND -- measured from capital, not spending")
     print("=" * 92)

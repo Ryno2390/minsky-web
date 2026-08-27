@@ -44,6 +44,18 @@ FILES = {"stock": "detailnonres_stk1.xlsx",      # current-cost net stock
 #: the three aggregate rows present on every industry sheet
 TOTALS = {"EQUIPMENT": "equipment", "STRUCTURES": "structures", "IPP": "ip"}
 
+#: BEA's "intellectual property products" bundles three quite different things, and the
+#: bundle misleads if it is used as a measure of research. In 1950 a quarter of the IPP
+#: stock was THEATRICAL MOVIES. So the asset rows beneath the IPP total are summed by
+#: code prefix into three groups, which are reported alongside the totals:
+#:
+#:    ENS*   prepackaged, custom and own-account software
+#:    RD*    research and development, by performing industry
+#:    AE*    artistic originals -- films, television, books, music
+#:
+#: These sum to the IPP total, which check() verifies rather than assumes.
+PREFIXES = {"ENS": "software", "RD": "rd", "AE": "artistic"}
+
 #: apps.bea.gov refuses a bare urllib request; curl with a browser agent is served.
 UA = ("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 "
       "(KHTML, like Gecko) Chrome/120 Safari/537.36")
@@ -100,20 +112,30 @@ def _extract(which):
                 break
         if years is None:
             continue
+        groups = {}
         for r in rows:
             code = str(r[0] or "").strip()
             if code in TOTALS:
-                vals = list(r[2:2 + len(years)])
-                for y, v in zip(years, vals):
+                for y, v in zip(years, list(r[2:2 + len(years)])):
                     if isinstance(v, (int, float)):
                         out.append((sheet, name, TOTALS[code], y, float(v)))
+            elif any(code.startswith(k) for k in PREFIXES) and code not in TOTALS:
+                # NOT code[:3]: the prefixes are 2 and 3 characters ("RD", "AE", "ENS"),
+                # so a fixed slice turns "RD11" into "RD1" and matches nothing.
+                g = PREFIXES[next(k for k in PREFIXES if code.startswith(k))]
+                for y, v in zip(years, list(r[2:2 + len(years)])):
+                    if isinstance(v, (int, float)):
+                        groups.setdefault((g, y), 0.0)
+                        groups[(g, y)] += float(v)
+        for (g, y), v in groups.items():
+            out.append((sheet, name, g, y, v))
     wb.close()
     return out
 
 
 def table(which):
     """{(industry, asset): {year: value}} plus a code -> name map."""
-    csv_path = CACHE / f"beafa_{which}.csv"
+    csv_path = CACHE / f"beafa_{which}_v3.csv"
     if not csv_path.exists():
         recs = _extract(which)
         # NEVER CACHE AN EMPTY EXTRACTION. This repo has now been bitten twice by a
@@ -141,5 +163,28 @@ def table(which):
 #: three-digit codes it uses (336M, 336O, 313T, 315A) are motor vehicles, other
 #: transport equipment, textiles and apparel -- all manufacturing, so a prefix test
 #: on the first two characters is exactly right and no list has to be maintained.
+def check():
+    """Do the three IPP sub-groups sum to the published IPP total?
+
+    Measured on the AGGREGATE, not per industry. BEA rounds to whole millions, so an
+    industry holding $2m of intellectual property can show a 50% relative discrepancy
+    that is one rounded dollar -- a per-industry relative test reports that as a failure
+    and says nothing. The sum of absolute errors against the total stock is the honest
+    version and it comes to a few parts per million.
+    """
+    t, names = table("real")
+    out = {}
+    for y in (1950, 1960, 1980, 2000, 2024):
+        err = tot = 0.0
+        for c in names:
+            ip = t.get((c, "ip"), {}).get(y, 0.0)
+            parts = sum(t.get((c, g), {}).get(y, 0.0)
+                        for g in ("rd", "software", "artistic"))
+            err += abs(parts - ip)
+            tot += ip
+        out[y] = err / tot if tot else float("nan")
+    return out
+
+
 def is_manufacturing(code):
     return code[:2] in ("31", "32", "33")

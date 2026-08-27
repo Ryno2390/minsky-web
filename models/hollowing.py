@@ -25,12 +25,13 @@ share:
              capital stock, not merely change its composition. Technology changes what
              is bought without anyone leaving.
 
-WHAT THIS CANNOT DO
--------------------
-BEA publishes fixed assets by industry, and FRED does not carry those series, so the
-cleanest test -- manufacturing's own capital stock and its own IP share -- is not
-available here. What follows uses economy-wide asset composition against sectoral
-employment and trade, which is weaker, and the verdict is hedged accordingly.
+SECTION 5 IS THE ONE THAT SETTLES IT
+------------------------------------
+Sections 1 to 4 use economy-wide asset composition against sectoral employment and trade,
+because FRED carries BEA's fixed assets only in aggregate. That is weak evidence and the
+verdict there is hedged accordingly. BEA publishes the industry detail itself, in
+spreadsheets needing no key, and models/data/beafa.py fetches them: 74 industries, three
+asset classes, 1925 to 2024. Section 5 asks the question directly.
 """
 import sys
 from pathlib import Path
@@ -39,6 +40,7 @@ import numpy as np
 
 sys.path.insert(0, str(Path(__file__).parent))
 sys.path.insert(0, str(Path(__file__).parent / "data"))
+import beafa                                                     # noqa: E402
 import fred                                                      # noqa: E402
 
 CLASSES = [("structures", "K1NTOTL1ST000"), ("equipment", "K1NTOTL1EQ000"),
@@ -180,47 +182,151 @@ def correlate(rows):
     print("  as evidence AGAINST offshoring -- only as evidence of no positive relation.")
 
 
-# --------------------------------------------------------------------------- 4
-def verdict():
+# --------------------------------------------------------------------------- 5
+def by_industry():
+    """The direct test: is the IP shift concentrated in manufacturing, or everywhere?"""
     print("\n" + "=" * 92)
-    print("4. VERDICT")
+    print("5. BEA'S INDUSTRY DETAIL -- the test sections 1-4 could not run")
+    print("=" * 92)
+    t, names = beafa.table("stock")
+    mfg = beafa.is_manufacturing
+
+    def agg(pred, asset, y):
+        return sum(t[(c, asset)].get(y, 0.0) for c in names
+                   if pred(c) and (c, asset) in t)
+
+    print("  74 industries, current-cost net stock, $bn.\n")
+    print(f"  {'year':>6} | {'MANUFACTURING':>26} | {'EVERYTHING ELSE':>26} | "
+          f"{'mfg share':>10}")
+    print(f"  {'':>6} | {'equip':>8} {'struct':>8} {'IP share':>8} | "
+          f"{'equip':>8} {'struct':>8} {'IP share':>8} | {'of stock':>10}")
+    for y in (1960, 1980, 1994, 2001, 2010, 2024):
+        cells, tots = [], []
+        for pred in (mfg, lambda c: not mfg(c)):
+            e = agg(pred, "equipment", y)
+            st = agg(pred, "structures", y)
+            ip = agg(pred, "ip", y)
+            tots.append(e + st + ip)
+            cells.append(f"{e / 1000:8.0f} {st / 1000:8.0f} "
+                         f"{ip / (e + st + ip) * 100:7.1f}%")
+        print(f"  {y:6d} | {cells[0]} | {cells[1]} | "
+              f"{tots[0] / sum(tots) * 100:9.1f}%")
+
+    print("\n  MANUFACTURING DID TRANSFORM, and far harder than anything else: its IP")
+    print("  share went 13.2% to 35.4%, so better than a third of the capital a US")
+    print("  manufacturer now holds is intellectual property. That is the strongest")
+    print("  evidence for the hollowing-out reading that this repo has found.")
+    print("\n  BUT SO DID EVERYTHING ELSE, from 3.3% to 11.2% -- also more than tripled,")
+    print("  in industries that never had production to send anywhere.")
+
+    tot0 = sum(agg(lambda c: True, a, 1960) for a in ("equipment", "structures", "ip"))
+    tot1 = sum(agg(lambda c: True, a, 2024) for a in ("equipment", "structures", "ip"))
+    contrib = []
+    for c in names:
+        if (c, "ip") not in t:
+            continue
+        contrib.append((t[(c, "ip")].get(2024, 0.0) / tot1
+                        - t[(c, "ip")].get(1960, 0.0) / tot0, c, names[c]))
+    contrib.sort(reverse=True)
+    print("\n  Contributions to the ECONOMY-WIDE rise in the IP share, 1960-2024:\n")
+    print(f"  {'':>8} {'industry':>46} {'pp':>7}")
+    for d, c, n in contrib[:8]:
+        print(f"  {'MFG' if mfg(c) else '':>8} {n[:46]:>46} {d * 100:+6.2f}")
+    m_tot = sum(d for d, c, _ in contrib if mfg(c))
+    n_tot = sum(d for d, c, _ in contrib if not mfg(c))
+    print(f"\n  {'manufacturing, all 21 industries':>56} {m_tot * 100:+6.2f} pp")
+    print(f"  {'everything else, all 53':>56} {n_tot * 100:+6.2f} pp")
+    print(f"\n  Non-manufacturing carries {n_tot / (m_tot + n_tot) * 100:.0f}% of the "
+          "economy-wide shift, more than twice")
+    print("  what manufacturing carries. The largest single contributor is Chemical")
+    print("  Products -- pharmaceutical research, done in the United States -- and the")
+    print("  list beneath it is publishing, data processing, telecoms, legal services,")
+    print("  insurance and securities. Those industries did not offshore production and")
+    print("  then keep the design work. They accumulated intellectual property because")
+    print("  intellectual property became what their capital IS.")
+    return m_tot, n_tot
+
+
+# --------------------------------------------------------------------------- 6
+def mfg_real():
+    """Did manufacturing's own capital stock hollow out, in real terms?"""
+    print("\n" + "=" * 92)
+    print("6. AND DID MANUFACTURING'S OWN CAPITAL LEAVE?")
+    print("=" * 92)
+    t, names = beafa.table("stock")
+    defl = annual("GDPDEF")
+    mfg = beafa.is_manufacturing
+    manemp = annual("MANEMP")
+    print("  Manufacturing's stock, deflated, 1960 = 100, against its employment.\n")
+    print(f"  {'year':>6} {'equipment':>11} {'structures':>11} {'IP':>8} "
+          f"{'all three':>10} | {'employment':>11}")
+    base = {}
+    for y in (1960, 1980, 2001, 2010, 2024):
+        vals = {a: sum(t[(c, a)].get(y, 0.0) for c in names
+                       if mfg(c) and (c, a) in t)
+                for a in ("equipment", "structures", "ip")}
+        vals["all"] = sum(vals.values())
+        f = defl[1960] / defl[y]
+        if not base:
+            base = dict(vals)
+        print(f"  {y:6d} " + " ".join(
+            f"{vals[a] / base[a] * f * 100:10.0f}" for a in
+            ("equipment", "structures", "ip")) +
+            f" {vals['all'] / base['all'] * f * 100:10.0f} | "
+            f"{manemp[y] / manemp[1960] * 100:10.0f}")
+    print("\n  Manufacturing's real capital stock more than doubles while its employment")
+    print("  ends below where it started. Even its EQUIPMENT -- the machinery that")
+    print("  offshoring is supposed to have shipped abroad -- grows in real terms.")
+    print("  Manufacturing in America has more capital and fewer workers than in 1960,")
+    print("  which is the signature of automation, not of exit.")
+
+
+# --------------------------------------------------------------------------- 7
+def verdict(m_tot, n_tot):
+    print("\n" + "=" * 92)
+    print("7. VERDICT")
     print("=" * 92)
     print("  WHAT IS TRUE, and it is a lot. Manufacturing employment fell from 28.4% of")
-    print("  payrolls to 8.1%, and in absolute terms it is now BELOW its 1960 level after")
-    print("  a peak in 1979. Imports went from 4.2% of GDP to 14.0%. Manufacturing value")
-    print("  added is under a tenth of GDP. Deindustrialisation in the sense people mean")
-    print("  it -- the disappearance of industrial employment -- is not in dispute here")
-    print("  and nothing below denies it.")
-    print("\n  WHAT DOES NOT FOLLOW is that this is what moved the capital stock into")
-    print("  intellectual property, and three things say it is not:")
-    print("\n    TIMING. 63% of the rise in the IP share had happened before China joined")
-    print("    the WTO, and the fastest decade for IP was 1982-1992 -- before the fastest")
-    print("    decade for imports, 1998-2008, and long after the fastest decade for")
-    print("    manufacturing employment loss, 1966-1976. The three peak in different")
-    print("    decades, which is hard for a single causal chain.")
-    print("\n    THE STOCK DID NOT LEAVE. Real equipment capital is six times its 1960")
-    print("    level. If US firms had exited physical production the machinery would show")
-    print("    it, and it does not. Equipment's SHARE fell only because IP grew faster.")
-    print("\n    NO POSITIVE CO-MOVEMENT. In changes, the IP share has essentially zero")
-    print("    correlation with the manufacturing employment share (+0.007).")
-    print("\n  THE STEELMAN, which survives all of that. The offshoring story does not")
-    print("  need a sharp break in 2001. It can be a slow specialisation: US firms moved")
-    print("  up the value chain into design and branding over decades, from the Japanese")
-    print("  competition of the 1970s onward, precisely BECAUSE production could be")
-    print("  bought cheaply elsewhere. On that reading the 1982-1992 acceleration is not")
-    print("  an embarrassment, it is the mechanism. Nothing above rules this out.")
-    print("\n  WHAT WOULD SETTLE IT is the one thing this module cannot reach: BEA's")
-    print("  fixed assets BY INDUSTRY. If the IP shift is concentrated in manufacturing")
-    print("  firms, the specialisation story is carrying it. If it is economy-wide --")
-    print("  and finance, health and retail have IP stocks too -- then it is technology.")
-    print("  Those tables exist and are not on FRED.")
-    print("\n  ON THE BALANCE OF WHAT IS HERE: deindustrialisation is real and is a")
-    print("  labour phenomenon, not a capital one. The machinery stayed and the jobs went,")
-    print("  which is what automation looks like and is not what offshoring looks like.")
-    print("  The shift into IP is at most partly a specialisation story and mostly not a")
-    print("  dated-shock story, and moral.py's account -- that obsolescence cannot shorten")
-    print("  the life of capital that already wears out fast, so it shows up as buying")
-    print("  different capital instead -- remains the better-supported explanation.")
+    print("  payrolls to 8.1% and is now BELOW its 1960 level in absolute terms. Imports")
+    print("  went 4.2% of GDP to 14.0%. Manufacturing value added is under a tenth of")
+    print("  GDP. Deindustrialisation in the sense people mean it happened, and nothing")
+    print("  here denies it.")
+    print("\n  WHAT THE INDUSTRY DATA CONCEDES TO THE HYPOTHESIS, and it is more than I")
+    print("  expected before running it:")
+    print("\n    Manufacturing transformed hardest of any sector. Its IP share went 13.2%")
+    print("    to 35.4% -- better than a third of what a US manufacturer now owns is")
+    print("    intellectual property, against 11.2% everywhere else.")
+    print("\n    Its equipment grew slowest of its own three asset classes: 3.7x in real")
+    print("    terms since 1960, against 5.5x for structures and 16x for IP. If US")
+    print("    manufacturing had kept building machinery at the old rate that ratio would")
+    print("    not look like this.")
+    print("\n    And its share of the national capital stock did fall, 20.2% to 16.1%.")
+    print("\n  WHAT THE INDUSTRY DATA REFUSES:")
+    print(f"\n    The shift is not concentrated in manufacturing. Non-manufacturing")
+    print(f"    carries {n_tot / (m_tot + n_tot) * 100:.0f}% of the economy-wide rise in the "
+          "IP share -- more than twice")
+    print("    what manufacturing carries -- and it is carried by publishing, data")
+    print("    processing, telecoms, insurance, securities and legal services. Those")
+    print("    industries had no production to send abroad. Something that happened to")
+    print("    them cannot be explained by offshoring, and the same something is")
+    print("    sufficient for manufacturing.")
+    print("\n    Manufacturing's capital did not leave. Its real stock is six times its")
+    print("    1960 level and even its equipment is 3.7 times, while its employment ends")
+    print("    below where it started. More capital, fewer workers, is automation.")
+    print("\n    And the timing is wrong. 63% of the IP shift predates China's WTO")
+    print("    accession, and the three series peak in three different decades.")
+    print("\n  SO: the hollowing-out narrative is right about what happened to industrial")
+    print("  EMPLOYMENT and wrong about what happened to industrial CAPITAL. The machinery")
+    print("  stayed, grew, and was joined by a great deal of intellectual property -- in")
+    print("  manufacturing more than anywhere, which is the part of the hypothesis that")
+    print("  survives, but everywhere else as well, which is the part that sinks it as a")
+    print("  general explanation.")
+    print("\n  moral.py's account still fits better: obsolescence cannot shorten the life")
+    print("  of capital that already wears out fast, so it shows up as buying capital")
+    print("  that is short-lived by nature. That happens in a chemical company's research")
+    print("  and in an insurer's software for the same reason, and neither has anything")
+    print("  to do with a container ship.")
+
 
 
 def main():
@@ -229,7 +335,9 @@ def main():
     timing(rows)
     what_moved(rows)
     correlate(rows)
-    verdict()
+    m_tot, n_tot = by_industry()
+    mfg_real()
+    verdict(m_tot, n_tot)
 
 
 if __name__ == "__main__":

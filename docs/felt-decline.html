@@ -1,0 +1,616 @@
+<title>The Wrong Half</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Instrument+Serif:ital@0;1&family=Newsreader:ital,opsz,wght@0,6..72,300..700;1,6..72,300..600&family=IBM+Plex+Mono:wght@400;500&display=swap">
+<style>
+/* Instrument palette. The two accents are the argument: one series holds, one falls away,
+   and nearly every finding in this investigation is a pair doing exactly that. */
+:root{
+  --paper:#F7F8FA; --raised:#FFFFFF; --ink:#141A22; --ink-2:#3E4A58; --ink-3:#5A6675;
+  --rule:#DDE2E8; --rule-2:#EDF0F3;
+  --hold:#1F5F8B;          /* the line that held up */
+  --fell:#A8412C;          /* the line that came apart */
+  --hold-soft:#E7EFF5; --fell-soft:#F7E9E5;
+  --serif:"Newsreader",ui-serif,Georgia,serif;
+  --display:"Instrument Serif",ui-serif,Georgia,serif;
+  --mono:"IBM Plex Mono",ui-monospace,SFMono-Regular,Menlo,monospace;
+}
+@media (prefers-color-scheme:dark){
+  :root:not([data-theme="light"]){
+    --paper:#10141A; --raised:#161C24; --ink:#E4E9EF; --ink-2:#AAB6C2; --ink-3:#7E8B99;
+    --rule:#252E38; --rule-2:#1B222B;
+    --hold:#6FB4DE; --fell:#E08A72; --hold-soft:#132A3A; --fell-soft:#33201B;
+  }
+}
+:root[data-theme="dark"]{
+  --paper:#10141A; --raised:#161C24; --ink:#E4E9EF; --ink-2:#AAB6C2; --ink-3:#7E8B99;
+  --rule:#252E38; --rule-2:#1B222B;
+  --hold:#6FB4DE; --fell:#E08A72; --hold-soft:#132A3A; --fell-soft:#33201B;
+}
+*{box-sizing:border-box}
+body{
+  background:var(--paper); color:var(--ink); font-family:var(--serif);
+  font-size:17px; line-height:1.65; margin:0; font-optical-sizing:auto;
+  padding:clamp(1.8rem,5vw,4.5rem) clamp(1.1rem,5vw,2rem) 6rem;
+  -webkit-font-smoothing:antialiased;
+}
+.wrap{max-width:73ch;margin:0 auto;display:flex;flex-direction:column;gap:3rem}
+p{margin:0 0 1.05em}
+p:last-child{margin-bottom:0}
+em{font-style:italic}
+
+/* masthead */
+.mast{display:flex;flex-direction:column;gap:1rem;border-bottom:1px solid var(--ink);
+  padding-bottom:1.6rem}
+.eyebrow{font-family:var(--mono);font-size:.66rem;letter-spacing:.16em;
+  text-transform:uppercase;color:var(--ink-3);margin:0}
+h1{font-family:var(--display);font-size:clamp(2.6rem,9vw,4.6rem);line-height:.98;
+  margin:0;font-weight:400;letter-spacing:-.01em;text-wrap:balance}
+.stand{font-size:1.15rem;color:var(--ink-2);margin:0;max-width:58ch;text-wrap:pretty}
+.byline{font-family:var(--mono);font-size:.68rem;color:var(--ink-3);
+  display:flex;flex-wrap:wrap;gap:.35rem 0;margin:0}
+.byline span+span::before{content:"·";padding:0 .6rem;color:var(--rule)}
+
+section{display:flex;flex-direction:column;gap:1.1rem}
+.part{font-family:var(--mono);font-size:.66rem;letter-spacing:.18em;
+  text-transform:uppercase;color:var(--fell);margin:0}
+h2{font-family:var(--display);font-size:1.95rem;line-height:1.12;margin:0;
+  font-weight:400;letter-spacing:-.005em;text-wrap:balance}
+h3{font-size:1.02rem;margin:.6rem 0 0;font-weight:600;letter-spacing:-.003em}
+
+code,.m{font-family:var(--mono);font-size:.85em;font-variant-numeric:tabular-nums}
+code{background:var(--rule-2);padding:.1em .34em;border-radius:2px}
+
+/* THE SIGNATURE DEVICE. Every major finding here is two series that came apart, so the
+   divergence gets a glyph rather than a paragraph. Points are the real numbers. */
+.dv{display:grid;grid-template-columns:1fr auto;gap:.4rem 1.2rem;align-items:center;
+  background:var(--raised);border:1px solid var(--rule);border-radius:3px;
+  padding:1rem 1.15rem}
+.dv svg{width:100%;height:78px;display:block;overflow:visible}
+.dv .lbl{font-family:var(--mono);font-size:.64rem;letter-spacing:.09em;
+  text-transform:uppercase;color:var(--ink-3);white-space:nowrap}
+.dv .rd{display:flex;flex-direction:column;gap:.3rem;text-align:right;
+  font-variant-numeric:tabular-nums}
+.dv .rd b{font-family:var(--mono);font-size:1.02rem;font-weight:500;line-height:1.15}
+.dv .rd .up{color:var(--hold)} .dv .rd .dn{color:var(--fell)}
+.dv.same{grid-template-columns:1fr}
+.dv.same .rd{flex-direction:row;flex-wrap:wrap;gap:.35rem 2.2rem;text-align:left;
+  align-items:baseline}
+.dv.same .rd b{font-size:1.15rem}
+.dv.same .rd .lbl{align-self:center}
+.dv .cap{grid-column:1/-1;font-size:.86rem;color:var(--ink-3);padding-top:.25rem;
+  border-top:1px solid var(--rule-2);margin-top:.2rem}
+
+/* verdict chips: the chain of eliminations has a state per link, and it is real
+   information rather than decoration */
+.chain{display:flex;flex-direction:column;gap:0;border-top:1px solid var(--ink)}
+.link{display:grid;grid-template-columns:2.2rem 1fr auto;gap:.9rem;align-items:baseline;
+  padding:.72rem 0;border-bottom:1px solid var(--rule-2)}
+.link .n{font-family:var(--mono);font-size:.7rem;color:var(--ink-3);
+  font-variant-numeric:tabular-nums}
+.link .q{font-size:.97rem}
+.link .v{font-family:var(--mono);font-size:.63rem;letter-spacing:.1em;
+  text-transform:uppercase;white-space:nowrap;padding:.18em .5em;border-radius:2px}
+.v.no{background:var(--fell-soft);color:var(--fell);box-shadow:inset 0 0 0 1px var(--fell)}
+.v.part{background:var(--hold-soft);color:var(--hold);box-shadow:inset 0 0 0 1px var(--hold)}
+.v.open{background:var(--rule-2);color:var(--ink-3);box-shadow:inset 0 0 0 1px var(--rule)}
+
+.scroll{overflow-x:auto;margin:.1rem 0}
+table{border-collapse:collapse;width:100%;font-size:.87rem;
+  font-variant-numeric:tabular-nums}
+th,td{text-align:right;padding:.4rem .7rem;white-space:nowrap}
+th:first-child,td:first-child{text-align:left;padding-left:0}
+th:last-child,td:last-child{padding-right:0}
+thead th{font-family:var(--mono);font-size:.64rem;letter-spacing:.09em;
+  text-transform:uppercase;color:var(--ink-3);font-weight:400;
+  border-bottom:1px solid var(--ink);padding-bottom:.35rem}
+tbody td{border-bottom:1px solid var(--rule-2);font-family:var(--mono)}
+tbody tr:last-child td{border-bottom:1px solid var(--rule)}
+td.lbl{font-family:var(--serif);font-size:.95rem;white-space:normal;min-width:11ch}
+tr.mark td{background:var(--hold-soft)}
+tr.warn td{background:var(--fell-soft)}
+.neg{color:var(--fell)} .pos{color:var(--hold)}
+caption{caption-side:bottom;text-align:left;font-size:.81rem;color:var(--ink-3);
+  padding-top:.55rem;font-family:var(--serif)}
+
+.eq{font-family:var(--mono);font-size:.87rem;line-height:1.85;
+  border-left:2px solid var(--hold);padding:.6rem 0 .6rem 1rem;
+  overflow-x:auto;white-space:pre;color:var(--ink)}
+.eq .c{color:var(--ink-3)}
+
+.pull{font-family:var(--display);font-size:1.5rem;line-height:1.25;
+  color:var(--ink);margin:.5rem 0;padding-left:1.1rem;
+  border-left:2px solid var(--fell);text-wrap:pretty}
+
+/* a correction the investigation made against itself, marked where it stands */
+.fix{background:var(--fell-soft);border-left:2px solid var(--fell);
+  padding:.85rem 1.05rem;font-size:.93rem;color:var(--ink-2);
+  display:flex;flex-direction:column;gap:.5rem}
+.fix .tag{font-family:var(--mono);font-size:.62rem;letter-spacing:.12em;
+  text-transform:uppercase;color:var(--fell)}
+.fix p{margin:0} .fix strong{color:var(--ink);font-weight:600}
+
+ul{margin:0;padding-left:1.1rem;display:flex;flex-direction:column;gap:.5rem;
+  color:var(--ink-2)}
+li strong{color:var(--ink);font-weight:600}
+
+a{color:inherit;text-decoration:underline;text-decoration-color:var(--hold);
+  text-underline-offset:.18em;text-decoration-thickness:1px}
+a:hover{text-decoration-thickness:2px}
+a:focus-visible{outline:2px solid var(--hold);outline-offset:2px;border-radius:1px}
+@media (prefers-reduced-motion:reduce){*{animation:none!important;transition:none!important}}
+footer{border-top:1px solid var(--rule);padding-top:1.2rem;font-family:var(--mono);
+  font-size:.7rem;color:var(--ink-3);line-height:1.8}
+</style>
+
+<div class="wrap">
+
+<header class="mast">
+  <p class="eyebrow">Marx Volume II · US national accounts 1925–2026 · seventeen tests</p>
+  <h1>The Wrong Half</h1>
+  <p class="stand">An investigation that set out to explain the productivity slowdown,
+    eliminated every explanation running through capital, localised the residual precisely,
+    failed to explain it — and then found that the thing it was really trying to account for
+    was somewhere else entirely.</p>
+  <p class="byline"><span>Built in Minsky</span><span>BEA · BLS · Z.1 · FRED · SEC · NBER-CES</span><span>Seventeen modules</span><span>Nine corrections against itself</span></p>
+</header>
+
+<section>
+  <h2>What this was for</h2>
+  <p>Americans report, poll after poll and for decades, that they are getting worse off.
+    The aggregates say the opposite: real GDP per capita has roughly doubled since 1984.
+    One of those is usually treated as a misperception.</p>
+  <p>Neither is. This began as an attempt to explain the productivity slowdown — the standard
+    candidate for a felt decline — and worked through it properly: Marx's reproduction
+    schemes built as a running model, then the circuit of capital, the composition of
+    investment, obsolescence, offshoring, the return to research. Seventeen tests.</p>
+  <p>The productivity slowdown is real and mostly unexplained. It is also, it turns out,
+    not what people are feeling. The last two tests found the felt decline sitting in two
+    numbers that need none of the preceding work, and the whole sequence is worth reading
+    as the elimination that establishes that.</p>
+
+  <div class="chain">
+    <div class="link"><span class="n">01</span><span class="q">Is the model of reproduction even stable?</span><span class="v no">knife edge</span></div>
+    <div class="link"><span class="n">02</span><span class="q">Did the circuit of capital slow down?</span><span class="v no">it sped up</span></div>
+    <div class="link"><span class="n">03</span><span class="q">Did net investment collapse into maintenance?</span><span class="v part">yes — and it didn't matter</span></div>
+    <div class="link"><span class="n">04</span><span class="q">Did obsolescence force faster replacement?</span><span class="v part">barely</span></div>
+    <div class="link"><span class="n">05</span><span class="q">Did offshoring hollow out the capital stock?</span><span class="v no">no</span></div>
+    <div class="link"><span class="n">06</span><span class="q">Is the slowdown in capital at all?</span><span class="v no">no — it is TFP</span></div>
+    <div class="link"><span class="n">07</span><span class="q">Is it mismeasured output?</span><span class="v no">needs $19tn a year</span></div>
+    <div class="link"><span class="n">08</span><span class="q">Is it the shift to short-lived assets?</span><span class="v part">a fifth of it</span></div>
+    <div class="link"><span class="n">09</span><span class="q">Did research stop paying off?</span><span class="v part">effort ×26, return ÷45</span></div>
+    <div class="link"><span class="n">10</span><span class="q">Because knowledge became excludable?</span><span class="v open">live, weakened</span></div>
+    <div class="link"><span class="n">11</span><span class="q">Is it Baumol's cost disease?</span><span class="v part">about a quarter</span></div>
+    <div class="link"><span class="n">12</span><span class="q">Is any of it what people are feeling?</span><span class="v no">no</span></div>
+  </div>
+</section>
+
+<section>
+  <p class="part">Part one · the model</p>
+  <h2>Marx's reproduction schemes, as something that runs</h2>
+
+  <p>Volume II writes each department's year as <span class="m">c + v + s</span> and asks what
+    has to be true for the whole thing to repeat. Netting out what each department buys from
+    itself, the answer is one condition — and written as money flows across four sectors, that
+    condition turns out to be exactly the requirement that Department I's cash holding not
+    drain.</p>
+
+  <div class="eq">simple     II c        = I (v + s)              2000 = 2000
+expanded   II (c + dc) = I (v + dv + s consumed)   1600 = 1600</div>
+
+  <p>The reproduction condition <em>is</em> the stationarity of a money stock, which is the
+    object a Godley table exists to track. So the model imposes it nowhere: four sectors,
+    money as the only asset, no credit — Volume II Part III's own abstraction — and the
+    condition is left to hold or fail.</p>
+
+  <p>It holds. Simple reproduction runs stationary at 9800 with every money stock flat and
+    the condition at exactly zero. Expanded runs at precisely the predicted 10% growth with
+    the condition at <span class="m">4×10⁻¹⁶</span> of Dept I's product and money conserved to
+    <span class="m">10⁻¹¹</span> over ten years. The recursion reproduces Marx's published
+    table — 9000, 9800, 10780, 11858, 13043.8, 14348.18 — to four decimals.</p>
+
+  <h3>And it is a knife edge</h3>
+  <p>Dept II's accumulation rate is not a decision:
+    <span class="m">α₂ = α₁(1+q₂)/(1+q₁) = 0.300</span> exactly. There is a second condition on
+    the opening proportions, <span class="m">c₂/v₁ = 16/11</span>, which Marx's own first year
+    violates — which is why his scheme grows 8.89% in year one and exactly 10% ever after.
+    Both must hold. With only the accumulation rate right, the residual sits at a constant
+    −0.83%. With both, it is <span class="m">2×10⁻¹⁴</span>.</p>
+
+  <p>Give Dept II its own rate and the failure has a mechanism the arithmetic cannot show:
+    the short department does not discover its error through unsold goods. It discovers it by
+    running out of cash. Five points off the balanced rate and Firms I cannot pay wages by
+    year nine.</p>
+
+  <div class="fix"><span class="tag">found the hard way</span>
+    <p>Solving for the opening capital directly gives 16000/11, which does not terminate in
+      binary, gets snapped to 1454.5625 by the Godley grid, and lands the model
+      <strong>10⁻⁵ off a fixed point that has no neighbourhood</strong>. The residual looked
+      like solver error until checked. Marx's own year two — 4400c + 1100v, 1600c + 800v — is
+      on the path and is all integers.</p></div>
+</section>
+
+<section>
+  <p class="part">Part two · the eliminations</p>
+  <h2>Every explanation that runs through capital</h2>
+
+  <p>Turnover time is what Volume II spends two Parts on and Part III assumes away. Marx's
+    ch.16 result — two identical capitals returning 1000% and 100% a year on different
+    turnover — generalises the balance conditions rather than breaking them, and produces a
+    genuine bound: <span class="m">g ≤ α·e·n_agg</span>, never violated over 200,000 random
+    capitals. A slow-turning economy cannot grow fast.</p>
+
+  <p>So: did the circuit slow?</p>
+
+  <div class="dv same">
+    <div class="rd">
+      <b class="up">137.8 → 125.6</b><span class="lbl">cash cycle, days</span>
+      <b class="up">17.9 → 12.3</b><span class="lbl">fixed capital life, years</span>
+      <b class="up">111 → 89</b><span class="lbl">inventory days</span>
+    </div>
+    <p class="cap">Both legs of the circuit got <em>faster</em>, which is why there is no
+      divergence to draw here. Depreciation is 15.4% of value added against 9.4% in the
+      fifties. Nothing measured in physical time got slower.</p>
+  </div>
+
+  <p>And the profit rate on capital advanced recovered: 9.08% in 1955–69, a trough of 6.52% in
+    the eighties, <strong>8.93%</strong> now — within two percent of where it started. The one
+    measure that falls, the output-capital ratio, turns out to be the price of land and
+    buildings: redone against equipment at current cost, where no revaluation is possible, it
+    <em>rises</em>.</p>
+
+  <h3>The wedge is real, and the channel is not</h3>
+  <p>Gross investment rose from 10.23% of GDP to 13.51% while net investment fell from 3.39%
+    to 2.57%. Four fifths of gross investment now replaces what wore out, against two thirds
+    in the fifties. Intellectual property alone accounts for 115% of the rise in the
+    depreciation rate — it depreciates 8.7 times faster than structures, a 4.1-year life
+    against 35.9.</p>
+
+  <div class="dv">
+    <svg viewBox="0 0 340 78" preserveAspectRatio="none" role="img" aria-label="Gross investment rising while net investment falls">
+      <line vector-effect="non-scaling-stroke" x1="0" y1="70" x2="340" y2="70" stroke="var(--rule)" stroke-width="1"/>
+      <polyline vector-effect="non-scaling-stroke" fill="none" stroke="var(--hold)" stroke-width="2"
+        points="0,44 57,36 114,24 171,16 228,26 285,20 340,17"/>
+      <polyline vector-effect="non-scaling-stroke" fill="none" stroke="var(--fell)" stroke-width="2"
+        points="0,50 57,44 114,43 171,46 228,54 285,60 340,63"/>
+    </svg>
+    <div class="rd">
+      <b class="up">10.2 → 13.5%</b><span class="lbl">gross investment / GDP</span>
+      <b class="dn">3.4 → 2.6%</b><span class="lbl">net investment / GDP</span>
+    </div>
+    <p class="cap">The maintenance proportion went 66.9% → 81.0%. The wedge is exactly as
+      described — and then the channel it was supposed to act through does not appear.</p>
+  </div>
+
+  <p>Capital deepening is net investment over the stock less employment growth. Net investment
+    fell by a third; employment growth fell by <em>half</em>. They very nearly cancel, and
+    deepening ends at <strong>1.09% a year against 1.08% in the fifties</strong>. Flat, not
+    halved. Less net investment did not mean less capital per worker.</p>
+
+  <h3>Obsolescence cannot bite where wear already has</h3>
+  <p>The relative price of equipment fell 72% since 1947, and BEA quality-adjusts, so that is
+    new capital getting <em>better</em> per dollar. But an age-<span class="m">a</span> machine
+    costs <span class="m">e^((γ+δ)a)</span> times the frontier to run: obsolescence and wear
+    enter only as their sum, and they are substitutes in the replacement decision. In the
+    1950s obsolescence was 1–8% of total decay. Even a tenfold rise in the rate of progress
+    moves the optimal life by single digits — model −7% to −24%, recorded −6.3%.</p>
+
+  <p class="pull">A machine that wears out in eight years cannot be made obsolete much faster
+    than that. Moral depreciation can only bite on capital that would otherwise have lasted a
+    long time.</p>
+
+  <p>Which is why obsolescence shows up not as shorter lives within a class but as a shift of
+    investment <em>into</em> classes short-lived by nature. Capital did not get replaced
+    faster. It changed into a kind that has to be.</p>
+
+  <h3>And it was not offshoring</h3>
+  <p>63% of the shift into intellectual property had happened before China joined the WTO. The
+    fastest decade for the IP share is 1982–92; for imports, 1998–2008; for manufacturing
+    employment loss, 1966–76. Three different decades is hard for one causal chain.</p>
+
+  <p>Deflated to 1960 = 100, real equipment capital stands at <strong>595</strong>, structures
+    721, IP 2151 — against manufacturing employment at <strong>83</strong>. Every class of
+    capital grew several-fold including the one offshoring supposedly removed. BEA's industry
+    detail then settles it: manufacturing did transform hardest, its IP share going 13.2% →
+    35.4%, but non-manufacturing carries <strong>69%</strong> of the economy-wide shift —
+    publishing, data processing, telecoms, insurance, legal services. Industries with no
+    production to send anywhere.</p>
+
+  <p>The machinery stayed and the jobs went. That is automation, not exit.</p>
+</section>
+
+<section>
+  <p class="part">Part three · the residual</p>
+  <h2>Localised precisely, explained hardly at all</h2>
+
+  <p>With capital eliminated, the slowdown is in total factor productivity by construction —
+    capital's contribution to labour productivity was 0.59 points in 1950–69 and 0.88 in
+    2020–24. It never slowed. TFP growth fell from <strong>1.91% to 0.93%</strong>.</p>
+
+  <p>Mismeasurement cannot carry it either, and this one can be sized. Had TFP kept its
+    1950–69 pace, output would be 65% higher today. For mismeasured output to be the story
+    that entire 65% must be product the accounts miss: <strong>$19tn a year on a $29tn
+    economy</strong>. Confine it to the fifth of the economy plausibly hard to measure and
+    that fifth must be understated by 326%.</p>
+
+  <p>What is measurable is the arithmetic of short-lived assets. Productivity accounting
+    weights capital by its <em>rental</em> price, not its dollar value, so a dollar of IP
+    depreciating at 24% carries about four times the weight of a dollar of structures at 2.8%.
+    IP is now a third of capital by rental weight against a seventh by value, and capital
+    services grow faster than the stock: the gap widens from +0.75 to +1.62 points, which at a
+    capital share of 0.33 subtracts <strong>0.19 points</strong> from measured TFP. About
+    a fifth of the slowdown, robust from r = 2% to 8%.</p>
+
+  <h3>The fact everything converges on</h3>
+
+  <div class="dv">
+    <svg viewBox="0 0 340 78" preserveAspectRatio="none" role="img" aria-label="Research capital rising twenty-six-fold while TFP growth falls by half">
+      <line vector-effect="non-scaling-stroke" x1="0" y1="70" x2="340" y2="70" stroke="var(--rule)" stroke-width="1"/>
+      <polyline vector-effect="non-scaling-stroke" fill="none" stroke="var(--hold)" stroke-width="2"
+        points="0,66 57,60 114,52 171,40 228,26 285,14 340,4"/>
+      <polyline vector-effect="non-scaling-stroke" fill="none" stroke="var(--fell)" stroke-width="2"
+        points="0,10 57,30 114,58 171,42 228,38 285,46 340,36"/>
+    </svg>
+    <div class="rd">
+      <b class="up">×26</b><span class="lbl">real R&amp;D capital</span>
+      <b class="dn">÷45</b><span class="lbl">return per unit</span>
+    </div>
+    <p class="cap">Research capital is 26 times its 1950s level and buys 57% of the TFP growth.
+      Measured independently at industry level over sixty years: research-intensive
+      manufacturing grew TFP 1.09 points a year <em>faster</em> than non-research manufacturing
+      in the 1960s and 0.37 points <em>slower</em> by 2010–16. The advantage did not shrink.
+      It inverted.</p>
+  </div>
+
+  <p>That result was reached from BEA capital stocks, and it agrees closely with the
+    spending-based literature that got there from R&amp;D budgets and researcher headcount.
+    Two measurements built for different purposes, landing in the same place.</p>
+
+  <h3>One candidate that made a prediction</h3>
+  <p>The most specific explanation on offer is that know-how shifted from non-excludable to
+    excludable, because the vertically integrated firms that published research broke up. Its
+    structural premise is confirmed and large: in 1960, <strong>92% of America's research
+    capital sat inside manufacturing firms</strong>, and the industries holding research had
+    82% of their own capital in plant. Today those are 57% and 53%.</p>
+
+  <p>It also makes the one prediction that separates it from "the ideas got harder to find":
+    the private return should hold up while the social return collapses. Fishing-out predicts
+    both fall together.</p>
+
+  <div class="scroll"><table>
+    <thead><tr><th>the two returns</th><th>1950s–60s</th><th>now</th><th>verdict</th></tr></thead>
+    <tbody>
+      <tr class="mark"><td class="lbl">private, firm accounts</td><td>—</td><td>27.4% vs a 19% user cost</td><td class="pos">clears</td></tr>
+      <tr class="warn"><td class="lbl">social, TFP per unit of research</td><td>1.00</td><td>0.022</td><td class="neg">÷45</td></tr>
+    </tbody>
+    <caption>If the well were simply dry, firms would not be clearing their cost of capital on
+      research either. They are.</caption>
+  </table></div>
+
+  <div class="fix"><span class="tag">correction · the largest in this investigation</span>
+    <p>Rising concentration of R&amp;D profits was reported as the strongest evidence, and
+      specifically as a <em>trend</em> that escaped the objection that the wedge was always
+      there. It does not escape it. Drop the five largest earners — Apple, Alphabet, Microsoft,
+      Nvidia, Meta, who take 43.8% of all operating income among research-doing filers — and
+      the rise vanishes: the Herfindahl is <strong>0.0108 in 2010 and 0.0098 in 2024</strong>.
+      What survives is a level difference, which is a weaker and different claim.</p>
+    <p>The sixty-year industry test then declined to confirm capture at all: net profit rates
+      rose ~16% in the most research-intensive industries and ~14% in the least. The thesis
+      survives only in its <strong>dissipation</strong> form — excludability makes research a
+      race, races burn resources, and the rents are competed away rather than kept. That
+      version predicts exactly the absence of differential capture that the data show.</p>
+  </div>
+
+  <p>So the residual is localised and not explained. Three mechanisms fit and cannot be
+    separated: the frontier is further from any starting researcher; racing dissipates what
+    excludability creates; and research aimed at firm-specific advantage has a smaller blast
+    radius than research that gets published. TFP measures blast radius.</p>
+</section>
+
+<section>
+  <p class="part">Part four · the wrong half</p>
+  <h2>What people are actually feeling</h2>
+
+  <p>Two tests were meant to finish the productivity story and instead ended it.</p>
+
+  <p>The first asked whether research had gone to unproductive uses in Marx's sense — to
+    circulation rather than production. Half right: the productive share of R&amp;D fell from
+    92.5% to somewhere between 59% and 85%, and finance and insurance went from doing
+    essentially no research to 7.6% of the total. But the outcome Marx's argument is actually
+    about went the other way.</p>
+
+  <div class="dv">
+    <svg viewBox="0 0 340 78" preserveAspectRatio="none" role="img" aria-label="Services prices rising twelvefold while durable goods prices peak and fall">
+      <line vector-effect="non-scaling-stroke" x1="0" y1="70" x2="340" y2="70" stroke="var(--rule)" stroke-width="1"/>
+      <polyline vector-effect="non-scaling-stroke" fill="none" stroke="var(--fell)" stroke-width="2"
+        points="0,66 57,60 114,44 171,26 228,18 285,10 340,4"/>
+      <polyline vector-effect="non-scaling-stroke" fill="none" stroke="var(--hold)" stroke-width="2"
+        points="0,66 57,64 114,58 171,52 228,54 285,58 340,60"/>
+    </svg>
+    <div class="rd">
+      <b class="dn">×12</b><span class="lbl">services prices since 1960</span>
+      <b class="up">−32%</b><span class="lbl">durables since their 1995 peak</span>
+    </div>
+    <p class="cap">Commodity production did exactly what Marx said productive labour does. It
+      cheapened commodities, relentlessly, and has not stopped. Durable goods prices peaked in
+      1995 and have fallen 32% in <em>nominal</em> terms since.</p>
+  </div>
+
+  <p>Which invites Baumol — the weight moved onto a sector where productivity grows slowly.
+    Measured properly, holding manufacturing's employment share at its 1960s level recovers
+    <strong>0.31 points of a 1.20-point slowdown</strong>. About a quarter. The other three
+    quarters is not reallocation but the sectors themselves slowing, and Baumol's services grow
+    slowly and <em>constantly</em>. A constant drag cannot produce an accelerating one.</p>
+
+  <h3>And then the demographic adjustment, which pointed somewhere else</h3>
+  <p>Capital per head of population — counting retirees, children, everyone who consumes
+    without producing — grew in every decade since 1960 and grew <em>faster</em> than capital
+    per worker in six of seven. The share of adults working is higher now than in 1960, not
+    lower. But:</p>
+
+  <div class="scroll"><table>
+    <thead><tr><th>era</th><th>output per hour</th><th>hours per head</th><th>GDP per head</th></tr></thead>
+    <tbody>
+      <tr><td class="lbl">1960–1969</td><td>2.74%</td><td class="pos">+0.51%</td><td>3.13%</td></tr>
+      <tr><td class="lbl">1990–1999</td><td>2.09%</td><td class="pos">+0.37%</td><td>1.98%</td></tr>
+      <tr class="warn"><td class="lbl">2000–2009</td><td>2.67%</td><td class="neg">−1.67%</td><td>0.95%</td></tr>
+      <tr class="warn"><td class="lbl">2020–2024</td><td>2.19%</td><td class="neg">−0.01%</td><td>1.88%</td></tr>
+    </tbody>
+    <caption>Output per hour slowed 0.55 points between the 1960s and now. GDP per head slowed
+      1.25 — more than twice as much. A demographic headwind did not start; a tailwind stopped.
+      Rising participation added half a point a year for forty years and now adds nothing.</caption>
+  </table></div>
+
+  <p class="pull">The living-standards slowdown is roughly twice the productivity slowdown, and
+    half of it was never about production at all.</p>
+</section>
+
+<section>
+  <h2>The diagnosis</h2>
+
+  <p>Two measured things produce the feeling, and neither needs the productivity puzzle
+    solved.</p>
+
+  <h3>Who gets it</h3>
+  <div class="dv">
+    <svg viewBox="0 0 340 78" preserveAspectRatio="none" role="img" aria-label="GDP per capita rising steeply while median household income rises little">
+      <line vector-effect="non-scaling-stroke" x1="0" y1="70" x2="340" y2="70" stroke="var(--rule)" stroke-width="1"/>
+      <polyline vector-effect="non-scaling-stroke" fill="none" stroke="var(--hold)" stroke-width="2"
+        points="0,62 68,50 136,34 204,26 272,14 340,6"/>
+      <polyline vector-effect="non-scaling-stroke" fill="none" stroke="var(--fell)" stroke-width="2"
+        points="0,62 68,57 136,51 204,55 272,44 340,43"/>
+    </svg>
+    <div class="rd">
+      <b class="up">+98%</b><span class="lbl">real GDP per capita</span>
+      <b class="dn">+39%</b><span class="lbl">real median household</span>
+    </div>
+    <p class="cap">Since 1984. The median household captures 30% less of the average than it
+      did. Someone reading their own paycheque against the news about GDP is reading two
+      different numbers, and both are correct.</p>
+  </div>
+
+  <h3>What it buys</h3>
+  <div class="scroll"><table>
+    <thead><tr><th>1984 = 100</th><th>shelter</th><th>medical</th><th>tuition + childcare</th><th>vehicles</th><th>all CPI</th></tr></thead>
+    <tbody>
+      <tr><td class="lbl">1984</td><td>100</td><td>100</td><td>100</td><td>100</td><td>100</td></tr>
+      <tr><td class="lbl">2000</td><td>186</td><td>244</td><td>295</td><td>139</td><td>166</td></tr>
+      <tr class="warn"><td class="lbl">2024</td><td>385</td><td>527</td><td class="neg">786</td><td class="pos">173</td><td>302</td></tr>
+    </tbody>
+    <caption>Tuition and childcare ran 160% ahead of general inflation, medical care 75%,
+      shelter 28%. New vehicles came in 43% <em>below</em>. The things that got cheap are bought
+      once and replaced rarely. The things that got expensive are the recurring ones that decide
+      whether a life is secure.</caption>
+  </table></div>
+
+  <h3>The same income, deflated by what it has to buy</h3>
+  <div class="scroll"><table>
+    <thead><tr><th>weighting</th><th>1984</th><th>2000</th><th>2010</th><th>2024</th></tr></thead>
+    <tbody>
+      <tr><td class="lbl">CPI as published</td><td>100.0</td><td>118.8</td><td>113.2</td><td class="pos">138.6</td></tr>
+      <tr><td class="lbl">25% anchors</td><td>100.0</td><td>108.2</td><td>97.3</td><td>116.7</td></tr>
+      <tr class="mark"><td class="lbl">50% anchors</td><td>100.0</td><td>99.3</td><td>85.3</td><td>100.8</td></tr>
+      <tr><td class="lbl">75% anchors</td><td>100.0</td><td>91.8</td><td>76.0</td><td>88.7</td></tr>
+      <tr class="warn"><td class="lbl">anchors only</td><td>100.0</td><td>85.4</td><td>68.5</td><td class="neg">79.2</td></tr>
+    </tbody>
+    <caption>Anchors are shelter, medical care and tuition-plus-childcare. The weights drive
+      the magnitude and are shown as a band rather than a point: the direction is the finding,
+      the level is an illustration.</caption>
+  </table></div>
+
+  <p><strong>At a fifty-percent anchor weight the median household is exactly where it was in
+    1984.</strong> 100.8 against 100.0. Forty years of nothing.</p>
+
+  <p>Fifty percent is not extreme. National accounts put housing near 18% of consumption,
+    healthcare 17%, education 3% — some 38% before childcare, and higher for a household
+    raising children in a city. The anchor share also rises as income falls, because rent and
+    medicine do not scale down. The lower rows are not a worst case; they are where most of the
+    distribution sits.</p>
+
+  <p>The CPI is not wrong. It is answering a different question from the one people are asking
+    when they say they are worse off. Income rose against a basket dominated by what got cheap
+    and fell against what cannot be avoided.</p>
+
+  <p class="pull">A productivity slowdown is why the pie grew more slowly. It is not why most
+    people got a smaller slice of a pie that still doubled.</p>
+</section>
+
+<section>
+  <h2>What the sequence establishes</h2>
+  <ul>
+    <li><strong>The productive sector still works.</strong> The circuit is faster than in 1955,
+      the profit rate on capital advanced recovered to within two percent of its 1950s level,
+      capital deepening never slowed, and durable goods have fallen 32% in nominal price since
+      1995. Nothing went wrong in making things.</li>
+    <li><strong>Every quantity-of-capital explanation is closed.</strong> Not less investment,
+      not slower turnover, not offshoring, not a thinner stock. The slowdown is in TFP by
+      construction.</li>
+    <li><strong>A fifth of the TFP slowdown is measured arithmetic</strong> — short-lived
+      assets carrying more rental weight — and mismeasurement is bounded small by requiring
+      $19tn a year of unrecorded output.</li>
+    <li><strong>The rest is a collapse in the return to research</strong>, measured two
+      independent ways, with three candidate mechanisms and no way here to separate them.</li>
+    <li><strong>And none of that is what is being felt.</strong> The felt decline is
+      distribution and the relative price of shelter, care and schooling — measurable in an
+      afternoon, and actionable without solving the first.</li>
+  </ul>
+
+  <h3>What would move the open question</h3>
+  <p>Research <em>duplication</em> data — rates of simultaneous invention, patent interference,
+    overlapping trials — would test the racing mechanism directly, and nothing here measures it.
+    Compustat firm-level over sixty years would supply the within-industry dispersion that
+    industry averages are blind to by construction. Industry TFP outside manufacturing before
+    2005 would close Baumol properly. In that order.</p>
+</section>
+
+<section>
+  <h2>Nine corrections, kept in place</h2>
+  <p>Nearly every appealing result in this investigation weakened when tested, and the
+    corrections are left in the source rather than quietly folded in, because the pattern is
+    the most useful output.</p>
+  <ul>
+    <li><strong>A counterexample that did not exist.</strong> A constructed case where faster
+      turnover went with slower growth — in that same table the faster-turning economy grew
+      faster, and all four cases were monotone. Chasing why produced the real result: the bound
+      <span class="m">g ≤ α·e·n_agg</span>, which cannot be violated.</li>
+    <li><strong>A ceiling with no content.</strong> That bound was then used as a diagnostic.
+      Its slack is exactly <span class="m">c/(c+v)</span> — the wage share of costs wearing a
+      different hat, identical to every decimal across seven eras.</li>
+    <li><strong>An empty parse, cached.</strong> BEA writes year headers as text, an
+      <span class="m">isinstance</span> check matched none of them, and the empty result was
+      written to cache where it would have been served forever. Second time in this repo.</li>
+    <li><strong>A baseline that was mostly Hollywood.</strong> Research effort was measured
+      with BEA's intellectual-property total, which in 1950 was 69% films, television, books
+      and music. The correction <em>strengthened</em> the result, which is why it went
+      unnoticed.</li>
+    <li><strong>Five companies.</strong> Described above.</li>
+    <li><strong>A units convention that inverted an answer.</strong> Gross-output TFP against a
+      value-added aggregate makes manufacturing look like the lagging sector and refutes Baumol
+      on the first line. Converted, it leads.</li>
+    <li><strong>Sampling at the zeros.</strong> A replacement-cycle test sampled years 5, 10,
+      15, 30 against a ten-year asset life — exactly where the oscillation passes through zero —
+      so two rows read flat while swinging by half the stock.</li>
+    <li><strong>A panel truncated by one series.</strong> Manufacturing value added starts in
+      2005 on FRED and sat inside an intersection, silently cutting a sixty-year timing test to
+      nineteen years.</li>
+    <li><strong>Deepening that "roughly halved"</strong> while its own table showed it ending
+      where it started.</li>
+  </ul>
+</section>
+
+<footer>
+  PART ONE  models/reproduction.py · models/repro_model.py · models/turnover.py<br>
+  PART TWO  models/circuit.py · models/wedge.py · models/moral.py · models/hollowing.py<br>
+  PART THREE  models/tfp.py · models/ideas.py · models/spillover.py ·
+  models/private_return.py · models/concentration.py · models/longrun.py<br>
+  PART FOUR  models/productive.py · models/baumol.py · models/percapita.py · models/felt.py<br>
+  DATA  models/data/beafa.py · models/data/nberces.py · models/data/sec.py ·
+  models/data/fred.py · models/data/uscorp.py · models/data/usbank.py · models/data/cbo.py<br><br>
+  Sources: BEA fixed assets by industry and asset type 1925–2024, BEA NIPA, BLS
+  productivity and employment, Federal Reserve Z.1, NBER-CES Manufacturing Industry Database
+  1958–2016, SEC XBRL company facts 2010–2024, FRED.<br>
+  Every series is fetched with its title and printed before use, so none is used
+  unidentified. Both test suites must print ALL PASS before anything is committed.
+</footer>
+
+</div>

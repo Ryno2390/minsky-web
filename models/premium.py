@@ -99,9 +99,15 @@ def composition(d):
     p1 = 1 - d["prod"][2024] / d["allp"][2024]
     print(f"\n  It went {p0 * 100:.1f}% to {p1 * 100:.1f}% -- it FELL by "
           f"{(p0 - p1) * 100:.1f} points.")
-    print("  There is no composition effect to find. America does not employ a larger")
-    print("  fraction of supervisors than it did in 1984; it employs a slightly smaller")
-    print("  one. Whatever opened the gap did it by changing pay, not headcount.")
+    print("  There is no composition effect to find IN THIS CLASSIFICATION. America does")
+    print("  not employ a larger fraction of supervisors than in 1984.")
+    print("\n  *** BUT SEE models/ceos.py SECTION 4 ***")
+    print("  This is an establishment survey's supervisory flag. The household survey's")
+    print("  OCCUPATIONAL classification says management and professional occupations went")
+    print("  from 33.8% of employment in 2000 to 43.8% in 2024 -- twenty-four million more")
+    print("  people. Not contradictory, since a nurse or an engineer is professional and")
+    print("  nonsupervisory, but it means the broader claim implied here -- that nothing")
+    print("  about the gap is headcount -- is not supported.")
     return p0, p1
 
 
